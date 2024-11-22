@@ -6,7 +6,10 @@ authors = ["Piotr Święcik <piotr.swiecik@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = "3.11.9"
+torch = "2.4.1"
+torchvision = "0.19.1"
+torchaudio = "2.4.1"
 
 
 [build-system]
