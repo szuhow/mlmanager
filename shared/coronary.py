@@ -143,21 +143,6 @@ class CoronaryDataset(Dataset):
     def __len__(self):
         return len(self.image_paths)
 
-# # Funkcja do obliczania straty Dice
-# def dice_loss(pred, target, smooth=1e-5):
-#     pred = pred.contiguous()
-#     target = target.contiguous()
-#     intersection = (pred * target).sum(dim=2).sum(dim=2)
-#     loss = 1 - ((2. * intersection + smooth) / (pred.sum(dim=2).sum(dim=2) + target.sum(dim=2).sum(dim=2) + smooth))
-#     return loss.mean()
-
-# def iou_loss(pred, target, smooth=1e-5):
-#     pred = pred.contiguous()
-#     target = target.contiguous()
-#     intersection = (pred * target).sum(dim=2).sum(dim=2)
-#     union = (pred + target).sum(dim=2).sum(dim=2) - intersection
-#     iou = (intersection + smooth) / (union + smooth)
-#     return 1 - iou.mean()
 
 class LossFunction(ABC):
     @abstractmethod
@@ -461,6 +446,7 @@ def main():
     parser.add_argument('--loss_type', type=parse_list_or_value, help='Loss type (dice or iou)')
     parser.add_argument('--halfres', action='store_true', help='Use half resolution (256x256)')
     parser.add_argument('--fullres', action='store_true', help='Use full resolution (512x512)')
+    parser.add_argument('--dryrun', action='store_true', help='Dry run (no training)')
     args = parser.parse_args()
 
     if args.halfres:
@@ -486,7 +472,8 @@ def main():
         print(f"Path: {path}, \nLR: {lr}, \nBatch size: {batch_size}, \nShuffle: {shuffle}, \nEpochs: {epochs}, \nOptimizer: {optimizer_name}, \nBCE weight: {bce_weight}, \nLoss type: {loss_type}, \nResolution: {resolution}")
         print("\n")
 
-    tune_model(parameters, transform)
+    if not args.dryrun:
+        tune_model(parameters, transform)
 
 
 if __name__ == '__main__':
