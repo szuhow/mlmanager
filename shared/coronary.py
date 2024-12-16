@@ -1,3 +1,4 @@
+import datetime
 import os
 import re
 import time
@@ -6,6 +7,8 @@ import copy
 import glob
 import torch
 import argparse
+import mlflow
+from dotenv import load_dotenv
 from itertools import product
 import numpy as np
 from tqdm import tqdm
@@ -30,6 +33,15 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
     print("GPU not available, using CPU")
+
+MLFLOW_BACKEND: str | None = None
+MLFLOW_TRACKING: bool = False
+
+load_dotenv()
+
+if os.environ.get("MLFLOW_BACKEND") is not None:
+    MLFLOW_BACKEND = os.environ.get("MLFLOW_BACKEND")
+    MLFLOW_TRACKING = True
 
 
 def natural_sort_key(s):
@@ -248,6 +260,9 @@ def train_model(model, dataloaders, optimizer, scheduler, device, writer, num_ep
         raise ValueError(f"Unknown loss_type: {loss_type}")
     loss_function = loss_functions[loss_type]
 
+    if MLFLOW_TRACKING:
+        mlflow.autolog()
+
     for epoch in range(num_epochs):
         print(f'Epoch {epoch}/{num_epochs - 1}')
         print('-' * 10)
@@ -368,9 +383,16 @@ def create_config(path, lr, batch_size, shuffle, epochs, optimizer_name, bce_wei
         'loss_type': loss_type
     }
 
+def setup_mlflow():
+    if not MLFLOW_TRACKING:
+        return None
+    mlflow.set_tracking_uri(uri=MLFLOW_BACKEND)
+    mlflow.set_experiment(f"coronary-{datetime.datetime.now().strftime('%Y-%m-%d-%H%M')}")
+
 def train_and_evaluate(config, transform):
     model = UNet(1)
     model, optimizer, scheduler, device, writer, dataloaders = setup_training(model, config, transform)
+    _ = setup_mlflow()
     model = train_model(
         model=model,
         dataloaders=dataloaders,
