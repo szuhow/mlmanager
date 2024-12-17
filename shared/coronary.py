@@ -8,6 +8,7 @@ import glob
 import torch
 import argparse
 import mlflow
+import mlflow.pytorch
 from dotenv import load_dotenv
 from itertools import product
 import numpy as np
@@ -34,14 +35,8 @@ else:
     device = torch.device("cpu")
     print("GPU not available, using CPU")
 
-MLFLOW_BACKEND: str | None = None
-MLFLOW_TRACKING: bool = False
-
 load_dotenv()
-
-if os.environ.get("MLFLOW_BACKEND") is not None:
-    MLFLOW_BACKEND = os.environ.get("MLFLOW_BACKEND")
-    MLFLOW_TRACKING = True
+MLFLOW_BACKEND = os.environ.get("MLFLOW_BACKEND")
 
 
 def natural_sort_key(s):
@@ -259,10 +254,8 @@ def train_model(model, dataloaders, optimizer, scheduler, device, writer, num_ep
     if loss_type not in loss_functions:
         raise ValueError(f"Unknown loss_type: {loss_type}")
     loss_function = loss_functions[loss_type]
-
-    if MLFLOW_TRACKING:
-        mlflow.autolog()
-
+    
+    
     for epoch in range(num_epochs):
         print(f'Epoch {epoch}/{num_epochs - 1}')
         print('-' * 10)
@@ -302,10 +295,14 @@ def train_model(model, dataloaders, optimizer, scheduler, device, writer, num_ep
             writer.add_scalar('Epoch loss/{}'.format(phase), epoch_loss, epoch)
             writer.add_scalar('Epoch BCE/{}'.format(phase), epoch_bce, epoch)
             writer.add_scalar('Epoch {}/{}'.format(loss_type, phase), epoch_custom, epoch)
+
+            mlflow.log_metric(key="epoch_loss", value=epoch_loss, step=epoch)
+            mlflow.log_metric(key="epoch_bce", value=epoch_bce, step=epoch)
             
             if phase == 'val' and epoch_loss < best_loss:
                 print("Saving best model from epoch:", epoch)
                 best_loss = epoch_loss
+                mlflow.log_metric(key="best_loss", value=best_loss, step=epoch)
                 best_model_wts = copy.deepcopy(model.state_dict())
                 torch.save(model.state_dict(), 'best_model.pth')
 
@@ -317,6 +314,7 @@ def train_model(model, dataloaders, optimizer, scheduler, device, writer, num_ep
 
     print(f'Best val loss: {best_loss:.4f}')
     model.load_state_dict(best_model_wts)
+    mlflow.pytorch.log_model(model, f"unet-{datetime.datetime.now().strftime('%Y-%m-%d-%H%M')}")
     writer.close()
     return model
 
@@ -383,16 +381,9 @@ def create_config(path, lr, batch_size, shuffle, epochs, optimizer_name, bce_wei
         'loss_type': loss_type
     }
 
-def setup_mlflow():
-    if not MLFLOW_TRACKING:
-        return None
-    mlflow.set_tracking_uri(uri=MLFLOW_BACKEND)
-    mlflow.set_experiment(f"coronary-{datetime.datetime.now().strftime('%Y-%m-%d-%H%M')}")
-
 def train_and_evaluate(config, transform):
     model = UNet(1)
     model, optimizer, scheduler, device, writer, dataloaders = setup_training(model, config, transform)
-    _ = setup_mlflow()
     model = train_model(
         model=model,
         dataloaders=dataloaders,
@@ -495,7 +486,12 @@ def main():
         print("\n")
 
     if not args.dryrun:
-        tune_model(parameters, transform)
+        mlflow.set_tracking_uri(uri=MLFLOW_BACKEND)
+        mlflow_stamp = f"coronary-{datetime.datetime.now().strftime('%Y-%m-%d-%H%M%S')}"
+        mlflow.create_experiment(f"exp-{mlflow_stamp}")
+        mlflow.set_experiment(experiment_name=f"exp-{mlflow_stamp}")
+        with mlflow.start_run(run_name=f"run-{mlflow_stamp}"):
+            tune_model(parameters, transform)
 
 
 if __name__ == '__main__':
