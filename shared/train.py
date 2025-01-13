@@ -86,8 +86,8 @@ class TrainingManager:
             raise ValueError(f"Unsupported optimizer: {self.config.optimizer_name}")
         return optimizers[self.config.optimizer_name]
     
-    def _setup_scheduler(self) -> optim.lr_scheduler.StepLR:
-        return optim.lr_scheduler.StepLR(self.optimizer, step_size=7, gamma=0.1)
+    def _setup_scheduler(self) -> optim.lr_scheduler.ReduceLROnPlateau:
+        return optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.1, patience=5)
     
     def _setup_tensorboard(self) -> SummaryWriter:
         return SummaryWriter(comment=self._get_tensorboard_comment())
@@ -106,60 +106,103 @@ class TrainingManager:
         if self.config.loss_type not in loss_functions:
             raise ValueError(f"Unsupported loss type: {self.config.loss_type}")
         return loss_functions[self.config.loss_type]
-    
+
     def train(self) -> nn.Module:
+        """
+        Train the model and return the best performing version.
+        """
         best_model_wts = copy.deepcopy(self.model.state_dict())
         best_loss = float('inf')
-        
+        patience_counter = 0
+        max_patience = 10  # Early stopping patience
+
         for epoch in range(self.config.epochs):
             print(f'Epoch {epoch}/{self.config.epochs - 1}')
             print('-' * 10)
             epoch_start = time.time()
             
+            # Track validation loss for early stopping
+            current_val_loss = float('inf')
+
             for phase in ['train', 'val']:
+                if phase == 'train':
+                    self.model.train()
+                else:
+                    self.model.eval()
+
                 metrics = self._run_epoch(phase, epoch)
                 epoch_loss = self._log_metrics(metrics, phase, epoch)
-                
-                if phase == 'val':
+
+                if phase == 'train':
+                    print(f"LR: {self.optimizer.param_groups[0]['lr']:.2e}")
+                else:  # Validation phase
+                    current_val_loss = epoch_loss
                     self.scheduler.step(epoch_loss)
-                    best_model_wts = self._save_if_best(epoch_loss, epoch, best_loss, best_model_wts)
-                    best_loss = min(epoch_loss, best_loss)
-            
-            self._print_epoch_summary(epoch_start, epoch_loss, best_loss)
-        
+                    
+                    # Save best model if validation loss improved
+                    if epoch_loss < best_loss:
+                        print(f"Validation loss decreased from {best_loss:.6f} to {epoch_loss:.6f}")
+                        best_loss = epoch_loss
+                        best_model_wts = self._save_if_best(epoch_loss, epoch, best_loss, 
+                                                        copy.deepcopy(self.model.state_dict()))
+                        patience_counter = 0
+                    else:
+                        patience_counter += 1
+
+            self._print_epoch_summary(epoch_start, current_val_loss, best_loss)
+
+            # Early stopping check
+            if patience_counter >= max_patience:
+                print(f"Early stopping triggered after {patience_counter} epochs without improvement")
+                break
+
+        # Load best weights and save final model
+        self.model.load_state_dict(best_model_wts)
         self._save_final_model(best_model_wts, best_loss)
         return self.model
-    
+
     def _run_epoch(self, phase: str, epoch: int) -> defaultdict:
-        self.model.train(phase == 'train')
+        """
+        Run one epoch of training or validation.
+        Returns metrics averaged over the epoch.
+        """
         metrics = defaultdict(float)
-        
+        total_samples = 0
+
         with torch.set_grad_enabled(phase == 'train'):
-            for i, (inputs, labels) in enumerate(tqdm(self.dataloaders[phase], 
-                                                    desc=f'{phase} Epoch {epoch}', position=0, leave=True)):
-                loss = self._process_batch(inputs, labels, metrics, phase)
-                self._log_batch_metrics(metrics, phase, epoch, i, len(self.dataloaders[phase]))
-        
+            for inputs, labels in tqdm(self.dataloaders[phase], desc=f'{phase} Epoch {epoch}', leave=True):
+                inputs = inputs.to(self.device)
+                labels = labels.to(self.device)
+                batch_size = inputs.size(0)
+
+                # Zero gradients only for training phase
+                if phase == 'train':
+                    self.optimizer.zero_grad()
+
+                # Forward pass
+                outputs = self.model(inputs)
+
+                # Calculate loss
+                loss = calc_loss(outputs, labels, metrics, 
+                            self.config.bce_weight, 
+                            loss_function=self.loss_function)
+
+                # Backward pass and optimization for training phase
+                if phase == 'train':
+                    loss.backward()
+                    self.optimizer.step()
+
+                # Accumulate metrics (already scaled by batch_size in calc_loss)
+                metrics['loss'] += loss.item() * batch_size
+                total_samples += batch_size
+
+            # Average metrics over the entire epoch
+            for key in metrics:
+                metrics[key] = metrics[key] / total_samples
+
         return metrics
-    
-    def _process_batch(self, inputs: torch.Tensor, labels: torch.Tensor, 
-                      metrics: defaultdict, phase: str) -> torch.Tensor:
-        inputs = inputs.to(self.device)
-        labels = labels.to(self.device)
-        
-        if phase == 'train':
-            self.optimizer.zero_grad()
-            
-        outputs = self.model(inputs)
-        loss = calc_loss(outputs, labels, metrics, self.config.bce_weight, 
-                        loss_function=self.loss_function)
-        
-        if phase == 'train':
-            loss.backward()
-            self.optimizer.step()
-            
-        return loss
-    
+
+
     def _log_batch_metrics(self, metrics: defaultdict, phase: str, 
                           epoch: int, batch_idx: int, epoch_len: int):
         self.writer.add_scalar(f'Batch loss/{phase}', 
@@ -173,19 +216,26 @@ class TrainingManager:
                              epoch * epoch_len + batch_idx)
     
     def _log_metrics(self, metrics: defaultdict, phase: str, epoch: int) -> float:
-        samples = len(self.dataloaders[phase].dataset)
-        epoch_loss = metrics['loss'] / samples
-        epoch_custom = metrics[self.config.loss_type] / samples
-        epoch_bce = metrics['bce'] / samples
-        
+        """
+        Log metrics for the current epoch to TensorBoard and MLflow.
+        The metrics are already averaged over the epoch in _run_epoch.
+        """
+        # Metrics are already averaged in _run_epoch, no need to divide by samples
+        epoch_loss = metrics['loss']
+        epoch_custom = metrics[self.config.loss_type]
+        epoch_bce = metrics['bce']
+
+        # Log to TensorBoard
         self.writer.add_scalar(f'Epoch loss/{phase}', epoch_loss, epoch)
         self.writer.add_scalar(f'Epoch BCE/{phase}', epoch_bce, epoch)
         self.writer.add_scalar(f'Epoch {self.config.loss_type}/{phase}', epoch_custom, epoch)
-        self.writer.add_scalar('Learning_rate', self.optimizer.param_groups[0]['lr'], epoch)
-        
-        mlflow.log_metric(key="epoch_loss", value=epoch_loss, step=epoch)
-        mlflow.log_metric(key="epoch_bce", value=epoch_bce, step=epoch)
-        
+        self.writer.add_scalar(f'Learning_rate/{phase}', self.optimizer.param_groups[0]['lr'], epoch)
+
+        # Log to MLflow
+        mlflow.log_metric(key=f"{phase}_epoch_loss", value=epoch_loss, step=epoch)
+        mlflow.log_metric(key=f"{phase}_epoch_bce", value=epoch_bce, step=epoch)
+        mlflow.log_metric(key=f"{phase}_epoch_{self.config.loss_type}", value=epoch_custom, step=epoch)
+
         return epoch_loss
     
     def _save_if_best(self, epoch_loss: float, epoch: int, 
@@ -198,6 +248,7 @@ class TrainingManager:
         return best_weights
     
     def _save_checkpoint(self, epoch: int, loss: float):
+        os.makedirs('models', exist_ok=True)
         save_path = f'models/best_model_epoch_{epoch}_loss_{loss:.4f}.pth'
         torch.save({
             'epoch': epoch,
@@ -208,7 +259,7 @@ class TrainingManager:
     
     def _save_final_model(self, best_weights: Dict, best_loss: float):
         self.model.load_state_dict(best_weights)
-        save_path = f'final_model_epochs_{self.config.epochs}_loss_{best_loss:.4f}.pth'
+        save_path = f'models/final_model_epochs_{self.config.epochs}_loss_{best_loss:.4f}.pth'
         torch.save({
             'epochs_completed': self.config.epochs,
             'model_state_dict': self.model.state_dict(),
@@ -220,11 +271,6 @@ class TrainingManager:
         mlflow.pytorch.log_model(self.model, f"unet-{timestamp}")
         self.writer.close()
 
-# def parse_list_or_value(value: str) -> list | str:
-#     """Parse a string into either a list or a single value."""
-#     if value.startswith('[') and value.endswith(']'):
-#         return [item.strip() for item in value[1:-1].split(',')]
-#     return value
 
 def parse_list_or_value(value):
         try:
@@ -302,6 +348,11 @@ def parse_arguments():
     data_group = parser.add_argument_group('Data Handling')
     resolution_group = data_group.add_mutually_exclusive_group(required=True)
     resolution_group.add_argument(
+        '--quarterres',
+        action='store_true',
+        help='Use half resolution (128x128)'
+    )
+    resolution_group.add_argument(
         '--halfres',
         action='store_true',
         help='Use half resolution (256x256)'
@@ -335,7 +386,9 @@ def parse_arguments():
 
 def get_resolution(args):
     """Determine resolution based on command line arguments."""
-    if args.halfres:
+    if args.quarterres:
+        return (128, 128)
+    elif args.halfres:
         return (256, 256)
     elif args.fullres:
         return (512, 512)
@@ -382,9 +435,9 @@ def main():
     args = parse_arguments()
     resolution = get_resolution(args)
     parameters = get_training_parameters(args)
-    print("Training parameters:")
-    print(parameters)
-    print(f"Resolution: {resolution}")
+    # print("Training parameters:")
+    # print(parameters)
+    # print(f"Resolution: {resolution}")
     if not args.dryrun:
         run_training(parameters, resolution)
 

@@ -7,7 +7,7 @@ from torchvision import transforms
 from unet.unet import UNet
 
 def find_model_file(model_dir, epoch):
-    model_files = list(Path(model_dir).glob(f'best_model_epoch_{epoch}_*.pth'))
+    model_files = list(Path(model_dir).glob(f'final_model_epochs_{epoch}_*.pth'))
     if not model_files:
         raise FileNotFoundError(f"No model file found for epoch {epoch} in directory {model_dir}")
     return model_files[0]
@@ -19,22 +19,7 @@ def load_model(model_path):
     model.eval()
     return model
 
-def main():
-    parser = argparse.ArgumentParser(description='Inference script')
-    parser.add_argument('--image_path', type=str, required=True, help='Path to the input image')
-    parser.add_argument('--model_dir', type=str, default='shared/models', help='Directory containing the trained models')
-    parser.add_argument('--epoch', type=int, required=True, help='Epoch number of the model to load')
-    args = parser.parse_args()
-
-    # Znajdź odpowiedni plik modelu na podstawie numeru epoki
-    model_path = find_model_file(args.model_dir, args.epoch)
-    print(f"Loading model from {model_path}")
-
-    # Załaduj model
-    model = load_model(model_path)
-
-    image = Image.open(args.image_path).convert('L')  # Convert to grayscale if needed
-
+def inference(model, image):
     # Step 2: Preprocess the image
     transform = transforms.Compose([
         transforms.Grayscale(num_output_channels=1),  # Konwersja obrazu RGB na obraz w skali szarości
@@ -42,9 +27,9 @@ def main():
         transforms.ToTensor(),         # Convert to a PyTorch tensor
         # transforms.Normalize(mean=[0.5], std=[0.5])  # Normalize to [-1, 1]
     ])
-    image = Image.open(args.image_path).convert("RGB")
-
     input_tensor = transform(image).unsqueeze(0)  # Add batch dimension
+
+
 
     # Wykonaj inferencję
     with torch.no_grad():
@@ -58,6 +43,31 @@ def main():
     print("Output min:", output_image.min())
     print("Output max:", output_image.max())
     print("Output mean:", output_image.mean())
+
+    return output_image
+
+def main():
+    parser = argparse.ArgumentParser(description='Inference script')
+    parser.add_argument('--image_path', type=str, required=True, help='Path to the input image')
+    parser.add_argument('--model_dir', type=str, default='models', help='Directory containing the trained models')
+    parser.add_argument('--epoch', type=int, required=True, help='Epoch number of the model to load')
+    args = parser.parse_args()
+
+    # Znajdź odpowiedni plik modelu na podstawie numeru epoki
+    model_path = find_model_file(args.model_dir, args.epoch)
+    print(f"Loading model from {model_path}")
+
+    # Załaduj model
+    model = load_model(model_path)
+
+
+    # Wczytaj obraz
+    image = Image.open(args.image_path).convert('RGB')
+
+    # Wykonaj inferencję
+    output_image = inference(model, image)
+    
+    # image = Image.open(args.image_path).convert('RGB')
 
     # Wizualizacja wyników (opcjonalnie)
     import matplotlib.pyplot as plt
