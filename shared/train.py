@@ -161,47 +161,70 @@ class TrainingManager:
         self._save_final_model(best_model_wts, best_loss)
         return self.model
 
+    # def _run_epoch(self, phase: str, epoch: int) -> defaultdict:
+    #     """
+    #     Run one epoch of training or validation.
+    #     Returns metrics averaged over the epoch.
+    #     """
+    #     metrics = defaultdict(float)
+    #     total_samples = 0
+
+    #     with torch.set_grad_enabled(phase == 'train'):
+    #         for inputs, labels in tqdm(self.dataloaders[phase], desc=f'{phase} Epoch {epoch}', leave=True):
+    #             inputs = inputs.to(self.device)
+    #             labels = labels.to(self.device)
+    #             batch_size = inputs.size(0)
+
+    #             # Zero gradients only for training phase
+    #             if phase == 'train':
+    #                 self.optimizer.zero_grad()
+
+    #             # Forward pass
+    #             outputs = self.model(inputs)
+
+    #             # Calculate loss
+    #             loss = calc_loss(outputs, labels, metrics, 
+    #                         self.config.bce_weight, 
+    #                         loss_function=self.loss_function)
+
+    #             # Backward pass and optimization for training phase
+    #             if phase == 'train':
+    #                 loss.backward()
+    #                 self.optimizer.step()
+
+    #         #     # Accumulate metrics (already scaled by batch_size in calc_loss)
+    #         #     metrics['loss'] += loss.item() * batch_size
+    #         #     total_samples += batch_size
+
+    #         # # Average metrics over the entire epoch
+    #         # for key in metrics:
+    #         #     metrics[key] = metrics[key] / total_samples
+
+    #     return metrics
+    
     def _run_epoch(self, phase: str, epoch: int) -> defaultdict:
-        """
-        Run one epoch of training or validation.
-        Returns metrics averaged over the epoch.
-        """
+        self.model.train(phase == 'train')
         metrics = defaultdict(float)
-        total_samples = 0
+        epoch_loss = 0.0
 
         with torch.set_grad_enabled(phase == 'train'):
-            for inputs, labels in tqdm(self.dataloaders[phase], desc=f'{phase} Epoch {epoch}', leave=True):
-                inputs = inputs.to(self.device)
-                labels = labels.to(self.device)
-                batch_size = inputs.size(0)
+            for i, (inputs, labels) in enumerate(tqdm(self.dataloaders[phase], desc=f'{phase} Epoch {epoch}', leave=True, position=0)):
+                loss = self._process_batch(inputs, labels, metrics, phase)
+                epoch_loss += loss.item() * inputs.size(0)
+                self._log_batch_metrics(metrics, phase, epoch, i, len(self.dataloaders[phase]))
 
-                # Zero gradients only for training phase
-                if phase == 'train':
-                    self.optimizer.zero_grad()
-
-                # Forward pass
-                outputs = self.model(inputs)
-
-                # Calculate loss
-                loss = calc_loss(outputs, labels, metrics, 
-                            self.config.bce_weight, 
-                            loss_function=self.loss_function)
-
-                # Backward pass and optimization for training phase
-                if phase == 'train':
-                    loss.backward()
-                    self.optimizer.step()
-
-                # Accumulate metrics (already scaled by batch_size in calc_loss)
-                metrics['loss'] += loss.item() * batch_size
-                total_samples += batch_size
-
-            # Average metrics over the entire epoch
-            for key in metrics:
-                metrics[key] = metrics[key] / total_samples
-
+        metrics['epoch_loss'] = epoch_loss / len(self.dataloaders[phase].dataset)
         return metrics
 
+    def _process_batch(self, inputs, labels, metrics, phase):
+        inputs, labels = inputs.to(self.device), labels.to(self.device)
+        self.optimizer.zero_grad()
+        outputs = self.model(inputs)
+        loss = calc_loss(outputs, labels, metrics)
+        if phase == 'train':
+            loss.backward()
+            self.optimizer.step()
+        return loss
 
     def _log_batch_metrics(self, metrics: defaultdict, phase: str, 
                           epoch: int, batch_idx: int, epoch_len: int):

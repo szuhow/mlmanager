@@ -24,22 +24,26 @@ class LossFunction(ABC):
 class Dice(nn.Module):
     def forward(self, inputs: torch.Tensor, targets: torch.Tensor, smooth: float = 1e-6) -> torch.Tensor:
         # Apply sigmoid to convert logits to probabilities
-        inputs = torch.sigmoid(inputs)
+        # inputs = torch.sigmoid(inputs)
         
-        # Flatten the tensors
-        inputs = inputs.view(-1)
-        targets = targets.view(-1)
+        # # Flatten the tensors
+        # inputs = inputs.view(-1)
+        # targets = targets.view(-1)
         
-        # Calculate intersection and union
-        intersection = (inputs * targets).sum()
-        union = inputs.sum() + targets.sum()
+        # # Calculate intersection and union
+        # intersection = (inputs * targets).sum()
+        # union = inputs.sum() + targets.sum()
         
-        # Calculate Dice coefficient
-        dice = (2. * intersection + smooth) / (union + smooth)
+        # # Calculate Dice coefficient
+        # dice = (2. * intersection + smooth) / (union + smooth)
         
-        # Return Dice loss
-        return 1 - dice
-
+        # # Return Dice loss
+        # return 1 - dice
+        pred = inputs.contiguous()
+        target = targets.contiguous()
+        intersection = (pred * target).sum(dim=2).sum(dim=2)
+        loss = 1 - ((2. * intersection + smooth) / (pred.sum(dim=2).sum(dim=2) + target.sum(dim=2).sum(dim=2) + smooth))
+        return loss.mean()
 
 class IoU(LossFunction):
     def compute(self, pred_soft, target, smooth=1e-5):
@@ -87,71 +91,6 @@ class DebugDice(LossFunction):
         
         return loss.mean()
     
-# class calcLoss:
-#     def __init__(self, pred, target, metrics, bce_weight=0.5, loss_function=Dice()):
-#         self.pred = pred
-#         self.target = target
-#         self.metrics = metrics
-#         self.bce_weight = bce_weight
-#         self.loss_function = loss_function
-
-# # Funkcja do obliczania straty łączonej BCE i Dice
-# def calc_loss(pred, target, metrics, bce_weight=0.1, loss_function=Dice()):
-#     # Apply sigmoid to get probabilities
-#     pred_soft = torch.sigmoid(pred)
-    
-#     # Calculate BCE loss
-#     bce = F.binary_cross_entropy_with_logits(pred, target)
-    
-#     # Calculate Dice loss
-#     dice_loss = loss_function.compute(pred_soft, target)
-    
-#     # Combine losses with equal weights by default
-#     loss = bce * bce_weight + dice_loss * (1 - bce_weight)
-    
-#     # Update metrics
-#     with torch.no_grad():
-#         batch_size = target.size(0)
-#         metrics['bce'] += bce.item() * batch_size
-#         metrics[loss_function.__class__.__name__.lower()] += dice_loss.item() * batch_size
-#         metrics['loss'] += loss.item() * batch_size
-
-#     return loss
-
-# def calc_loss(outputs: torch.Tensor, labels: torch.Tensor, metrics: defaultdict, 
-#               bce_weight: float, loss_function: nn.Module) -> torch.Tensor:
-#     """
-#     Calculate the combined loss for segmentation.
-    
-#     Args:
-#         outputs: Model predictions (B, C, H, W)
-#         labels: Ground truth labels (B, C, H, W)
-#         metrics: Dictionary to store various metrics
-#         bce_weight: Weight for BCE loss
-#         loss_function: Custom loss function (Dice, IoU, etc.)
-    
-#     Returns:
-#         Combined loss value
-#     """
-#     # Ensure inputs are float tensors
-#     outputs = outputs.float()
-#     labels = labels.float()
-    
-#     # Binary Cross Entropy loss
-#     bce = nn.BCEWithLogitsLoss()(outputs, labels)
-    
-#     # Custom loss (Dice, IoU, etc.)
-#     custom_loss = loss_function(outputs, labels)
-    
-#     # Combine losses
-#     loss = bce_weight * bce + (1 - bce_weight) * custom_loss
-    
-#     # Store individual loss components (without reduction)
-#     metrics['bce'] += bce.item() * outputs.size(0)
-#     metrics[loss_function.__class__.__name__.lower()] += custom_loss.item() * outputs.size(0)
-    
-#     return loss
-
 
 # def calc_loss(pred, target, metrics, bce_weight=0.1):
 #     bce = F.binary_cross_entropy_with_logits(pred, target)
