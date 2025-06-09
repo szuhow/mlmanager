@@ -2,6 +2,7 @@ from django import forms
 from pathlib import Path
 import importlib.util
 import inspect
+from .device_utils import get_device_choices, get_default_device, get_device_info_for_display
 
 # Import the new architecture registry system
 try:
@@ -38,9 +39,9 @@ class TrainingTemplateForm(forms.ModelForm):
         model = TrainingTemplate
         fields = [
             'name', 'description', 'model_type', 'batch_size', 'epochs', 
-            'learning_rate', 'validation_split', 'use_random_flip', 
-            'use_random_rotate', 'use_random_scale', 'use_random_intensity', 
-            'crop_size', 'num_workers', 'is_default'
+            'learning_rate', 'validation_split', 'resolution', 'device',
+            'use_random_flip', 'use_random_rotate', 'use_random_scale', 
+            'use_random_intensity', 'crop_size', 'num_workers', 'is_default'
         ]
         widgets = {
             'description': forms.Textarea(attrs={'rows': 3}),
@@ -55,6 +56,8 @@ class TrainingTemplateForm(forms.ModelForm):
             'epochs': 'Number of training epochs',
             'learning_rate': 'Learning rate for optimization',
             'validation_split': 'Validation set size (0-1)',
+            'resolution': 'Training image resolution. Higher resolutions require more memory.',
+            'device': 'Device to use for training. Auto will detect the best available device.',
             'use_random_flip': 'Apply random horizontal flip augmentation',
             'use_random_rotate': 'Apply random rotation augmentation',
             'use_random_scale': 'Apply random scaling augmentation',
@@ -67,7 +70,25 @@ class TrainingTemplateForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set model_type choices dynamically
-        self.fields['model_type'].widget = forms.Select(choices=get_available_models())
+        model_choices = get_available_models()
+        self.fields['model_type'].choices = model_choices
+        self.fields['model_type'].widget = forms.Select(choices=model_choices)
+        
+        # Set device choices dynamically based on system capabilities
+        device_choices = [
+            ('auto', 'Auto (CUDA if available, else CPU)'),
+            ('cpu', 'CPU'),
+        ]
+        
+        # Add CUDA options if available
+        available_devices = get_device_choices()
+        for device_value, device_label in available_devices:
+            if device_value.startswith('cuda'):
+                device_choices.append((device_value, device_label))
+        
+        self.fields['device'].choices = device_choices
+        self.fields['device'].widget = forms.Select(choices=device_choices)
+        
         # Add Bootstrap classes
         for field_name, field in self.fields.items():
             if isinstance(field.widget, forms.CheckboxInput):
@@ -78,6 +99,14 @@ class TrainingTemplateForm(forms.ModelForm):
                 field.widget.attrs.update({'class': 'form-control'})
 
 class TrainingForm(forms.Form):
+    RESOLUTION_CHOICES = [
+        ('original', 'Original Size'),
+        ('128', '128 x 128 pixels'),
+        ('256', '256 x 256 pixels'),
+        ('384', '384 x 384 pixels'),
+        ('512', '512 x 512 pixels'),
+    ]
+    
     # Add template selection field at the top
     template = forms.ModelChoiceField(
         queryset=None,  # Will be set in __init__
@@ -89,12 +118,28 @@ class TrainingForm(forms.Form):
     
     name = forms.CharField(max_length=200, help_text="Name of the training run")
     description = forms.CharField(widget=forms.Textarea, required=False, help_text="Description of the training run")
-    model_type = forms.ChoiceField(choices=get_available_models(), help_text="Model architecture to use")
+    model_type = forms.ChoiceField(choices=[], help_text="Model architecture to use")  # Will be set dynamically in __init__
     data_path = forms.CharField(help_text="Path to dataset directory")
     batch_size = forms.IntegerField(min_value=1, initial=32, help_text="Number of samples per batch")
     epochs = forms.IntegerField(min_value=1, initial=100, help_text="Number of training epochs")
     learning_rate = forms.FloatField(min_value=0.0, initial=0.001, help_text="Learning rate")
     validation_split = forms.FloatField(min_value=0.0, max_value=1.0, initial=0.2, help_text="Validation set size (0-1)")
+    
+    # Image resolution for training
+    resolution = forms.ChoiceField(
+        choices=RESOLUTION_CHOICES,
+        initial='256',
+        required=True,
+        help_text="Training image resolution. Higher resolutions require more memory."
+    )
+    
+    # Device selection for training
+    device = forms.ChoiceField(
+        choices=[],  # Will be set dynamically in __init__
+        initial='auto',
+        required=True,
+        help_text="Device to use for training. Auto will detect the best available device."
+    )
     
     # Augmentation options
     use_random_flip = forms.BooleanField(initial=True, required=False, help_text="Apply random horizontal flip")
@@ -112,6 +157,26 @@ class TrainingForm(forms.Form):
         # Set template queryset
         self.fields['template'].queryset = TrainingTemplate.objects.all()
         
+        # Set model_type choices dynamically
+        model_choices = get_available_models()
+        self.fields['model_type'].choices = model_choices
+        
+        # Set device choices dynamically based on system capabilities
+        device_choices = [
+            ('auto', 'Auto (CUDA if available, else CPU)'),
+            ('cpu', 'CPU'),
+        ]
+        
+        # Add CUDA options if available
+        available_devices = get_device_choices()
+        for device_value, device_label in available_devices:
+            if device_value.startswith('cuda'):
+                device_choices.append((device_value, device_label))
+        
+        self.fields['device'].choices = device_choices
+        self.fields['device'].widget = forms.Select(choices=device_choices)
+        self.fields['device'].initial = get_default_device() if get_default_device() != 'cpu' else 'auto'
+        
         # Try to set default template values
         try:
             default_template = TrainingTemplate.objects.filter(is_default=True).first()
@@ -124,6 +189,42 @@ class TrainingForm(forms.Form):
             pass  # Handle case where table doesn't exist yet
 
 class InferenceForm(forms.Form):
-    # Remove redundant fields since we handle model selection 
-    # and image upload directly in the template
-    pass
+    RESOLUTION_CHOICES = [
+        ('original', 'Original Size'),
+        ('128', '128 x 128 pixels'),
+        ('256', '256 x 256 pixels'),
+        ('384', '384 x 384 pixels'),
+        ('512', '512 x 512 pixels'),
+    ]
+    
+    model_id = forms.ModelChoiceField(
+        queryset=None,  # Will be set in __init__
+        required=True,
+        help_text="Select a trained model for inference"
+    )
+    image = forms.ImageField(
+        help_text="Upload an image for segmentation",
+        required=True
+    )
+    resolution = forms.ChoiceField(
+        choices=RESOLUTION_CHOICES,
+        initial='original',
+        required=True,
+        help_text="Choose the input image resolution for processing"
+    )
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Import here to avoid circular imports
+        from .models import MLModel
+        # Set queryset to only completed models
+        self.fields['model_id'].queryset = MLModel.objects.filter(status='completed').order_by('-created_at')
+        
+        # Add Bootstrap classes
+        for field_name, field in self.fields.items():
+            if isinstance(field.widget, forms.Select):
+                field.widget.attrs.update({'class': 'form-select'})
+            elif isinstance(field.widget, forms.FileInput):
+                field.widget.attrs.update({'class': 'form-control'})
+            else:
+                field.widget.attrs.update({'class': 'form-control'})

@@ -108,3 +108,85 @@ class TrainingCallback:
         """Update the model's registry stage"""
         self.model.registry_stage = stage
         self.model.save()
+    
+    def update_model_metadata(self, model_family=None, model_type=None, architecture_info=None, training_data_info=None):
+        """Update model metadata including family, type, architecture, and training data info"""
+        if model_family:
+            self.model.model_family = model_family
+        if model_type:
+            self.model.model_type = model_type
+        if architecture_info:
+            # Ensure model_architecture_info is initialized as a dict
+            if not self.model.model_architecture_info:
+                self.model.model_architecture_info = {}
+            
+            # Convert SimpleNamespace or other objects to dict if needed
+            if hasattr(architecture_info, '__dict__'):
+                arch_dict = architecture_info.__dict__
+            elif isinstance(architecture_info, dict):
+                arch_dict = architecture_info
+            else:
+                # Try to convert to dict using vars()
+                try:
+                    arch_dict = vars(architecture_info)
+                except TypeError:
+                    # If all else fails, create a basic representation
+                    arch_dict = {
+                        'display_name': getattr(architecture_info, 'display_name', 'Unknown'),
+                        'framework': getattr(architecture_info, 'framework', 'Unknown'),
+                        'description': getattr(architecture_info, 'description', 'No description'),
+                        'category': getattr(architecture_info, 'category', 'general'),
+                        'author': getattr(architecture_info, 'author', 'Unknown'),
+                        'version': getattr(architecture_info, 'version', '1.0.0')
+                    }
+            
+            self.model.model_architecture_info.update(arch_dict)
+            
+        if training_data_info:
+            # Ensure training_data_info is initialized as a dict
+            if not self.model.training_data_info:
+                self.model.training_data_info = {}
+            self.model.training_data_info.update(training_data_info)
+        self.model.save()
+    
+    def update_training_config(self, config):
+        """Update model with training configuration parameters"""
+        if not self.model.training_data_info:
+            self.model.training_data_info = {}
+        
+        # Store training configuration
+        self.model.training_data_info.update({
+            'batch_size': config.get('batch_size'),
+            'epochs': config.get('epochs'),
+            'learning_rate': config.get('learning_rate'),
+            'crop_size': config.get('crop_size'),
+            'validation_split': config.get('validation_split'),
+            'num_workers': config.get('num_workers'),
+            'augmentation': {
+                'random_flip': config.get('random_flip', False),
+                'random_rotate': config.get('random_rotate', False),
+                'random_scale': config.get('random_scale', False),
+                'random_intensity': config.get('random_intensity', False)
+            }
+        })
+        self.model.save()
+    
+    def update_architecture_info(self, model, model_config):
+        """Update model architecture information based on the trained model"""
+        if not self.model.model_architecture_info:
+            self.model.model_architecture_info = {}
+        
+        # Get model parameter count
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        
+        self.model.model_architecture_info.update({
+            'total_parameters': total_params,
+            'trainable_parameters': trainable_params,
+            'model_config': model_config,
+            'architecture_type': self.model.model_type,
+            'input_channels': getattr(model, 'in_channels', 1),
+            'output_channels': getattr(model, 'out_channels', 1),
+            'spatial_dims': getattr(model, 'spatial_dims', 2)
+        })
+        self.model.save()

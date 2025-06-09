@@ -30,6 +30,10 @@ urlpatterns = [
     
     # Training log URL
     path('model/<int:model_id>/logs/', views.get_training_log, name='model-training-log'),
+    path('model/<int:pk>/logs/', views.ModelLogsView.as_view(), name='model-logs'),
+    
+    # Training progress URL
+    path('model/<int:model_id>/progress/', views.get_training_progress, name='model-progress'),
     
     # Training preview image URL
     path('model/<int:model_id>/training-preview/<str:filename>/', views.serve_training_preview_image, name='training-preview-image'),

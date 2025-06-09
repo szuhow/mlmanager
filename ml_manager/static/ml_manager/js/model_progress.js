@@ -27,10 +27,13 @@ class ModelProgressUpdater {
     }
 
     async updateProgress() {
+        console.log('ModelProgressUpdater: updateProgress called');
         try {
             const trainingRows = document.querySelectorAll('tr[data-model-status="training"]:not([data-model-deleted="true"])');
+            console.log('ModelProgressUpdater: Found', trainingRows.length, 'training rows to update');
             
             if (trainingRows.length === 0) {
+                console.log('ModelProgressUpdater: No training models, stopping updates');
                 // No training models, stop updating
                 this.stop();
                 return;
@@ -38,12 +41,13 @@ class ModelProgressUpdater {
 
             for (const row of trainingRows) {
                 const modelId = row.dataset.modelId;
+                console.log('ModelProgressUpdater: Updating model', modelId);
                 if (!modelId) continue;
 
                 await this.updateModelRow(modelId, row);
             }
         } catch (error) {
-            console.error('Error updating progress:', error);
+            console.error('ModelProgressUpdater: Error updating progress:', error);
         }
     }
 
@@ -151,12 +155,17 @@ class ModelProgressUpdater {
 let modelProgressUpdater;
 
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('ModelProgressUpdater: DOM loaded, initializing...');
     modelProgressUpdater = new ModelProgressUpdater();
     
     // Auto-start if there are training models
     const trainingModels = document.querySelectorAll('tr[data-model-status="training"]');
+    console.log('ModelProgressUpdater: Found', trainingModels.length, 'training models');
     if (trainingModels.length > 0) {
+        console.log('ModelProgressUpdater: Starting auto-updates');
         modelProgressUpdater.start();
+    } else {
+        console.log('ModelProgressUpdater: No training models found, not starting auto-updates');
     }
 
     // Add manual refresh button

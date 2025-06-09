@@ -70,6 +70,21 @@
                                 style="max-width: 100%; max-height: 300px; border:1px solid #ccc; border-radius:4px;" />
                         </div>
                     </div>
+
+                    <div class="mb-3">
+                        <label for="resolution" class="form-label">Input Image Resolution</label>
+                        <select class="form-select" id="resolution" name="resolution" required>
+                            <option value="original">Original Size</option>
+                            <option value="128">128 x 128 pixels</option>
+                            <option value="256" selected>256 x 256 pixels</option>
+                            <option value="384">384 x 384 pixels</option>
+                            <option value="512">512 x 512 pixels</option>
+                        </select>
+                        <small class="text-muted">
+                            Choose the resolution for processing. Original keeps the image's natural size.
+                            For best results, select a resolution close to your model's training size.
+                        </small>
+                    </div>
                     <script>
                     function previewInputImage(event) {
                       const input = event.target;
@@ -135,7 +150,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const modelSelect = document.getElementById('model_id');
     const modelInfo = document.getElementById('model-info');
     const modelDetails = document.getElementById('model-details');
-    const imageInput = document.getElementById('id_image');
+    const imageInput = document.getElementById('image');
     const form = document.querySelector('form');
     
     // Show model info when selection changes

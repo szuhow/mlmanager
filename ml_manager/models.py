@@ -108,6 +108,33 @@ class MLModel(models.Model):
 
     def __str__(self):
         return f"{self.get_model_display_name()} ({self.mlflow_run_id[:8]}...)"
+    
+    @property
+    def progress_percentage(self):
+        """Calculate training progress percentage"""
+        if self.total_epochs > 0:
+            return min(100, (self.current_epoch / self.total_epochs) * 100)
+        return 0
+    
+    @property
+    def is_training_active(self):
+        """Check if model is currently training"""
+        return self.status in ['loading', 'training']
+    
+    @property
+    def training_progress_info(self):
+        """Get detailed training progress information"""
+        return {
+            'current_epoch': self.current_epoch,
+            'total_epochs': self.total_epochs,
+            'progress_percentage': self.progress_percentage,
+            'train_loss': self.train_loss,
+            'val_loss': self.val_loss,
+            'train_dice': self.train_dice,
+            'val_dice': self.val_dice,
+            'best_val_dice': self.best_val_dice,
+            'status': self.status
+        }
 
 class Prediction(models.Model):
     model = models.ForeignKey(MLModel, on_delete=models.CASCADE)
@@ -128,11 +155,33 @@ class TrainingTemplate(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     
     # Training configuration fields - match TrainingForm fields
-    model_type = models.CharField(max_length=50, default='unet')
+    model_type = models.CharField(max_length=50, default='unet', help_text="Model architecture type (e.g., unet, unet-old)")
     batch_size = models.IntegerField(default=32)
     epochs = models.IntegerField(default=100)
     learning_rate = models.FloatField(default=0.001)
     validation_split = models.FloatField(default=0.2)
+    
+    # Image resolution for training
+    RESOLUTION_CHOICES = [
+        ('original', 'Original Size'),
+        ('128', '128 x 128 pixels'),
+        ('256', '256 x 256 pixels'),
+        ('384', '384 x 384 pixels'),
+        ('512', '512 x 512 pixels'),
+    ]
+    resolution = models.CharField(
+        max_length=20,
+        choices=RESOLUTION_CHOICES,
+        default='256',
+        help_text="Training image resolution. Higher resolutions require more memory."
+    )
+    
+    # Device selection for training - choices are set dynamically in forms
+    device = models.CharField(
+        max_length=20,
+        default='auto',
+        help_text="Device to use for training. Auto will use CUDA if available."
+    )
     
     # Augmentation options
     use_random_flip = models.BooleanField(default=True)
@@ -160,6 +209,8 @@ class TrainingTemplate(models.Model):
             'epochs': self.epochs,
             'learning_rate': self.learning_rate,
             'validation_split': self.validation_split,
+            'resolution': self.resolution,
+            'device': self.device,
             'use_random_flip': self.use_random_flip,
             'use_random_rotate': self.use_random_rotate,
             'use_random_scale': self.use_random_scale,

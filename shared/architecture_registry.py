@@ -144,6 +144,7 @@ class ModelArchitectureRegistry:
         # Look for common architecture patterns
         patterns = [
             ('unet', 'U-Net'),
+            ('resunet', 'Residual U-Net'),
             ('resnet', 'ResNet'),
             ('densenet', 'DenseNet'),
             ('vnet', 'V-Net'),
@@ -215,24 +216,97 @@ def setup_default_architectures():
     # Add discovery paths
     registry.add_discovery_path(base_dir / 'unet')
     registry.add_discovery_path(base_dir / 'unet-old')
+    registry.add_discovery_path(base_dir / 'resunet')
     
     # Manual registration for known architectures
     try:
-        # Register MONAI UNet
+        # Register MONAI UNet directly with proper config
+        from monai.networks.nets import UNet as MonaiUNet
+        registry.register(ArchitectureInfo(
+            key='monai_unet',
+            display_name='MONAI U-Net',
+            framework='MONAI/PyTorch',
+            description='Medical imaging U-Net using MONAI framework',
+            model_class=MonaiUNet,
+            default_config={
+                'spatial_dims': 2,
+                'in_channels': 1,
+                'out_channels': 1,
+                'channels': (16, 32, 64, 128, 256),
+                'strides': (2, 2, 2, 2),
+                'num_res_units': 2,
+            },
+            category='medical_segmentation',
+            supports_2d=True,
+            supports_3d=True,
+            author='MONAI Team',
+            version='1.0.0'
+        ))
+        
+        # Register the legacy 'unet' alias for backward compatibility
+        registry.register(ArchitectureInfo(
+            key='unet',
+            display_name='U-Net (Default)',
+            framework='MONAI/PyTorch',
+            description='Default U-Net implementation using MONAI framework',
+            model_class=MonaiUNet,
+            default_config={
+                'spatial_dims': 2,
+                'in_channels': 1,
+                'out_channels': 1,
+                'channels': (16, 32, 64, 128, 256),
+                'strides': (2, 2, 2, 2),
+                'num_res_units': 2,
+            },
+            category='medical_segmentation',
+            supports_2d=True,
+            supports_3d=True,
+            author='MONAI Team',
+            version='1.0.0'
+        ))
+        
+        # Register MONAI UNet from local implementation as backup
         unet_path = base_dir / 'unet' / 'unet_model.py'
         if unet_path.exists():
-            registry.register_from_module(
-                unet_path,
-                'monai_unet',
-                'MONAI U-Net',
-                framework='MONAI/PyTorch',
-                description='Medical imaging U-Net using MONAI framework',
-                category='medical_segmentation',
-                supports_2d=True,
-                supports_3d=True,
-                author='MONAI Team',
-                version='1.0.0'
-            )
+            try:
+                # Import the local UNet model
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("local_unet_model", str(unet_path))
+                local_unet_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(local_unet_module)
+                
+                registry.register(ArchitectureInfo(
+                    key='local_unet',
+                    display_name='Local U-Net',
+                    framework='PyTorch',
+                    description='Local U-Net implementation',
+                    model_class=local_unet_module.UNet,
+                    default_config={
+                        'n_channels': 1,
+                        'n_classes': 1,
+                        'bilinear': False,
+                    },
+                    category='medical_segmentation',
+                    supports_2d=True,
+                    supports_3d=False,
+                    author='Local Implementation',
+                    version='1.0.0'
+                ))
+            except Exception as e:
+                logger.error(f"Failed to register local UNet: {e}")
+                # Fallback registration if import fails
+                registry.register_from_module(
+                    unet_path,
+                    'local_unet',
+                    'Local U-Net',
+                    framework='PyTorch',
+                    description='Local U-Net implementation',
+                    category='medical_segmentation',
+                    supports_2d=True,
+                    supports_3d=False,
+                    author='Local Implementation',
+                    version='1.0.0'
+                )
         
         # Register legacy UNet
         unet_old_path = base_dir / 'unet-old' / 'unet.py'
@@ -249,6 +323,88 @@ def setup_default_architectures():
                 author='Legacy',
                 version='1.0.0'
             )
+        
+        # Register Residual U-Net models manually for better control
+        resunet_path = base_dir / 'resunet' / 'resunet_model.py'
+        if resunet_path.exists():
+            # Import the models to register them properly
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("resunet_models", str(resunet_path))
+                resunet_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(resunet_module)
+                
+                # Register standard Residual U-Net
+                registry.register(ArchitectureInfo(
+                    key='resunet',
+                    display_name='Residual U-Net',
+                    framework='PyTorch',
+                    description='U-Net with residual connections for improved gradient flow and feature learning',
+                    model_class=resunet_module.ResUNet,
+                    default_config={
+                        'n_channels': 1,
+                        'n_classes': 1,
+                        'bilinear': False,
+                        'use_attention': False
+                    },
+                    category='medical_segmentation',
+                    supports_2d=True,
+                    supports_3d=False,
+                    author='Custom Implementation',
+                    version='1.0.0'
+                ))
+                
+                # Register Deep Residual U-Net
+                registry.register(ArchitectureInfo(
+                    key='deep_resunet',
+                    display_name='Deep Residual U-Net',
+                    framework='PyTorch',
+                    description='Deeper U-Net with residual connections for complex feature extraction',
+                    model_class=resunet_module.DeepResUNet,
+                    default_config={
+                        'n_channels': 1,
+                        'n_classes': 1,
+                        'bilinear': False,
+                        'use_attention': False
+                    },
+                    category='medical_segmentation',
+                    supports_2d=True,
+                    supports_3d=False,
+                    author='Custom Implementation',
+                    version='1.0.0'
+                ))
+                
+                # Register convenience functions as well
+                registry.register(ArchitectureInfo(
+                    key='resunet_basic',
+                    display_name='Residual U-Net (Basic)',
+                    framework='PyTorch',
+                    description='Basic Residual U-Net without attention mechanisms',
+                    model_class=resunet_module.create_resunet,
+                    default_config={},  # Convenience function has defaults
+                    category='medical_segmentation',
+                    supports_2d=True,
+                    supports_3d=False,
+                    author='Custom Implementation',
+                    version='1.0.0'
+                ))
+                
+                registry.register(ArchitectureInfo(
+                    key='attention_resunet',
+                    display_name='Attention Residual U-Net',
+                    framework='PyTorch',
+                    description='Residual U-Net with attention gates for better feature selection',
+                    model_class=resunet_module.create_attention_resunet,
+                    default_config={},  # Convenience function has defaults
+                    category='medical_segmentation',
+                    supports_2d=True,
+                    supports_3d=False,
+                    author='Custom Implementation',
+                    version='1.0.0'
+                ))
+                
+            except Exception as e:
+                logger.error(f"Error registering Residual U-Net models: {e}")
     
     except Exception as e:
         logger.error(f"Error setting up default architectures: {e}")

@@ -29,7 +29,8 @@ from monai.data import CacheDataset, DataLoader as MonaiDataLoader
 from monai.data import Dataset, DataLoader
 from monai.transforms import (
     LoadImage, ScaleIntensity, ToTensor, Compose,
-    Resize, EnsureChannelFirst, ConvertToMultiChannelBasedOnBratsClassesd
+    Resize, EnsureChannelFirst, ConvertToMultiChannelBasedOnBratsClassesd,
+    Lambda
 )
 # Import architecture registry
 from shared.architecture_registry import registry as architecture_registry
@@ -685,6 +686,9 @@ def parse_args():
     parser.add_argument('--output-dir', type=str, help='Directory to save predictions')
     parser.add_argument('--device', type=str, default='cuda', help='Device to run inference on')
     parser.add_argument('--weights-path', type=str, help='Optional path to a .pth file for inference')
+    parser.add_argument('--resolution', type=str, default='original', 
+                       choices=['original', '128', '256', '384', '512'],
+                       help='Input image resolution for processing')
     args, unknown = parser.parse_known_args()
     if args.save_training_template:
         template = {
@@ -732,24 +736,89 @@ def train_model(args):
     os.makedirs(os.path.dirname(model_log_path), exist_ok=True)
     os.makedirs(os.path.dirname(global_log_path), exist_ok=True)
     
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s %(levelname)s %(message)s',
-        handlers=[
-            logging.FileHandler(model_log_path, mode='w', encoding='utf-8', delay=False),
-            logging.FileHandler(global_log_path, mode='w', encoding='utf-8', delay=False),
-            logging.StreamHandler(sys.stdout)
-        ],
-        force=True
-    )
-    logger = logging.getLogger(__name__)
+    # Create a training-specific logger instead of overriding the root logger
+    logger = logging.getLogger('training')
+    logger.setLevel(logging.INFO)
+    
+    # Only add handlers if they don't already exist
+    if not logger.handlers:
+        formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+        
+        # Add file handlers for training logs
+        model_handler = logging.FileHandler(model_log_path, mode='w', encoding='utf-8', delay=False)
+        model_handler.setFormatter(formatter)
+        logger.addHandler(model_handler)
+        
+        global_handler = logging.FileHandler(global_log_path, mode='w', encoding='utf-8', delay=False)
+        global_handler.setFormatter(formatter)
+        logger.addHandler(global_handler)
+        
+        # Add console handler for training logs
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+        
+        # Prevent propagation to avoid double logging
+        logger.propagate = False
     
     # Log the paths being used
     logger.info(f"[SETUP] Model-specific log: {model_log_path}")
     logger.info(f"[SETUP] Global log: {global_log_path}")
     logger.info(f"[SETUP] Model directory: {model_dir}")
     
+    # Setup MLflow experiment before starting run
+    try:
+        current_script_dir = os.path.dirname(os.path.abspath(__file__))
+        ml_manager_dir = os.path.abspath(os.path.join(current_script_dir, '..', 'ml_manager'))
+        if ml_manager_dir not in sys.path:
+            sys.path.append(ml_manager_dir)
+        from mlflow_utils import setup_mlflow
+        setup_mlflow()
+        logger.info("[MLFLOW] MLflow experiment setup completed")
+    except Exception as e:
+        logger.warning(f"[MLFLOW] Failed to setup MLflow experiment: {e}")
+    
     mlflow.start_run(run_id=args.mlflow_run_id)
+
+    # Initialize system monitoring for MLflow
+    system_monitor = None
+    try:
+        from shared.utils.system_monitor import SystemMonitor
+        system_monitor = SystemMonitor(log_interval=30, enable_gpu=True)  # Log every 30 seconds
+        system_monitor.start_monitoring()
+        logger.info("[MONITORING] System monitoring started - logging to MLflow every 30 seconds")
+    except Exception as e:
+        logger.warning(f"[MONITORING] Failed to start system monitoring: {e}")
+        system_monitor = None
+
+    # Log MLflow parameters and tags for model metadata
+    mlflow.log_param("model_family", args.model_family)
+    mlflow.log_param("model_type", args.model_type)
+    mlflow.log_param("architecture", args.model_type)
+    mlflow.log_param("batch_size", args.batch_size)
+    mlflow.log_param("epochs", args.epochs)
+    mlflow.log_param("learning_rate", args.learning_rate)
+    mlflow.log_param("crop_size", args.crop_size)
+    mlflow.log_param("validation_split", args.validation_split)
+    mlflow.log_param("num_workers", getattr(args, 'num_workers', 2))
+    
+    # Log device and resolution parameters
+    mlflow.log_param("device", getattr(args, 'device', 'auto'))
+    mlflow.log_param("resolution", getattr(args, 'resolution', '256'))
+    
+    # Log augmentation parameters
+    mlflow.log_param("random_flip", getattr(args, 'random_flip', False))
+    mlflow.log_param("random_rotate", getattr(args, 'random_rotate', False))
+    mlflow.log_param("random_scale", getattr(args, 'random_scale', False))
+    mlflow.log_param("random_intensity", getattr(args, 'random_intensity', False))
+    
+    # Set MLflow tags for better organization
+    mlflow.set_tag("model_family", args.model_family)
+    mlflow.set_tag("architecture", args.model_type)
+    mlflow.set_tag("task", "coronary_segmentation")
+    if hasattr(args, 'model_id') and args.model_id is not None:
+        mlflow.set_tag("model_id", str(args.model_id))
+    
     callback = None
     if hasattr(args, 'model_id') and args.model_id is not None:
         from shared.utils.training_callback import TrainingCallback
@@ -761,7 +830,23 @@ def train_model(args):
 
     try:
         logger.info("[TRAINING] Starting training with parameters: %s", vars(args))
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Handle device selection based on args.device parameter
+        if hasattr(args, 'device') and args.device:
+            if args.device == 'auto':
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            elif args.device == 'cuda':
+                if torch.cuda.is_available():
+                    device = torch.device("cuda")
+                else:
+                    logger.warning("CUDA requested but not available, falling back to CPU")
+                    device = torch.device("cpu")
+            else:
+                device = torch.device(args.device)  # cpu or specific device
+        else:
+            # Fallback to auto-detection if no device specified
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            
         logger.info(f"[TRAINING] Using device: {device}")
         
         # Log dataset path verification
@@ -785,11 +870,11 @@ def train_model(args):
 
         # Get transforms with augmentation parameters
         transform_params = {
-            'use_random_flip': True,
-            'use_random_rotate': True,
-            'use_random_scale': True,
-            'use_random_intensity': True,
-            'crop_size': 128
+            'use_random_flip': getattr(args, 'random_flip', True),
+            'use_random_rotate': getattr(args, 'random_rotate', True),
+            'use_random_scale': getattr(args, 'random_scale', True),
+            'use_random_intensity': getattr(args, 'random_intensity', True),
+            'crop_size': getattr(args, 'crop_size', 128)
         }
         
         logger.info("[DATASET] Loading datasets...")
@@ -806,6 +891,16 @@ def train_model(args):
         if callback:
             callback.on_dataset_loaded()
             logger.info("Status updated to 'training' - starting model training")
+            
+            # Update training data info with dataset statistics
+            callback.update_model_metadata(training_data_info={
+                'data_path': args.data_path,
+                'total_samples': len(train_ds) + len(val_ds),
+                'training_samples': len(train_ds),
+                'validation_samples': len(val_ds),
+                'validation_split': args.validation_split,
+                'transform_params': transform_params
+            })
         
         # Get sample batch for model signature
         sample_batch = next(iter(train_loader))
@@ -818,6 +913,27 @@ def train_model(args):
             device,
             **model_config
         )
+
+        # Update model metadata if callback is available
+        if callback:
+            callback.update_model_metadata(
+                model_family=args.model_family,
+                model_type=args.model_type,
+                architecture_info=arch_info
+            )
+            callback.update_training_config({
+                'batch_size': args.batch_size,
+                'epochs': args.epochs,
+                'learning_rate': args.learning_rate,
+                'crop_size': args.crop_size,
+                'validation_split': args.validation_split,
+                'num_workers': getattr(args, 'num_workers', 2),
+                'random_flip': getattr(args, 'random_flip', False),
+                'random_rotate': getattr(args, 'random_rotate', False),
+                'random_scale': getattr(args, 'random_scale', False),
+                'random_intensity': getattr(args, 'random_intensity', False)
+            })
+            callback.update_architecture_info(model, model_config)
 
         # Model directory was already created during logging setup
         # Save and log model architecture summary
@@ -1137,6 +1253,14 @@ def train_model(args):
             callback.on_training_failed(str(e))
         raise
     finally:
+        # Stop system monitoring
+        if system_monitor:
+            try:
+                system_monitor.stop_monitoring()
+                logger.info("[MONITORING] System monitoring stopped")
+            except Exception as e:
+                logger.warning(f"[MONITORING] Failed to stop system monitoring: {e}")
+        
         mlflow.end_run()
 
 # Placeholder for save_interactive_training_plot
@@ -1149,17 +1273,67 @@ def save_interactive_training_plot(epoch_history, model_dir):
     # return dummy_plot_path
     return None
 
-def get_inference_transforms(image_size=(256, 256)):
-    """Get transforms for inference"""
-    return Compose([
-        LoadImage(image_only=True),
-        EnsureChannelFirst(),
-        Resize(spatial_size=image_size),
-        ScaleIntensity(),
-        ToTensor()
-    ])
+def get_inference_transforms(image_size=(256, 256), use_original_size=False):
+    """Get transforms for inference - uses PIL-compatible orientation
+    
+    Args:
+        image_size: Target image size as (height, width). Ignored if use_original_size=True
+        use_original_size: If True, don't resize the image, keep original dimensions
+    """
+    def load_pil_compatible_image(filepath):
+        """Load image using PIL to maintain browser-compatible orientation"""
+        from PIL import Image
+        import numpy as np
+        import torch
+        
+        img = Image.open(filepath)
+        
+        # Convert to grayscale if needed
+        if img.mode != 'L':
+            img = img.convert('L')
+        
+        # Convert to numpy array and add channel dimension
+        img_array = np.array(img)
+        if len(img_array.shape) == 2:
+            img_array = img_array[np.newaxis, ...]  # Add channel dimension
+        
+        # Convert to torch tensor
+        img_tensor = torch.from_numpy(img_array).float()
+        
+        return img_tensor
+    
+    if use_original_size:
+        # Don't resize, just load and scale intensity
+        return Compose([
+            Lambda(load_pil_compatible_image),
+            ScaleIntensity(),
+        ])
+    else:
+        return Compose([
+            Lambda(load_pil_compatible_image),
+            Resize(spatial_size=image_size, mode="bilinear"),
+            ScaleIntensity(),
+            # ToTensor is not needed since we already have a tensor
+        ])
 
-def run_inference(model_path, input_path, output_dir, device="cuda", weights_path=None, model_type="unet"):
+def get_display_oriented_image(input_file, target_size=(256, 256)):
+    """Load image in display orientation (same as browser shows) for comparison"""
+    # Load image using PIL to maintain browser-compatible orientation
+    img = Image.open(input_file)
+    
+    # Convert to grayscale if needed
+    if img.mode != 'L':
+        img = img.convert('L')
+    
+    # Resize to target size
+    img = img.resize(target_size, Image.Resampling.BILINEAR)
+    
+    # Convert to numpy array
+    img_array = np.array(img)
+    
+    return img_array
+
+def run_inference(model_path, input_path, output_dir, device="cuda", weights_path=None, model_type="unet", resolution="original"):
     """Run inference on input images using a trained model
     
     Args:
@@ -1169,6 +1343,7 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
         device: Device to run inference on
         weights_path: Optional path to a .pth file to load weights from
         model_type: Type of model architecture to use
+        resolution: Target resolution for input images ('original', '128', '256', '384', '512')
     """
     logger = logging.getLogger(__name__)
     device = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -1183,7 +1358,15 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
     else:
         model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
-    transforms = get_inference_transforms()
+    
+    # Get transforms based on resolution choice
+    if resolution == "original":
+        transforms = get_inference_transforms(use_original_size=True)
+    else:
+        # Convert string resolution to integer tuple
+        res_int = int(resolution)
+        transforms = get_inference_transforms(image_size=(res_int, res_int), use_original_size=False)
+    
     if os.path.isdir(input_path):
         input_files = [os.path.join(input_path, f) for f in os.listdir(input_path)
                       if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp'))]
@@ -1201,20 +1384,46 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
             output = torch.sigmoid(output)
             pred = (output > 0.5).float()
             
-            # Save prediction
+            # Save prediction - ensure correct tensor dimensions
             pred_np = pred.squeeze().cpu().numpy()
-            pred_image = (pred_np * 255).astype(np.uint8)
+            # Ensure 2D array (height, width) for proper image creation
+            if pred_np.ndim == 3 and pred_np.shape[0] == 1:
+                pred_np = pred_np.squeeze(0)
+            
+            # Debug: Log prediction statistics
+            logger.info(f"Prediction stats - Shape: {pred_np.shape}, Min: {pred_np.min():.3f}, Max: {pred_np.max():.3f}, Mean: {pred_np.mean():.3f}")
+            
+            # Convert to visible image - if prediction is all zeros, create a test pattern
+            if pred_np.max() == 0:
+                logger.warning("Prediction is all zeros - no segmentation detected")
+                # Create a semi-transparent overlay to show the model ran
+                pred_image = np.zeros_like(pred_np, dtype=np.uint8)
+                # Add a small indicator that inference ran but found no segments
+                pred_image[10:30, 10:30] = 128  # Small gray square as indicator
+            else:
+                pred_image = (pred_np * 255).astype(np.uint8)
+                logger.info(f"Segmentation detected - {np.sum(pred_np > 0)} pixels")
             output_filename = os.path.join(output_dir, f"pred_{os.path.basename(input_file)}")
             
-            # Create a side-by-side comparison
-            input_img = Image.open(input_file).convert('L')
-            input_img = input_img.resize(pred_image.shape[::-1])
+            # Create a side-by-side comparison with consistent orientation
+            # Both model input and display now use the same PIL orientation
+            display_input = get_display_oriented_image(input_file, (pred_image.shape[1], pred_image.shape[0]))
             
-            comparison = Image.new('L', (input_img.width * 2, input_img.height))
-            comparison.paste(input_img, (0, 0))
-            comparison.paste(Image.fromarray(pred_image), (input_img.width, 0))
+            # Create side-by-side comparison
+            comparison = np.hstack([display_input, pred_image])
+            comparison_img = Image.fromarray(comparison)
+            comparison_img.save(output_filename)
             
-            comparison.save(output_filename)
+            # Save the display-oriented input separately for web display consistency
+            input_only_filename = os.path.join(output_dir, f"input_{os.path.basename(input_file)}")
+            input_only_img = Image.fromarray(display_input)
+            input_only_img.save(input_only_filename)
+            
+            # Save prediction only
+            pred_only_filename = os.path.join(output_dir, f"pred_only_{os.path.basename(input_file)}")
+            pred_only_img = Image.fromarray(pred_image)
+            pred_only_img.save(pred_only_filename)
+            
             logger.info(f"Saved prediction to {output_filename}")
             
             # Log prediction to MLflow if a run is active
@@ -1241,7 +1450,8 @@ def inference_mode(args):
             output_dir=args.output_dir,
             device=args.device,
             weights_path=getattr(args, 'weights_path', None),
-            model_type=getattr(args, 'model_type', 'unet')
+            model_type=getattr(args, 'model_type', 'unet'),
+            resolution=getattr(args, 'resolution', 'original')
         )
     finally:
         if args.mlflow_run_id:

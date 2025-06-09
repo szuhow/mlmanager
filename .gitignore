@@ -166,3 +166,4 @@ runs/
 .env
 models/organized/*
 shared/datasets/data/*
+.env

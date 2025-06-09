@@ -59,8 +59,25 @@ class Up(nn.Module):
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
 
-        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
-                        diffY // 2, diffY - diffY // 2])
+        # Handle size mismatches by padding the smaller tensor or cropping the larger one
+        if diffX > 0 or diffY > 0:
+            # x2 is larger than x1, pad x1
+            x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
+                            diffY // 2, diffY - diffY // 2])
+        elif diffX < 0 or diffY < 0:
+            # x1 is larger than x2, crop x1 to match x2
+            start_x = (-diffX) // 2
+            start_y = (-diffY) // 2
+            end_x = start_x + x2.size()[3]
+            end_y = start_y + x2.size()[2]
+            x1 = x1[:, :, start_y:end_y, start_x:end_x]
+        
+        # Ensure exact size match
+        if x1.size()[2] != x2.size()[2] or x1.size()[3] != x2.size()[3]:
+            # Final safety check - interpolate to exact size if needed
+            x1 = F.interpolate(x1, size=(x2.size()[2], x2.size()[3]), 
+                             mode='bilinear', align_corners=True)
+        
         # if you have padding issues, see
         # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
         # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd

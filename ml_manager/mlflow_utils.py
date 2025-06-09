@@ -196,3 +196,55 @@ def update_model_version_description(model_name, version, description):
     except Exception as e:
         print(f"Error updating model version description: {e}")
         return False
+
+def get_mlflow_ui_url(run_id=None, experiment_name=None):
+    """Generate MLflow UI URL for a specific run or experiment"""
+    try:
+        tracking_uri = get_mlflow_tracking_uri()
+        
+        # Parse the tracking URI to get the base URL
+        if tracking_uri.startswith('http'):
+            # For Docker environment, convert internal network URL to external access URL
+            if 'mlflow:5000' in tracking_uri:
+                # In Docker, MLflow UI is accessible via localhost:5000 from the host
+                base_url = 'http://localhost:5000'
+            else:
+                base_url = tracking_uri
+        else:
+            # For file-based tracking, assume local MLflow server
+            base_url = 'http://localhost:5000'
+        
+        if run_id:
+            # URL for specific run
+            try:
+                client = mlflow.tracking.MlflowClient()
+                run = client.get_run(run_id)
+                experiment_id = run.info.experiment_id
+                return f"{base_url}/#/experiments/{experiment_id}/runs/{run_id}"
+            except Exception as e:
+                print(f"Error getting run info for URL generation: {e}")
+                return f"{base_url}/#/experiments"
+        
+        elif experiment_name:
+            # URL for experiment
+            try:
+                experiment = mlflow.get_experiment_by_name(experiment_name)
+                if experiment:
+                    return f"{base_url}/#/experiments/{experiment.experiment_id}"
+                else:
+                    return f"{base_url}/#/experiments"
+            except Exception as e:
+                print(f"Error getting experiment info for URL generation: {e}")
+                return f"{base_url}/#/experiments"
+        
+        else:
+            # Default to experiments list
+            return f"{base_url}/#/experiments"
+            
+    except Exception as e:
+        print(f"Error generating MLflow URL: {e}")
+        return None
+
+def generate_mlflow_ui_url(run_id=None, experiment_name=None):
+    """Alias for get_mlflow_ui_url for backward compatibility"""
+    return get_mlflow_ui_url(run_id=run_id, experiment_name=experiment_name)
