@@ -1,0 +1,25 @@
+<div class="progress mb-3" id="progressBarContainer">
+    <div class="progress-bar" id="progressBar" role="progressbar" 
+         style="width: {{ progress_percentage }}%"
+         aria-valuenow="{{ model.current_epoch }}" 
+         aria-valuemin="0" 
+         aria-valuemax="{{ model.total_epochs }}">
+        {{ progress_percentage }}%
+    </div>
+</div>
+<p>Epoch: <span id="currentEpoch">{{ model.current_epoch }}</span> / <span id="totalEpochs">{{ model.total_epochs }}</span></p>
+<div class="row">
+    <div class="col-md-6">
+        <p>Train Loss: <span id="trainLoss">{{ model.train_loss|floatformat:4 }}</span></p>
+        <p>Train Dice: <span id="trainDice">{{ model.train_dice|floatformat:4 }}</span></p>
+    </div>
+    <div class="col-md-6">
+        <p>Val Loss: <span id="valLoss">{{ model.val_loss|floatformat:4 }}</span></p>
+        <p>Val Dice: <span id="valDice">{{ model.val_dice|floatformat:4 }}</span></p>
+    </div>
+</div>
+<p>Best Val Dice: <span id="bestValDice">{{ model.best_val_dice|floatformat:4 }}</span></p>
+<hr>
+<h6>Training Logs</h6>
+<pre id="trainingLogs" style="max-height:300px;overflow:auto;background:#222;color:#eee;padding:10px;">{% for line in training_logs %}{{ line }}
+{% endfor %}</pre>

@@ -1,0 +1,53 @@
+{% extends "ml_manager/base.html" %}
+
+{% block title %}{{ model.name }} - Predictions{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>Predictions for {{ model.name }}</h1>
+    <div>
+        <a href="{% url 'ml_manager:model-detail' model.pk %}" class="btn btn-info">Model Details</a>
+        <a href="{% url 'ml_manager:model-list' %}" class="btn btn-secondary">Back to List</a>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h5 class="card-title mb-0">Prediction History</h5>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Created At</th>
+                        <th>Processing Time</th>
+                        <th>Input Data</th>
+                        <th>Output Data</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for prediction in predictions %}
+                    <tr>
+                        <td>{{ prediction.id }}</td>
+                        <td>{{ prediction.created_at|date:"Y-m-d H:i:s" }}</td>
+                        <td>{{ prediction.processing_time|floatformat:3 }}s</td>
+                        <td>
+                            <pre class="mb-0"><code>{{ prediction.input_data|pprint }}</code></pre>
+                        </td>
+                        <td>
+                            <pre class="mb-0"><code>{{ prediction.output_data|pprint }}</code></pre>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center">No predictions available</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

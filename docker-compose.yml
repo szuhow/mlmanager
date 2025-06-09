@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.12.1
+    container_name: mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=http://0.0.0.0:5000
+      - MLFLOW_ARTIFACT_ROOT=/mlflow/artifacts
+      - MLFLOW_BACKEND_STORE_URI=sqlite:////mlflow/data/mlflow.db
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlflow/artifacts
+      - mlflow_data:/mlflow/data
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlflow/data/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+
+  django:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    container_name: coronary-django
+    environment:
+      - PYTHONPATH=/app
+      - DJANGO_SETTINGS_MODULE=coronary_experiments.settings
+      - PYTHONUNBUFFERED=1
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - ./:/app
+      - django_data:/data
+    ports:
+      - "8000:8000"
+    shm_size: 2gb  # Increase shared memory for DataLoader workers
+
+volumes:
+  django_data:
+  mlflow_data:
+
+networks:
+  default:
+    driver: bridge

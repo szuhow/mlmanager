@@ -1,6 +1,6 @@
 """ Full assembly of the parts to form the complete network """
 
-from .unet_parts import *
+from shared.unet.unet_parts import *
 import torch.utils.checkpoint as cp
 
 

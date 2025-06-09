@@ -1,0 +1,1148 @@
+{% extends "ml_manager/base.html" %}
+{% load static %}
+{% load l10n %}
+
+{% block title %}{{ model.name }} - Details{% endblock %}
+
+{% block extra_css %}
+<style>
+.log-display {
+    background: #1e1e1e;
+    color: #e0e0e0;
+    padding: 15px;
+    border-radius: 5px;
+    font-family: 'Monaco', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.4;
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.log-section {
+    background: #1e1e1e;
+    border-radius: 5px;
+    padding: 10px;
+    max-height: 450px;
+    overflow-y: auto;
+}
+
+.log-entry {
+    padding: 3px 8px;
+    margin: 2px 0;
+    font-family: 'Monaco', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.4;
+    border-radius: 3px;
+}
+
+.log-entry.epoch-log {
+    background-color: rgba(52, 144, 220, 0.1);
+    border-left: 3px solid #3490dc;
+    color: #3490dc;
+}
+
+.log-entry.batch-log {
+    background-color: rgba(72, 187, 120, 0.1);
+    border-left: 3px solid #48bb78;
+    color: #48bb78;
+}
+
+.log-entry.metrics-log {
+    background-color: rgba(237, 137, 54, 0.1);
+    border-left: 3px solid #ed8936;
+    color: #ed8936;
+    font-weight: 500;
+}
+
+.log-entry.validation-log {
+    background-color: rgba(159, 122, 234, 0.1);
+    border-left: 3px solid #9f7aea;
+    color: #9f7aea;
+}
+
+.log-entry.config-log {
+    background-color: rgba(128, 128, 128, 0.1);
+    border-left: 3px solid #808080;
+    color: #a0a0a0;
+}
+
+.log-entry.model-log {
+    background-color: rgba(56, 178, 172, 0.1);
+    border-left: 3px solid #38b2ac;
+    color: #38b2ac;
+}
+
+.log-view {
+    transition: opacity 0.3s ease;
+}
+
+.log-view.active {
+    display: block !important;
+}
+
+.btn-group .btn-check:checked + .btn {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+    color: white;
+}
+
+#log-stats {
+    background-color: #f8f9fa;
+    padding: 8px;
+    border-radius: 5px;
+    border: 1px solid #dee2e6;
+}
+
+.progress-enhanced {
+    height: 25px;
+    font-size: 14px;
+}
+
+.training-metrics {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+}
+
+.metric-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.metric-item:last-child {
+    border-bottom: none;
+}
+
+.metric-label {
+    font-weight: 500;
+    color: #495057;
+}
+
+.metric-value {
+    font-family: 'Monaco', 'Consolas', monospace;
+    font-weight: 600;
+    color: #007bff;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+{% csrf_token %}
+<div class="container-fluid" data-model-id="{{ model.pk }}" data-model-status="{{ model.status }}">
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>{{ model.name }}</h1>
+    <div>
+        <a href="{% url 'ml_manager:model-inference' model.pk %}" class="btn btn-primary me-2">Run Inference</a>
+        <a href="{% url 'ml_manager:model-list' %}" class="btn btn-secondary">Back to List</a>
+    </div>
+</div>
+
+{% if mlflow_error %}
+<div class="alert alert-warning alert-dismissible fade show" role="alert">
+    <strong>MLflow Warning:</strong> {{ mlflow_error }}
+    <br><small>Training data may still be displayed from cached model information.</small>
+    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+</div>
+{% endif %}
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Model Information</h5>
+            </div>
+            <div class="card-body">
+                <dl class="row">
+                    <dt class="col-sm-4">Status</dt>
+                    <dd class="col-sm-8">
+                        <span class="badge {% if model.status == 'completed' %}bg-success{% elif model.status == 'training' %}bg-warning{% else %}bg-danger{% endif %}">
+                            {{ model.status }}
+                        </span>
+                    </dd>
+
+                    <dt class="col-sm-4">MLflow Run ID</dt>
+                    <dd class="col-sm-8">{{ model.mlflow_run_id }}</dd>
+                </dl>
+            </div>
+        </div>
+
+        <!-- MLflow Model Registry Information -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-archive me-2"></i>MLflow Registry
+                </h5>
+                <div class="btn-group btn-group-sm">
+                    {% if model.is_registered %}
+                        <button class="btn btn-outline-primary btn-sm" onclick="syncRegistryInfo({{ model.pk }})">
+                            <i class="fas fa-sync-alt"></i> Sync
+                        </button>
+                        {% if model.registry_stage != 'Production' %}
+                        <div class="dropdown">
+                            <button class="btn btn-outline-success btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                                <i class="fas fa-arrow-up"></i> Promote
+                            </button>
+                            <ul class="dropdown-menu">
+                                {% if model.registry_stage != 'Staging' %}
+                                <li><a class="dropdown-item" href="#" onclick="transitionStage({{ model.pk }}, 'Staging')">To Staging</a></li>
+                                {% endif %}
+                                {% if model.registry_stage != 'Production' %}
+                                <li><a class="dropdown-item" href="#" onclick="transitionStage({{ model.pk }}, 'Production')">To Production</a></li>
+                                {% endif %}
+                                {% if model.registry_stage and model.registry_stage != 'Archived' %}
+                                <li><hr class="dropdown-divider"></li>
+                                <li><a class="dropdown-item text-warning" href="#" onclick="transitionStage({{ model.pk }}, 'Archived')">Archive</a></li>
+                                {% endif %}
+                            </ul>
+                        </div>
+                        {% endif %}
+                    {% else %}
+                        <button class="btn btn-primary btn-sm" onclick="registerModel({{ model.pk }})">
+                            <i class="fas fa-plus"></i> Register
+                        </button>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="card-body">
+                {% if model.is_registered %}
+                <dl class="row">
+                    <dt class="col-sm-4">Registry Name</dt>
+                    <dd class="col-sm-8" id="registry-name">{{ model.registry_model_name }}</dd>
+                    
+                    <dt class="col-sm-4">Version</dt>
+                    <dd class="col-sm-8" id="registry-version">v{{ model.registry_model_version }}</dd>
+                    
+                    <dt class="col-sm-4">Stage</dt>
+                    <dd class="col-sm-8">
+                        <span id="registry-stage" class="badge 
+                            {% if model.registry_stage == 'Production' %}bg-success
+                            {% elif model.registry_stage == 'Staging' %}bg-warning
+                            {% elif model.registry_stage == 'Archived' %}bg-secondary
+                            {% else %}bg-light text-dark{% endif %}">
+                            {{ model.registry_stage|default:"None" }}
+                        </span>
+                    </dd>
+                    
+                    <dt class="col-sm-4">Registered</dt>
+                    <dd class="col-sm-8">
+                        <i class="fas fa-check-circle text-success"></i>
+                        <small class="text-muted">Model is registered in MLflow Registry</small>
+                    </dd>
+                </dl>
+                {% else %}
+                <div class="alert alert-info mb-0">
+                    <i class="fas fa-info-circle me-2"></i>
+                    <strong>Not Registered</strong><br>
+                    <small>This model is not yet registered in MLflow Model Registry. Click "Register" to add it for better version management and deployment tracking.</small>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <!-- Training Details Card -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-cogs me-2"></i>Training Configuration
+                </h5>
+                <small class="text-muted">
+                    {% if training_details.error %}
+                        <span class="text-warning">
+                            <i class="fas fa-exclamation-triangle"></i> {{ training_details.error }}
+                        </span>
+                    {% else %}
+                        <i class="fas fa-check-circle text-success"></i> Loaded
+                    {% endif %}
+                </small>
+            </div>
+            <div class="card-body">
+                {% if not training_details.error %}
+                    <!-- Configuration Section -->
+                    {% if training_details.config %}
+                    <div class="mb-3">
+                        <h6 class="text-primary"><i class="fas fa-sliders-h me-1"></i>Configuration</h6>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <small class="text-muted">Batch Size:</small>
+                                <div class="fw-bold">{{ training_details.config.batch_size }}</div>
+                            </div>
+                            <div class="col-6">
+                                <small class="text-muted">Epochs:</small>
+                                <div class="fw-bold">{{ training_details.config.epochs }}</div>
+                            </div>
+                            <div class="col-6">
+                                <small class="text-muted">Learning Rate:</small>
+                                <div class="fw-bold">{{ training_details.config.learning_rate }}</div>
+                            </div>
+                            <div class="col-6">
+                                <small class="text-muted">Validation Split:</small>
+                                <div class="fw-bold">{{ training_details.config.validation_split }}</div>
+                            </div>
+                            <div class="col-6">
+                                <small class="text-muted">Crop Size:</small>
+                                <div class="fw-bold">{{ training_details.config.crop_size }}</div>
+                            </div>
+                            <div class="col-6">
+                                <small class="text-muted">Workers:</small>
+                                <div class="fw-bold">{{ training_details.config.num_workers }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- Hardware Section -->
+                    {% if training_details.hardware %}
+                    <div class="mb-3">
+                        <h6 class="text-success"><i class="fas fa-microchip me-1"></i>Hardware & Framework</h6>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <small class="text-muted">Device:</small>
+                                <div class="fw-bold">
+                                    {{ training_details.hardware.device|upper }}
+                                    {% if training_details.hardware.cuda_available %}
+                                        <i class="fas fa-check-circle text-success ms-1"></i>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <small class="text-muted">PyTorch:</small>
+                                <div class="fw-bold">{{ training_details.hardware.pytorch_version }}</div>
+                            </div>
+                            {% if training_details.hardware.cuda_version != 'N/A' %}
+                            <div class="col-12">
+                                <small class="text-muted">CUDA Version:</small>
+                                <div class="fw-bold">{{ training_details.hardware.cuda_version }}</div>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- Augmentation Section -->
+                    {% if training_details.augmentation %}
+                    <div class="mb-3">
+                        <h6 class="text-info"><i class="fas fa-random me-1"></i>Data Augmentation</h6>
+                        <div class="d-flex flex-wrap gap-2">
+                            {% for aug_type, enabled in training_details.augmentation.items %}
+                                <span class="badge {% if enabled %}bg-success{% else %}bg-secondary{% endif %}">
+                                    {{ aug_type|title|cut:"_" }}
+                                    {% if enabled %}
+                                        <i class="fas fa-check ms-1"></i>
+                                    {% else %}
+                                        <i class="fas fa-times ms-1"></i>
+                                    {% endif %}
+                                </span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                {% else %}
+                    <div class="text-center text-muted py-3">
+                        <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
+                        <p>Could not load training configuration details.</p>
+                        <small>{{ training_details.error }}</small>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Model Architecture Card -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-sitemap me-2"></i>Model Architecture
+                </h5>
+            </div>
+            <div class="card-body">
+                {% if not architecture_details.error %}
+                    <div class="row g-3">
+                        <div class="col-12">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <h6 class="text-primary mb-0">{{ architecture_details.name }}</h6>
+                                <span class="badge bg-primary">{{ architecture_details.framework }}</span>
+                            </div>
+                            <p class="text-muted mb-2">{{ architecture_details.type }}</p>
+                        </div>
+                        
+                        {% if architecture_details.details %}
+                        <div class="col-12">
+                            <h6 class="text-secondary">Architecture Details</h6>
+                            <div class="row g-2">
+                                {% for key, value in architecture_details.details.items %}
+                                <div class="col-6">
+                                    <small class="text-muted">{{ key|title|cut:"_" }}:</small>
+                                    <div class="fw-bold">
+                                        {% if value == True %}
+                                            <i class="fas fa-check text-success"></i> Yes
+                                        {% elif value == False %}
+                                            <i class="fas fa-times text-danger"></i> No
+                                        {% else %}
+                                            {{ value }}
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        {% if training_details.architecture.total_parameters %}
+                        <div class="col-12">
+                            <div class="alert alert-info py-2 mb-0">
+                                <strong>Parameters:</strong> {{ training_details.architecture.total_parameters|floatformat:0 }} total parameters
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                {% else %}
+                    <div class="text-center text-muted py-3">
+                        <i class="fas fa-question-circle fa-2x mb-2"></i>
+                        <p>Architecture information not available.</p>
+                        <small>{{ architecture_details.error }}</small>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Training Progress</h5>
+            </div>
+            <div class="card-body" id="training-progress">
+                {% if model.status == 'training' %}
+                <div class="progress progress-enhanced mb-3">
+                    <div class="progress-bar" role="progressbar" 
+                         style="width: {{ progress_percentage|default:0 }}%"
+                         aria-valuenow="{{ model.current_epoch }}" 
+                         aria-valuemin="0" 
+                         aria-valuemax="{{ model.total_epochs }}">
+                        Epoch {{ model.current_epoch }}/{{ model.total_epochs }} ({{ progress_percentage|default:0 }}%)
+                    </div>
+                </div>
+                
+                <div class="training-metrics">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="metric-item">
+                                <span class="metric-label">Current Epoch:</span>
+                                <span class="metric-value"><span id="current-epoch">{{ model.current_epoch }}</span> / <span id="total-epochs">{{ model.total_epochs }}</span></span>
+                            </div>
+                            <div class="metric-item">
+                                <span class="metric-label">Training Loss:</span>
+                                <span class="metric-value" id="train-loss">{{ model.train_loss|floatformat:4 }}</span>
+                            </div>
+                            <div class="metric-item">
+                                <span class="metric-label">Training Dice:</span>
+                                <span class="metric-value" id="train-dice">{{ model.train_dice|floatformat:4 }}</span>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="metric-item">
+                                <span class="metric-label">Validation Loss:</span>
+                                <span class="metric-value" id="val-loss">{{ model.val_loss|floatformat:4 }}</span>
+                            </div>
+                            <div class="metric-item">
+                                <span class="metric-label">Validation Dice:</span>
+                                <span class="metric-value" id="val-dice">{{ model.val_dice|floatformat:4 }}</span>
+                            </div>
+                            <div class="metric-item">
+                                <span class="metric-label">Best Validation Dice:</span>
+                                <span class="metric-value" id="best-val-dice">{{ model.best_val_dice|floatformat:4 }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="d-flex justify-content-between align-items-center">
+                    <button id="stopTrainingBtn" class="btn btn-danger"
+                            {% if model.stop_requested %}disabled{% endif %}>
+                        {% if model.stop_requested %}Stop Requested{% else %}Stop Training{% endif %}
+                    </button>
+                    
+                    <small class="text-muted">
+                        Updates every 2 seconds
+                    </small>
+                </div>
+                {% else %}
+                <div class="alert alert-{{ model.status|yesno:'success,danger' }}">
+                    <strong>Training {{ model.status|title }}</strong>
+                    {% if model.status == 'completed' %}
+                        <br><small>Training completed successfully!</small>
+                    {% elif model.status == 'failed' %}
+                        <br><small>Training failed. Check logs for details.</small>
+                    {% endif %}
+                </div>
+                
+                {% if model.best_val_dice %}
+                <div class="training-metrics">
+                    <div class="metric-item">
+                        <span class="metric-label">Final Validation Dice:</span>
+                        <span class="metric-value">{{ model.best_val_dice|floatformat:4 }}</span>
+                    </div>
+                    {% if model.train_loss %}
+                    <div class="metric-item">
+                        <span class="metric-label">Final Training Loss:</span>
+                        <span class="metric-value">{{ model.train_loss|floatformat:4 }}</span>
+                    </div>
+                    {% endif %}
+                    {% if model.val_loss %}
+                    <div class="metric-item">
+                        <span class="metric-label">Final Validation Loss:</span>
+                        <span class="metric-value">{{ model.val_loss|floatformat:4 }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Training Preview Section -->
+        {% if training_preview %}
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-images"></i> Training Preview
+                    {% if training_preview.latest_epoch %}
+                        <small class="text-muted">Latest: Epoch {{ training_preview.latest_epoch }}</small>
+                    {% endif %}
+                </h5>
+            </div>
+            <div class="card-body">
+                {% if training_preview.error %}
+                    <div class="alert alert-warning">
+                        <i class="fas fa-exclamation-triangle"></i> 
+                        {{ training_preview.error }}
+                    </div>
+                {% elif training_preview.images %}
+                    <div class="row">
+                        {% for image in training_preview.images|slice:":6" %}
+                        <div class="col-lg-4 col-md-6 mb-3">
+                            <div class="card">
+                                <div class="card-header py-2">
+                                    <small class="text-muted">Epoch {{ image.epoch }}</small>
+                                </div>
+                                <div class="card-body p-2">
+                                    <img src="{% url 'ml_manager:training-preview-image' model.id image.filename %}" 
+                                         alt="Prediction Epoch {{ image.epoch }}"
+                                         class="img-fluid rounded"
+                                         style="max-height: 200px; width: 100%; object-fit: contain; cursor: pointer;"
+                                         onclick="openImageModal('{% url 'ml_manager:training-preview-image' model.id image.filename %}', 'Epoch {{ image.epoch }}')">
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    
+                    {% if training_preview.images|length > 6 %}
+                    <div class="text-center">
+                        <button class="btn btn-outline-primary btn-sm" onclick="toggleMoreImages()">
+                            <span id="toggle-text">Show All {{ training_preview.images|length }} Images</span>
+                        </button>
+                    </div>
+                    
+                    <div id="more-images" style="display: none;" class="mt-3">
+                        <div class="row">
+                            {% for image in training_preview.images|slice:"6:" %}
+                            <div class="col-lg-4 col-md-6 mb-3">
+                                <div class="card">
+                                    <div class="card-header py-2">
+                                        <small class="text-muted">Epoch {{ image.epoch }}</small>
+                                    </div>
+                                    <div class="card-body p-2">
+                                        <img src="{% url 'ml_manager:training-preview-image' model.id image.filename %}" 
+                                             alt="Prediction Epoch {{ image.epoch }}"
+                                             class="img-fluid rounded"
+                                             style="max-height: 200px; width: 100%; object-fit: contain; cursor: pointer;"
+                                             onclick="openImageModal('{% url 'ml_manager:training-preview-image' model.id image.filename %}', 'Epoch {{ image.epoch }}')">
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                {% else %}
+                    <div class="text-center text-muted py-4">
+                        <i class="fas fa-image fa-2x mb-2"></i>
+                        <p>No training preview images available yet.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">Training Logs</h5>
+                <div class="btn-group btn-group-sm" role="group" aria-label="Log view options">
+                    <input type="radio" class="btn-check" name="logView" id="logViewAll" autocomplete="off" checked>
+                    <label class="btn btn-outline-primary" for="logViewAll">All</label>
+                    
+                    <input type="radio" class="btn-check" name="logView" id="logViewEpoch" autocomplete="off">
+                    <label class="btn btn-outline-primary" for="logViewEpoch">Epochs</label>
+                    
+                    <input type="radio" class="btn-check" name="logView" id="logViewBatch" autocomplete="off">
+                    <label class="btn btn-outline-primary" for="logViewBatch">Batches</label>
+                    
+                    <input type="radio" class="btn-check" name="logView" id="logViewMetrics" autocomplete="off">
+                    <label class="btn btn-outline-primary" for="logViewMetrics">Metrics</label>
+                    
+                    {% if model.status == 'training' %}
+                    <input type="radio" class="btn-check" name="logView" id="logViewLive" autocomplete="off">
+                    <label class="btn btn-outline-success" for="logViewLive">Live</label>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="card-body">
+                <!-- Log Statistics -->
+                <div id="log-stats" class="mb-3">
+                    {% if log_stats %}
+                    <div class="row text-center">
+                        <div class="col">
+                            <small class="text-muted">Epochs: <span id="epoch-count">{{ log_stats.epoch_count }}</span></small>
+                        </div>
+                        <div class="col">
+                            <small class="text-muted">Batches: <span id="batch-count">{{ log_stats.batch_count }}</span></small>
+                        </div>
+                        <div class="col">
+                            <small class="text-muted">Last Update: <span id="last-update">{{ log_stats.last_update }}</span></small>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <!-- Model Configuration Section -->
+                <div id="model-config-section" class="mb-3" style="display: none;">
+                    <h6 class="text-primary"><i class="fas fa-cog"></i> Model Configuration</h6>
+                    <div id="model-config-logs" class="log-section">
+                        {% if parsed_logs.config_logs %}
+                            {% for log in parsed_logs.config_logs %}
+                                <div class="log-entry config-log">{{ log }}</div>
+                            {% endfor %}
+                        {% endif %}
+                        {% if parsed_logs.model_logs %}
+                            {% for log in parsed_logs.model_logs %}
+                                <div class="log-entry model-log">{{ log }}</div>
+                            {% endfor %}
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <!-- Training Progress Logs -->
+                <div id="training-logs-container" style="max-height: 500px; overflow-y: auto;">
+                    <!-- All Logs View -->
+                    <div id="all-logs" class="log-view active">
+                        <pre id="training-logs" class="log-display">{% for line in training_logs %}{{ line }}
+{% endfor %}</pre>
+                    </div>
+                    
+                    <!-- Epoch Logs View -->
+                    <div id="epoch-logs" class="log-view" style="display: none;">
+                        <div class="log-section">
+                            {% if parsed_logs.epoch_logs %}
+                                {% for log in parsed_logs.epoch_logs %}
+                                    <div class="log-entry epoch-log">{{ log }}</div>
+                                {% endfor %}
+                            {% endif %}
+                            {% if parsed_logs.metrics_logs %}
+                                {% for log in parsed_logs.metrics_logs %}
+                                    <div class="log-entry metrics-log">{{ log }}</div>
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    <!-- Batch Logs View -->
+                    <div id="batch-logs" class="log-view" style="display: none;">
+                        <div class="log-section">
+                            {% if parsed_logs.batch_logs %}
+                                {% for log in parsed_logs.batch_logs %}
+                                    <div class="log-entry batch-log">{{ log }}</div>
+                                {% endfor %}
+                            {% endif %}
+                            {% if parsed_logs.validation_logs %}
+                                {% for log in parsed_logs.validation_logs %}
+                                    <div class="log-entry validation-log">{{ log }}</div>
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    <!-- Metrics Logs View -->
+                    <div id="metrics-logs" class="log-view" style="display: none;">
+                        <div class="log-section">
+                            {% if parsed_logs.metrics_logs %}
+                                {% for log in parsed_logs.metrics_logs %}
+                                    <div class="log-entry metrics-log">{{ log }}</div>
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    <!-- Live Logs View (for training models) -->
+                    {% if model.status == 'training' %}
+                    <div id="live-logs" class="log-view" style="display: none;">
+                        <div id="training-log" class="log-section log-display" style="min-height: 180px; max-height: 400px; overflow-y: auto;">
+                            <span class="text-muted">Loading live log...</span>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if model.status == 'training' %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const stopBtn = document.getElementById('stopTrainingBtn');
+    const modelId = {{ model.id|unlocalize }};
+    let currentLogView = 'all';
+
+    // Log view switching functionality
+    const logViewButtons = document.querySelectorAll('input[name="logView"]');
+    const logViews = document.querySelectorAll('.log-view');
+    
+    logViewButtons.forEach(button => {
+        button.addEventListener('change', function() {
+            if (this.checked) {
+                // Hide all log views
+                logViews.forEach(view => {
+                    view.style.display = 'none';
+                    view.classList.remove('active');
+                });
+                
+                // Show selected view
+                let viewId = this.id.replace('logView', '').toLowerCase() + '-logs';
+                
+                // Special handling for live logs
+                if (this.id === 'logViewLive') {
+                    viewId = 'live-logs';
+                }
+                
+                const targetView = document.getElementById(viewId);
+                if (targetView) {
+                    targetView.style.display = 'block';
+                    targetView.classList.add('active');
+                }
+                
+                currentLogView = this.id.replace('logView', '').toLowerCase();
+                
+                // Show/hide model config section for 'all' view
+                const configSection = document.getElementById('model-config-section');
+                if (currentLogView === 'all' && configSection) {
+                    configSection.style.display = 'block';
+                } else if (configSection) {
+                    configSection.style.display = 'none';
+                }
+                
+                // Start/stop live log fetching based on view
+                if (currentLogView === 'live') {
+                    startLiveLogFetching();
+                } else {
+                    stopLiveLogFetching();
+                }
+            }
+        });
+    });
+
+    function updateProgress(data) {
+        const progress = data.progress;
+        
+        // Update progress bar
+        const progressBar = document.querySelector('.progress-bar');
+        if (progressBar) {
+            progressBar.style.width = progress.progress_percentage + '%';
+            progressBar.textContent = progress.progress_percentage + '%';
+        }
+        
+        // Update metrics
+        const updateElement = (id, value, decimals = 4) => {
+            const elem = document.getElementById(id);
+            if (elem && value !== undefined && value !== null) {
+                elem.textContent = typeof value === 'number' ? value.toFixed(decimals) : value;
+            }
+        };
+        
+        updateElement('current-epoch', progress.current_epoch, 0);
+        updateElement('total-epochs', progress.total_epochs, 0);
+        updateElement('train-loss', progress.train_loss);
+        updateElement('train-dice', progress.train_dice);
+        updateElement('val-loss', progress.val_loss);
+        updateElement('val-dice', progress.val_dice);
+        updateElement('best-val-dice', progress.best_val_dice);
+        
+        // Update log statistics
+        if (data.log_stats) {
+            updateElement('epoch-count', data.log_stats.epoch_count, 0);
+            updateElement('batch-count', data.log_stats.batch_count, 0);
+            updateElement('last-update', data.log_stats.last_update, 0);
+        }
+        
+        // Update logs based on current view
+        updateLogs(data);
+        
+        // Check if training is still running
+        if (data.status !== 'training') {
+            location.reload();  // Refresh page when training completes
+        }
+    }
+    
+    function updateLogs(data) {
+        // Update all logs view
+        const allLogsElem = document.getElementById('training-logs');
+        if (allLogsElem && data.logs) {
+            allLogsElem.textContent = data.logs.join('\n');
+            allLogsElem.scrollTop = allLogsElem.scrollHeight;
+        }
+        
+        // Update categorized logs if available
+        if (data.parsed_logs) {
+            updateLogSection('epoch-logs', data.parsed_logs.epoch_logs, data.parsed_logs.metrics_logs);
+            updateLogSection('batch-logs', data.parsed_logs.batch_logs, data.parsed_logs.validation_logs);
+            updateLogSection('metrics-logs', data.parsed_logs.metrics_logs);
+            updateConfigSection(data.parsed_logs.config_logs, data.parsed_logs.model_logs);
+        }
+    }
+    
+    function updateLogSection(containerId, ...logArrays) {
+        const container = document.querySelector(`#${containerId} .log-section`);
+        if (!container) return;
+        
+        container.innerHTML = '';
+        logArrays.forEach(logs => {
+            if (logs && Array.isArray(logs)) {
+                logs.forEach(log => {
+                    const logEntry = document.createElement('div');
+                    logEntry.className = `log-entry ${getLogClass(log)}`;
+                    logEntry.textContent = log;
+                    container.appendChild(logEntry);
+                });
+            }
+        });
+        
+        // Auto-scroll to bottom
+        container.scrollTop = container.scrollHeight;
+    }
+    
+    function updateConfigSection(configLogs, modelLogs) {
+        const container = document.querySelector('#model-config-logs');
+        if (!container) return;
+        
+        container.innerHTML = '';
+        [configLogs, modelLogs].forEach(logs => {
+            if (logs && Array.isArray(logs)) {
+                logs.forEach(log => {
+                    const logEntry = document.createElement('div');
+                    logEntry.className = `log-entry ${getLogClass(log)}`;
+                    logEntry.textContent = log;
+                    container.appendChild(logEntry);
+                });
+            }
+        });
+    }
+    
+    function getLogClass(log) {
+        if (log.includes('[EPOCH]')) return 'epoch-log';
+        if (log.includes('[TRAIN]')) return 'batch-log';
+        if (log.includes('[METRICS]') || log.includes('[STATS]')) return 'metrics-log';
+        if (log.includes('[VAL]')) return 'validation-log';
+        if (log.includes('[CONFIG]')) return 'config-log';
+        if (log.includes('[MODEL]')) return 'model-log';
+        return '';
+    }
+
+    function refreshProgress() {
+        fetch(`/ml/model/${modelId}/`, {
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(response => response.json())
+        .then(data => updateProgress(data))
+        .catch(error => console.error('Error fetching progress:', error));
+    }
+
+    if (stopBtn) {
+        stopBtn.addEventListener('click', function() {
+            if (confirm('Are you sure you want to stop the training?')) {
+                fetch(`/ml/model/${modelId}/stop/`, {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                    },
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        stopBtn.disabled = true;
+                        stopBtn.textContent = 'Stop Requested';
+                    }
+                })
+                .catch(error => console.error('Error stopping training:', error));
+            }
+        });
+    }
+
+    // Initial load - show model config for all view
+    const configSection = document.getElementById('model-config-section');
+    if (configSection && currentLogView === 'all') {
+        configSection.style.display = 'block';
+    }
+
+    // Refresh progress every 2 seconds
+    setInterval(refreshProgress, 2000);
+});
+
+// MLflow Registry Management Functions
+function registerModel(modelId) {
+    if (!confirm('Register this model in MLflow Model Registry?')) {
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
+    
+    fetch(`/ml_manager/model/${modelId}/registry/register/`, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            showAlert('success', data.message);
+            location.reload(); // Refresh to show registry info
+        } else {
+            showAlert('danger', data.message);
+        }
+    })
+    .catch(error => {
+        console.error('Registry error:', error);
+        showAlert('danger', 'Failed to register model');
+    });
+}
+
+function transitionStage(modelId, stage) {
+    if (!confirm(`Transition this model to ${stage} stage?`)) {
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
+    formData.append('stage', stage);
+    
+    fetch(`/ml_manager/model/${modelId}/registry/transition/`, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            showAlert('success', data.message);
+            // Update stage badge
+            const stageBadge = document.getElementById('registry-stage');
+            if (stageBadge) {
+                stageBadge.textContent = stage;
+                stageBadge.className = `badge ${getStageClass(stage)}`;
+            }
+        } else {
+            showAlert('danger', data.message);
+        }
+    })
+    .catch(error => {
+        console.error('Stage transition error:', error);
+        showAlert('danger', 'Failed to transition model stage');
+    });
+}
+
+function syncRegistryInfo(modelId) {
+    fetch(`/ml_manager/model/${modelId}/registry/sync/`, {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            showAlert('success', data.message);
+            if (data.changes && data.changes.stage_changed) {
+                // Update stage badge
+                const stageBadge = document.getElementById('registry-stage');
+                if (stageBadge) {
+                    stageBadge.textContent = data.changes.new_stage || 'None';
+                    stageBadge.className = `badge ${getStageClass(data.changes.new_stage)}`;
+                }
+            }
+        } else {
+            showAlert('warning', data.message);
+        }
+    })
+    .catch(error => {
+        console.error('Sync error:', error);
+        showAlert('danger', 'Failed to sync registry information');
+    });
+}
+
+function getStageClass(stage) {
+    switch(stage) {
+        case 'Production': return 'bg-success';
+        case 'Staging': return 'bg-warning';
+        case 'Archived': return 'bg-secondary';
+        default: return 'bg-light text-dark';
+    }
+}
+
+function showAlert(type, message) {
+    // Create alert element
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert alert-${type} alert-dismissible fade show mt-3`;
+    alertDiv.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    // Insert after the header
+    const header = document.querySelector('h1').parentElement;
+    header.insertAdjacentElement('afterend', alertDiv);
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        if (alertDiv.parentElement) {
+            alertDiv.remove();
+        }
+    }, 5000);
+}
+
+// Live Training Log Fetching
+let liveLogInterval = null;
+
+function fetchTrainingLog() {
+    const logDiv = document.getElementById('training-log');
+    if (!logDiv) return;
+    
+    fetch(`/ml/model/{{ model.id }}/logs/?lines=50`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.lines && data.lines.length > 0) {
+                // Filter out empty lines and format properly
+                const validLines = data.lines.filter(line => line.trim() !== '');
+                logDiv.innerHTML = validLines.map(line => {
+                    // Escape HTML and preserve line breaks
+                    const escapedLine = line.replace(/&/g, '&amp;')
+                                           .replace(/</g, '&lt;')
+                                           .replace(/>/g, '&gt;');
+                    
+                    // Add color coding based on log content
+                    let className = '';
+                    if (line.includes('[EPOCH]')) className = 'epoch-log';
+                    else if (line.includes('[TRAIN]')) className = 'batch-log';
+                    else if (line.includes('[VAL]')) className = 'validation-log';
+                    else if (line.includes('[METRICS]')) className = 'metrics-log';
+                    else if (line.includes('ERROR') || line.includes('Error')) className = 'error-log';
+                    else if (line.includes('WARNING') || line.includes('Warning')) className = 'warning-log';
+                    
+                    return `<div class="log-entry ${className}">${escapedLine}</div>`;
+                }).join('');
+                
+                // Auto-scroll to bottom
+                logDiv.scrollTop = logDiv.scrollHeight;
+            } else if (data.error) {
+                logDiv.innerHTML = `<div class="log-entry error-log">Error: ${data.error}</div>`;
+            } else {
+                logDiv.innerHTML = '<div class="log-entry">No new log data available.</div>';
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching logs:', error);
+            logDiv.innerHTML = '<div class="log-entry error-log">Error loading log data.</div>';
+        });
+}
+
+function startLiveLogFetching() {
+    if (liveLogInterval) {
+        clearInterval(liveLogInterval);
+    }
+    
+    fetchTrainingLog(); // Initial fetch
+    liveLogInterval = setInterval(fetchTrainingLog, 3000); // Fetch every 3 seconds
+    
+    // Add visual indicator
+    const logDiv = document.getElementById('training-log');
+    if (logDiv) {
+        logDiv.style.border = '2px solid #28a745';
+        logDiv.style.boxShadow = '0 0 10px rgba(40, 167, 69, 0.3)';
+    }
+}
+
+function stopLiveLogFetching() {
+    if (liveLogInterval) {
+        clearInterval(liveLogInterval);
+        liveLogInterval = null;
+    }
+    
+    // Remove visual indicator
+    const logDiv = document.getElementById('training-log');
+    if (logDiv) {
+        logDiv.style.border = '';
+        logDiv.style.boxShadow = '';
+    }
+}
+</script>
+{% endif %}
+
+<!-- Image Modal -->
+<div class="modal fade" id="imageModal" tabindex="-1" aria-labelledby="imageModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="imageModalLabel">Training Preview</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body text-center">
+        <img id="modalImage" src="" alt="" class="img-fluid" style="max-height: 70vh;">
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Training preview functions
+function openImageModal(imageUrl, title) {
+    const modal = document.getElementById('imageModal');
+    const modalImage = document.getElementById('modalImage');
+    const modalTitle = document.getElementById('imageModalLabel');
+    
+    modalImage.src = imageUrl;
+    modalImage.alt = title;
+    modalTitle.textContent = title;
+    
+    const modalInstance = new bootstrap.Modal(modal);
+    modalInstance.show();
+}
+
+function toggleMoreImages() {
+    const moreImages = document.getElementById('more-images');
+    const toggleText = document.getElementById('toggle-text');
+    
+    if (moreImages.style.display === 'none') {
+        moreImages.style.display = 'block';
+        toggleText.textContent = 'Show Less';
+    } else {
+        moreImages.style.display = 'none';
+        toggleText.textContent = 'Show All {{ training_preview.images|length }} Images';
+    }
+}
+</script>
+
+</div>
+{% endblock %}

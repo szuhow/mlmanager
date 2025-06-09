@@ -1,0 +1,247 @@
+{% extends "ml_manager/base.html" %}
+
+{% block title %}{{ model.name }} - Inference{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>Run Inference - {{ model.name }}</h1>
+    <div>
+        <a href="{% url 'ml_manager:model-detail' model.pk %}" class="btn btn-info">Model Details</a>
+        <a href="{% url 'ml_manager:model-list' %}" class="btn btn-secondary">Back to List</a>
+    </div>
+</div>
+
+<!-- Messages -->
+{% if messages %}
+<div class="row mb-3">
+    <div class="col-12">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Upload Image</h5>
+            </div>
+            <div class="card-body">
+                <form method="post" enctype="multipart/form-data">
+                    {% csrf_token %}
+                    
+                    <div class="mb-3">
+                        <label for="model_id" class="form-label">Select Trained Model</label>
+                        <select class="form-select" id="model_id" name="model_id" required style="height: 150px;" size="8">
+                            <option value="">-- Select a trained model --</option>
+                            {% for m in registered_models %}
+                            <option value="{{ m.id }}" 
+                                    data-crop-size="{{ m.training_data_info.training_parameters.crop_size|default:'128' }}"
+                                    data-epochs="{{ m.total_epochs|default:'Unknown' }}"
+                                    data-dice-score="{{ m.best_val_dice|floatformat:4|default:'N/A' }}"
+                                    {% if m.id == model.id %}selected{% endif %}>
+                                {{ m.name }} | Dice: {{ m.best_val_dice|floatformat:4|default:'N/A' }} | Size: {{ m.training_data_info.training_parameters.crop_size|default:'128' }}px | {{ m.created_at|date:"m/d H:i" }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <small class="form-text text-muted">Shows: Model Name | Best Dice Score | Training Image Size | Created Date</small>
+                    </div>
+                    
+                    <div id="model-info" class="alert alert-info" style="display: none;">
+                        <small>
+                            <strong>Selected Model Info:</strong><br>
+                            <span id="model-details"></span>
+                        </small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="image" class="form-label">Upload Image for Segmentation</label>
+                        <input type="file" name="image" class="form-control" id="image" accept="image/*" required
+                            onchange="previewInputImage(event)">
+                        <small class="text-muted">Upload an image for segmentation</small>
+                        <div id="input-image-preview-container" style="margin-top:10px; display:none;">
+                            <label class="form-label">Preview:</label>
+                            <img id="input-image-preview" src="#" alt="Input Preview"
+                                style="max-width: 100%; max-height: 300px; border:1px solid #ccc; border-radius:4px;" />
+                        </div>
+                    </div>
+                    <script>
+                    function previewInputImage(event) {
+                      const input = event.target;
+                      const previewContainer = document.getElementById('input-image-preview-container');
+                      const preview = document.getElementById('input-image-preview');
+                      if (input.files && input.files[0]) {
+                        const reader = new FileReader();
+                        reader.onload = function(e) {
+                          preview.src = e.target.result;
+                          previewContainer.style.display = 'block';
+                        };
+                        reader.readAsDataURL(input.files[0]);
+                      } else {
+                        preview.src = '#';
+                        previewContainer.style.display = 'none';
+                      }
+                    }
+                    </script>
+
+                    <button type="submit" class="btn btn-primary">Run Inference</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Latest Prediction</h5>
+            </div>
+            <div class="card-body">
+                {% if latest_prediction %}
+                <div class="row">
+                    {% if latest_prediction.input_image %}
+                    <div class="col-md-6">
+                        <h6 class="text-center">Input Image</h6>
+                        <img src="{{ latest_prediction.input_image.url }}" class="img-fluid mb-3" alt="Input Image"
+                            style="max-height: 300px; width: 100%; object-fit: contain;">
+                    </div>
+                    {% endif %}
+                    {% if latest_prediction.output_image %}
+                    <div class="col-md-6">
+                        <h6 class="text-center">Prediction Result</h6>
+                        <img src="{{ latest_prediction.output_image.url }}" class="img-fluid mb-3" alt="Prediction Result"
+                            style="max-height: 300px; width: 100%; object-fit: contain;">
+                    </div>
+                    {% endif %}`
+                </div>
+                <div class="text-center mt-3">
+                    <p><strong>Processing Time:</strong> {{ latest_prediction.processing_time|floatformat:3 }}s</p>
+                    <p><strong>Created:</strong> {{ latest_prediction.created_at|date:"Y-m-d H:i:s" }}</p>
+                </div>
+                {% else %}
+                <p class="text-center text-muted">No predictions yet</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const modelSelect = document.getElementById('model_id');
+    const modelInfo = document.getElementById('model-info');
+    const modelDetails = document.getElementById('model-details');
+    const imageInput = document.getElementById('id_image');
+    const form = document.querySelector('form');
+    
+    // Show model info when selection changes
+    modelSelect.addEventListener('change', function() {
+        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
+        
+        if (selectedOption.value) {
+            const cropSize = selectedOption.dataset.cropSize || '128';
+            const epochs = selectedOption.dataset.epochs || 'Unknown';
+            const diceScore = selectedOption.dataset.diceScore || 'N/A';
+            
+            modelDetails.innerHTML = `
+                <strong>Training Image Size:</strong> ${cropSize}x${cropSize} pixels<br>
+                <strong>Total Epochs:</strong> ${epochs}<br>
+                <strong>Best Dice Score:</strong> ${diceScore}
+            `;
+            modelInfo.style.display = 'block';
+        } else {
+            modelInfo.style.display = 'none';
+        }
+    });
+    
+    // Trigger change event if a model is already selected
+    if (modelSelect.value) {
+        modelSelect.dispatchEvent(new Event('change'));
+    }
+    
+    // Image size validation
+    if (imageInput) {
+        imageInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            const selectedOption = modelSelect.options[modelSelect.selectedIndex];
+            
+            if (file && selectedOption.value) {
+                const expectedSize = parseInt(selectedOption.dataset.cropSize || '128');
+                
+                const img = new Image();
+                img.onload = function() {
+                    const width = img.width;
+                    const height = img.height;
+                    
+                    // Remove any previous warnings
+                    const existingWarning = document.getElementById('image-size-warning');
+                    if (existingWarning) {
+                        existingWarning.remove();
+                    }
+                    
+                    // Check if image dimensions match training size
+                    if (width !== expectedSize || height !== expectedSize) {
+                        const warning = document.createElement('div');
+                        warning.id = 'image-size-warning';
+                        warning.className = 'alert alert-warning mt-2';
+                        warning.innerHTML = `
+                            <i class="fas fa-exclamation-triangle"></i>
+                            <strong>Image Size Warning:</strong> Your image is ${width}x${height}px, but this model was trained on ${expectedSize}x${expectedSize}px images. 
+                            The image will be automatically resized, but results may be suboptimal.
+                            <small class="d-block mt-1">For best results, resize your image to ${expectedSize}x${expectedSize}px before uploading.</small>
+                        `;
+                        imageInput.parentNode.appendChild(warning);
+                    }
+                };
+                
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+    }
+    
+    // Form validation before submission
+    form.addEventListener('submit', function(e) {
+        const selectedModel = modelSelect.value;
+        const selectedFile = imageInput ? imageInput.files[0] : null;
+        
+        if (!selectedModel) {
+            e.preventDefault();
+            alert('Please select a trained model before submitting.');
+            return false;
+        }
+        
+        if (!selectedFile) {
+            e.preventDefault();
+            alert('Please select an image file before submitting.');
+            return false;
+        }
+        
+        // Check if image is from the same dataset (basic validation)
+        const fileName = selectedFile.name.toLowerCase();
+        const validExtensions = ['.png', '.jpg', '.jpeg', '.tiff', '.bmp'];
+        const hasValidExtension = validExtensions.some(ext => fileName.endsWith(ext));
+        
+        if (!hasValidExtension) {
+            e.preventDefault();
+            alert('Please upload a valid image file (PNG, JPG, JPEG, TIFF, or BMP).');
+            return false;
+        }
+        
+        // Show loading state
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+        }
+    });
+});
+</script>
+{% endblock %}

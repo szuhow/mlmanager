@@ -1,0 +1,238 @@
+{% extends "ml_manager/base.html" %}
+
+{% block title %}{{ title }} - ML Manager{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h4 class="card-title mb-0">{{ title }}</h4>
+                </div>
+                <div class="card-body">
+                    {% if messages %}
+                        {% for message in messages %}
+                            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                                {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+
+                    <form method="post">
+                        {% csrf_token %}
+                        
+                        <!-- Basic Information -->
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h5 class="text-primary">Basic Information</h5>
+                                <hr>
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label for="{{ form.name.id_for_label }}" class="form-label">
+                                    {{ form.name.label }}
+                                    {% if form.name.help_text %}
+                                        <small class="text-muted">{{ form.name.help_text }}</small>
+                                    {% endif %}
+                                </label>
+                                {{ form.name.errors }}
+                                {{ form.name }}
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-check mt-4">
+                                    {{ form.is_default }}
+                                    <label class="form-check-label" for="{{ form.is_default.id_for_label }}">
+                                        {{ form.is_default.label }}
+                                        {% if form.is_default.help_text %}
+                                            <small class="text-muted d-block">{{ form.is_default.help_text }}</small>
+                                        {% endif %}
+                                    </label>
+                                    {{ form.is_default.errors }}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="{{ form.description.id_for_label }}" class="form-label">
+                                {{ form.description.label }}
+                                {% if form.description.help_text %}
+                                    <small class="text-muted">{{ form.description.help_text }}</small>
+                                {% endif %}
+                            </label>
+                            {{ form.description.errors }}
+                            {{ form.description }}
+                        </div>
+
+                        <!-- Model Configuration -->
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h5 class="text-primary">Model Configuration</h5>
+                                <hr>
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label for="{{ form.model_type.id_for_label }}" class="form-label">
+                                    {{ form.model_type.label }}
+                                    {% if form.model_type.help_text %}
+                                        <small class="text-muted">{{ form.model_type.help_text }}</small>
+                                    {% endif %}
+                                </label>
+                                {{ form.model_type.errors }}
+                                {{ form.model_type }}
+                            </div>
+                            <div class="col-md-6">
+                                <label for="{{ form.batch_size.id_for_label }}" class="form-label">
+                                    {{ form.batch_size.label }}
+                                    {% if form.batch_size.help_text %}
+                                        <small class="text-muted">{{ form.batch_size.help_text }}</small>
+                                    {% endif %}
+                                </label>
+                                {{ form.batch_size.errors }}
+                                {{ form.batch_size }}
+                            </div>
+                        </div>
+
+                        <!-- Training Parameters -->
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h5 class="text-primary">Training Parameters</h5>
+                                <hr>
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <label for="{{ form.epochs.id_for_label }}" class="form-label">
+                                    {{ form.epochs.label }}
+                                    {% if form.epochs.help_text %}
+                                        <small class="text-muted">{{ form.epochs.help_text }}</small>
+                                    {% endif %}
+                                </label>
+                                {{ form.epochs.errors }}
+                                {{ form.epochs }}
+                            </div>
+                            <div class="col-md-4">
+                                <label for="{{ form.learning_rate.id_for_label }}" class="form-label">
+                                    {{ form.learning_rate.label }}
+                                    {% if form.learning_rate.help_text %}
+                                        <small class="text-muted">{{ form.learning_rate.help_text }}</small>
+                                    {% endif %}
+                                </label>
+                                {{ form.learning_rate.errors }}
+                                {{ form.learning_rate }}
+                            </div>
+                            <div class="col-md-4">
+                                <label for="{{ form.validation_split.id_for_label }}" class="form-label">
+                                    {{ form.validation_split.label }}
+                                    {% if form.validation_split.help_text %}
+                                        <small class="text-muted">{{ form.validation_split.help_text }}</small>
+                                    {% endif %}
+                                </label>
+                                {{ form.validation_split.errors }}
+                                {{ form.validation_split }}
+                            </div>
+                        </div>
+
+                        <!-- Data Augmentation -->
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h5 class="text-primary">Data Augmentation</h5>
+                                <hr>
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <div class="form-check">
+                                    {{ form.use_random_flip }}
+                                    <label class="form-check-label" for="{{ form.use_random_flip.id_for_label }}">
+                                        {{ form.use_random_flip.label }}
+                                        {% if form.use_random_flip.help_text %}
+                                            <small class="text-muted d-block">{{ form.use_random_flip.help_text }}</small>
+                                        {% endif %}
+                                    </label>
+                                    {{ form.use_random_flip.errors }}
+                                </div>
+                                <div class="form-check mt-2">
+                                    {{ form.use_random_rotate }}
+                                    <label class="form-check-label" for="{{ form.use_random_rotate.id_for_label }}">
+                                        {{ form.use_random_rotate.label }}
+                                        {% if form.use_random_rotate.help_text %}
+                                            <small class="text-muted d-block">{{ form.use_random_rotate.help_text }}</small>
+                                        {% endif %}
+                                    </label>
+                                    {{ form.use_random_rotate.errors }}
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-check">
+                                    {{ form.use_random_scale }}
+                                    <label class="form-check-label" for="{{ form.use_random_scale.id_for_label }}">
+                                        {{ form.use_random_scale.label }}
+                                        {% if form.use_random_scale.help_text %}
+                                            <small class="text-muted d-block">{{ form.use_random_scale.help_text }}</small>
+                                        {% endif %}
+                                    </label>
+                                    {{ form.use_random_scale.errors }}
+                                </div>
+                                <div class="form-check mt-2">
+                                    {{ form.use_random_intensity }}
+                                    <label class="form-check-label" for="{{ form.use_random_intensity.id_for_label }}">
+                                        {{ form.use_random_intensity.label }}
+                                        {% if form.use_random_intensity.help_text %}
+                                            <small class="text-muted d-block">{{ form.use_random_intensity.help_text }}</small>
+                                        {% endif %}
+                                    </label>
+                                    {{ form.use_random_intensity.errors }}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Advanced Settings -->
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h5 class="text-primary">Advanced Settings</h5>
+                                <hr>
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label for="{{ form.crop_size.id_for_label }}" class="form-label">
+                                    {{ form.crop_size.label }}
+                                    {% if form.crop_size.help_text %}
+                                        <small class="text-muted">{{ form.crop_size.help_text }}</small>
+                                    {% endif %}
+                                </label>
+                                {{ form.crop_size.errors }}
+                                {{ form.crop_size }}
+                            </div>
+                            <div class="col-md-6">
+                                <label for="{{ form.num_workers.id_for_label }}" class="form-label">
+                                    {{ form.num_workers.label }}
+                                    {% if form.num_workers.help_text %}
+                                        <small class="text-muted">{{ form.num_workers.help_text }}</small>
+                                    {% endif %}
+                                </label>
+                                {{ form.num_workers.errors }}
+                                {{ form.num_workers }}
+                            </div>
+                        </div>
+
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                            <a href="{% url 'ml_manager:template-list' %}" class="btn btn-secondary me-md-2">Cancel</a>
+                            <button type="submit" class="btn btn-primary">{{ submit_text }}</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

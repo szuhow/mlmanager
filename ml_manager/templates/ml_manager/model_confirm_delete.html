@@ -1,0 +1,20 @@
+{% extends "ml_manager/base.html" %}
+
+{% block title %}Delete Model{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="card">
+        <div class="card-header bg-danger text-white">
+            <h4>Delete Training Job</h4>
+        </div>
+        <div class="card-body">
+            <p>Are you sure you want to delete the training job/model <strong>{{ object.name }}</strong>?</p>
+            <form method="post">{% csrf_token %}
+                <a href="{% url 'ml_manager:model-list' %}" class="btn btn-secondary">Cancel</a>
+                <button type="submit" class="btn btn-danger">Delete</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

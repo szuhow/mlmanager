@@ -1,0 +1,109 @@
+{% extends "ml_manager/base.html" %}
+{% load static %}
+
+{% block title %}MLflow Model Registry{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="fas fa-archive me-2"></i>MLflow Model Registry</h1>
+    <div>
+        <a href="{% url 'ml_manager:model-list' %}" class="btn btn-secondary">Back to Models</a>
+    </div>
+</div>
+
+{% if not registry_models %}
+<div class="alert alert-info">
+    <i class="fas fa-info-circle me-2"></i>
+    <strong>No Registered Models</strong><br>
+    No models have been registered in MLflow Model Registry yet. Train and register models to see them here.
+</div>
+{% else %}
+<div class="row">
+    {% for reg_model in registry_models %}
+    <div class="col-lg-6 mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">{{ reg_model.name }}</h5>
+                <span class="badge bg-primary">{{ reg_model.latest_versions|length }} version{{ reg_model.latest_versions|length|pluralize }}</span>
+            </div>
+            <div class="card-body">
+                {% if reg_model.description %}
+                <p class="card-text text-muted">{{ reg_model.description }}</p>
+                {% endif %}
+                
+                <h6>Model Versions:</h6>
+                {% for version in reg_model.latest_versions %}
+                <div class="d-flex justify-content-between align-items-center mb-2 p-2 border rounded">
+                    <div>
+                        <strong>v{{ version.version }}</strong>
+                        {% if version.current_stage %}
+                        <span class="badge ms-2 
+                            {% if version.current_stage == 'Production' %}bg-success
+                            {% elif version.current_stage == 'Staging' %}bg-warning
+                            {% elif version.current_stage == 'Archived' %}bg-secondary
+                            {% else %}bg-light text-dark{% endif %}">
+                            {{ version.current_stage }}
+                        </span>
+                        {% endif %}
+                    </div>
+                    <div>
+                        {% if version.run_id %}
+                        <small class="text-muted">Run: {{ version.run_id|slice:":8" }}...</small>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+                
+                {% if reg_model.django_models %}
+                <hr>
+                <h6>Associated Django Models:</h6>
+                {% for django_model in reg_model.django_models %}
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <a href="{% url 'ml_manager:model-detail' django_model.id %}" class="text-decoration-none">
+                        {{ django_model.name }}
+                    </a>
+                    <span class="badge 
+                        {% if django_model.status == 'completed' %}bg-success
+                        {% elif django_model.status == 'training' %}bg-warning
+                        {% else %}bg-danger{% endif %}">
+                        {{ django_model.status }}
+                    </span>
+                </div>
+                {% endfor %}
+                {% endif %}
+            </div>
+            <div class="card-footer text-muted">
+                <small>
+                    Created: {{ reg_model.creation_timestamp|date:"M j, Y H:i" }}
+                    {% if reg_model.last_updated_timestamp %}
+                    | Updated: {{ reg_model.last_updated_timestamp|date:"M j, Y H:i" }}
+                    {% endif %}
+                </small>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-info-circle me-2"></i>About MLflow Model Registry
+                </h5>
+            </div>
+            <div class="card-body">
+                <p>The MLflow Model Registry provides centralized model management with:</p>
+                <ul class="mb-0">
+                    <li><strong>Versioning:</strong> Track different versions of your models</li>
+                    <li><strong>Stage Management:</strong> Move models through Staging → Production → Archived</li>
+                    <li><strong>Model Lineage:</strong> Connect models to their training runs and data</li>
+                    <li><strong>Deployment Tracking:</strong> Monitor which models are deployed where</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,179 @@
+{% extends "ml_manager/base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-8 mx-auto">
+            <div class="card">
+                <div class="card-header">
+                    <h4 class="card-title mb-0">{{ title }}</h4>
+                    <small class="text-muted">Create a reusable template from this model's configuration</small>
+                </div>
+                <div class="card-body">
+                    <!-- Model Info -->
+                    <div class="alert alert-info">
+                        <h6><i class="fas fa-info-circle"></i> Source Model Information</h6>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <strong>Name:</strong> {{ model.name }}<br>
+                                <strong>Status:</strong> 
+                                <span class="badge {% if model.status == 'completed' %}bg-success{% elif model.status == 'training' %}bg-warning{% else %}bg-danger{% endif %}">
+                                    {{ model.status|title }}
+                                </span>
+                            </div>
+                            <div class="col-md-6">
+                                <strong>Performance:</strong> 
+                                {% if model.best_val_dice > 0 %}
+                                    <span class="badge bg-info">{{ model.best_val_dice|floatformat:3 }}</span>
+                                {% else %}
+                                    <span class="text-muted">-</span>
+                                {% endif %}<br>
+                                <strong>Created:</strong> {{ model.created_at|date:"M d, Y H:i" }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Template Form -->
+                    <form method="post">
+                        {% csrf_token %}
+                        
+                        <div class="row">
+                            <!-- Basic Information -->
+                            <div class="col-md-12 mb-4">
+                                <h6 class="text-primary border-bottom pb-2">Template Information</h6>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Template Name *</label>
+                                            {{ form.name }}
+                                            {% if form.name.errors %}
+                                                <div class="text-danger small">{{ form.name.errors }}</div>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Default Template</label>
+                                            <div class="form-check">
+                                                {{ form.is_default }}
+                                                <label class="form-check-label" for="{{ form.is_default.id_for_label }}">
+                                                    Set as default template for new trainings
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Description</label>
+                                    {{ form.description }}
+                                    {% if form.description.errors %}
+                                        <div class="text-danger small">{{ form.description.errors }}</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+
+                            <!-- Training Configuration -->
+                            <div class="col-md-6 mb-4">
+                                <h6 class="text-primary border-bottom pb-2">Training Configuration</h6>
+                                <div class="mb-3">
+                                    <label class="form-label">Model Type</label>
+                                    {{ form.model_type }}
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Batch Size</label>
+                                            {{ form.batch_size }}
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Epochs</label>
+                                            {{ form.epochs }}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Learning Rate</label>
+                                            {{ form.learning_rate }}
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Validation Split</label>
+                                            {{ form.validation_split }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Augmentation Settings -->
+                            <div class="col-md-6 mb-4">
+                                <h6 class="text-primary border-bottom pb-2">Data Augmentation</h6>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="form-check mb-2">
+                                            {{ form.use_random_flip }}
+                                            <label class="form-check-label" for="{{ form.use_random_flip.id_for_label }}">
+                                                Random Flip
+                                            </label>
+                                        </div>
+                                        <div class="form-check mb-2">
+                                            {{ form.use_random_rotate }}
+                                            <label class="form-check-label" for="{{ form.use_random_rotate.id_for_label }}">
+                                                Random Rotate
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="form-check mb-2">
+                                            {{ form.use_random_scale }}
+                                            <label class="form-check-label" for="{{ form.use_random_scale.id_for_label }}">
+                                                Random Scale
+                                            </label>
+                                        </div>
+                                        <div class="form-check mb-2">
+                                            {{ form.use_random_intensity }}
+                                            <label class="form-check-label" for="{{ form.use_random_intensity.id_for_label }}">
+                                                Random Intensity
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="row mt-3">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Crop Size</label>
+                                            {{ form.crop_size }}
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Num Workers</label>
+                                            {{ form.num_workers }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Form Actions -->
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                            <a href="{% url 'ml_manager:model-detail' model.pk %}" class="btn btn-outline-secondary me-md-2">
+                                <i class="fas fa-times"></i> Cancel
+                            </a>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-save"></i> {{ submit_text }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

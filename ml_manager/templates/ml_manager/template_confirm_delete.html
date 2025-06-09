@@ -1,0 +1,70 @@
+{% extends "ml_manager/base.html" %}
+
+{% block title %}Delete Template - ML Manager{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-danger text-white">
+                    <h4 class="card-title mb-0">
+                        <i class="fas fa-exclamation-triangle"></i> Confirm Deletion
+                    </h4>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-warning">
+                        <strong>Warning!</strong> This action cannot be undone.
+                    </div>
+                    
+                    <p>Are you sure you want to delete the training template <strong>"{{ object.name }}"</strong>?</p>
+                    
+                    {% if object.description %}
+                        <div class="mb-3">
+                            <strong>Description:</strong>
+                            <p class="text-muted">{{ object.description }}</p>
+                        </div>
+                    {% endif %}
+                    
+                    <div class="row">
+                        <div class="col-md-6">
+                            <strong>Configuration:</strong>
+                            <ul class="list-unstyled text-muted">
+                                <li>Model: {{ object.model_type }}</li>
+                                <li>Epochs: {{ object.epochs }}</li>
+                                <li>Batch Size: {{ object.batch_size }}</li>
+                                <li>Learning Rate: {{ object.learning_rate }}</li>
+                            </ul>
+                        </div>
+                        <div class="col-md-6">
+                            <strong>Created:</strong>
+                            <p class="text-muted">
+                                {{ object.created_at|date:"F d, Y" }}<br>
+                                {% if object.created_by %}by {{ object.created_by }}{% endif %}
+                            </p>
+                            
+                            {% if object.is_default %}
+                                <div class="alert alert-info">
+                                    <small><i class="fas fa-info-circle"></i> This is the default template.</small>
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <form method="post" class="mt-4">
+                        {% csrf_token %}
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                            <a href="{% url 'ml_manager:template-list' %}" class="btn btn-secondary me-md-2">
+                                <i class="fas fa-times"></i> Cancel
+                            </a>
+                            <button type="submit" class="btn btn-danger">
+                                <i class="fas fa-trash"></i> Delete Template
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,211 @@
+{% extends "ml_manager/base.html" %}
+
+{% block title %}{{ template.name }} - Training Template{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>{{ template.name }}
+            {% if template.is_default %}
+                <span class="badge bg-primary ms-2">Default</span>
+            {% endif %}
+        </h2>
+        <div>
+            <a href="{% url 'ml_manager:start-training' %}?template={{ template.pk }}" class="btn btn-success">
+                <i class="fas fa-play"></i> Use Template
+            </a>
+            <a href="{% url 'ml_manager:template-edit' template.pk %}" class="btn btn-primary">
+                <i class="fas fa-edit"></i> Edit
+            </a>
+            <a href="{% url 'ml_manager:template-list' %}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left"></i> Back to List
+            </a>
+        </div>
+    </div>
+
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    <div class="row">
+        <div class="col-md-8">
+            <!-- Template Information -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Template Information</h5>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-3">Name:</dt>
+                        <dd class="col-sm-9">{{ template.name }}</dd>
+                        
+                        <dt class="col-sm-3">Description:</dt>
+                        <dd class="col-sm-9">{{ template.description|default:"No description provided" }}</dd>
+                        
+                        <dt class="col-sm-3">Created:</dt>
+                        <dd class="col-sm-9">{{ template.created_at|date:"F d, Y \a\t H:i" }}</dd>
+                        
+                        <dt class="col-sm-3">Last Updated:</dt>
+                        <dd class="col-sm-9">{{ template.updated_at|date:"F d, Y \a\t H:i" }}</dd>
+                        
+                        {% if template.created_by %}
+                        <dt class="col-sm-3">Created By:</dt>
+                        <dd class="col-sm-9">{{ template.created_by }}</dd>
+                        {% endif %}
+                        
+                        <dt class="col-sm-3">Default Template:</dt>
+                        <dd class="col-sm-9">
+                            {% if template.is_default %}
+                                <span class="badge bg-success">Yes</span>
+                            {% else %}
+                                <span class="badge bg-secondary">No</span>
+                            {% endif %}
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+
+            <!-- Model Configuration -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Model Configuration</h5>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-4">Model Type:</dt>
+                        <dd class="col-sm-8"><code>{{ template.model_type }}</code></dd>
+                        
+                        <dt class="col-sm-4">Batch Size:</dt>
+                        <dd class="col-sm-8">{{ template.batch_size }}</dd>
+                        
+                        <dt class="col-sm-4">Epochs:</dt>
+                        <dd class="col-sm-8">{{ template.epochs }}</dd>
+                        
+                        <dt class="col-sm-4">Learning Rate:</dt>
+                        <dd class="col-sm-8">{{ template.learning_rate }}</dd>
+                        
+                        <dt class="col-sm-4">Validation Split:</dt>
+                        <dd class="col-sm-8">{{ template.validation_split }}</dd>
+                    </dl>
+                </div>
+            </div>
+
+            <!-- Data Augmentation -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Data Augmentation</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" disabled {% if template.use_random_flip %}checked{% endif %}>
+                                <label class="form-check-label">Random Flip</label>
+                            </div>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" disabled {% if template.use_random_rotate %}checked{% endif %}>
+                                <label class="form-check-label">Random Rotate</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" disabled {% if template.use_random_scale %}checked{% endif %}>
+                                <label class="form-check-label">Random Scale</label>
+                            </div>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" disabled {% if template.use_random_intensity %}checked{% endif %}>
+                                <label class="form-check-label">Random Intensity</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Advanced Settings -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Advanced Settings</h5>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-4">Crop Size:</dt>
+                        <dd class="col-sm-8">{{ template.crop_size }} pixels</dd>
+                        
+                        <dt class="col-sm-4">Data Workers:</dt>
+                        <dd class="col-sm-8">{{ template.num_workers }}</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <!-- Quick Actions -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Quick Actions</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-grid gap-2">
+                        <a href="{% url 'ml_manager:start-training' %}?template={{ template.pk }}" class="btn btn-success">
+                            <i class="fas fa-play"></i> Start Training with Template
+                        </a>
+                        <a href="{% url 'ml_manager:template-edit' template.pk %}" class="btn btn-primary">
+                            <i class="fas fa-edit"></i> Edit Template
+                        </a>
+                        <hr>
+                        <a href="{% url 'ml_manager:template-create' %}" class="btn btn-outline-primary">
+                            <i class="fas fa-copy"></i> Duplicate Template
+                        </a>
+                        <a href="{% url 'ml_manager:template-delete' template.pk %}" 
+                           class="btn btn-outline-danger"
+                           onclick="return confirm('Are you sure you want to delete this template?');">
+                            <i class="fas fa-trash"></i> Delete Template
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Template Usage Summary -->
+            <div class="card mt-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Configuration Summary</h5>
+                </div>
+                <div class="card-body">
+                    <div class="text-center">
+                        <div class="row text-center">
+                            <div class="col-6">
+                                <div class="border-end">
+                                    <h6 class="text-primary">{{ template.epochs }}</h6>
+                                    <small class="text-muted">Epochs</small>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <h6 class="text-primary">{{ template.batch_size }}</h6>
+                                <small class="text-muted">Batch Size</small>
+                            </div>
+                        </div>
+                        <hr>
+                        <div class="row text-center">
+                            <div class="col-6">
+                                <div class="border-end">
+                                    <h6 class="text-success">{{ template.learning_rate }}</h6>
+                                    <small class="text-muted">Learning Rate</small>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <h6 class="text-success">{{ template.validation_split|floatformat:1 }}</h6>
+                                <small class="text-muted">Val Split</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
