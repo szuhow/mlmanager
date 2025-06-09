@@ -167,3 +167,4 @@ runs/
 models/organized/*
 shared/datasets/data/*
 .env
+mlruns/*
