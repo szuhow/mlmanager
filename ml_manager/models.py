@@ -61,6 +61,8 @@ class MLModel(models.Model):
     )
     current_epoch = models.IntegerField(default=0)
     total_epochs = models.IntegerField(default=0)
+    current_batch = models.IntegerField(default=0)
+    total_batches_per_epoch = models.IntegerField(default=0)
     train_loss = models.FloatField(default=0.0)
     val_loss = models.FloatField(default=0.0)
     train_dice = models.FloatField(default=0.0)
@@ -111,9 +113,24 @@ class MLModel(models.Model):
     
     @property
     def progress_percentage(self):
-        """Calculate training progress percentage"""
+        """Calculate training progress percentage including batch progress within epoch"""
         if self.total_epochs > 0:
-            return min(100, (self.current_epoch / self.total_epochs) * 100)
+            # Base epoch progress
+            epoch_progress = self.current_epoch / self.total_epochs
+            
+            # Add batch progress within current epoch if available
+            if self.total_batches_per_epoch > 0 and self.current_batch > 0:
+                batch_progress_in_epoch = self.current_batch / self.total_batches_per_epoch
+                epoch_progress += batch_progress_in_epoch / self.total_epochs
+            
+            return min(100, epoch_progress * 100)
+        return 0
+    
+    @property
+    def batch_progress_percentage(self):
+        """Calculate progress within current epoch based on batches"""
+        if self.total_batches_per_epoch > 0:
+            return min(100, (self.current_batch / self.total_batches_per_epoch) * 100)
         return 0
     
     @property
@@ -127,7 +144,10 @@ class MLModel(models.Model):
         return {
             'current_epoch': self.current_epoch,
             'total_epochs': self.total_epochs,
+            'current_batch': self.current_batch,
+            'total_batches_per_epoch': self.total_batches_per_epoch,
             'progress_percentage': self.progress_percentage,
+            'batch_progress_percentage': self.batch_progress_percentage,
             'train_loss': self.train_loss,
             'val_loss': self.val_loss,
             'train_dice': self.train_dice,

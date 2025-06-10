@@ -190,3 +190,29 @@ class TrainingCallback:
             'spatial_dims': getattr(model, 'spatial_dims', 2)
         })
         self.model.save()
+    
+    def on_batch_start(self, batch_idx, total_batches):
+        """Called at the start of each batch"""
+        self.model.refresh_from_db()
+        self.model.current_batch = batch_idx
+        self.model.total_batches_per_epoch = total_batches
+        self.model.save()
+        
+        # Check if training should be stopped
+        if self.model.stop_requested:
+            return False
+        return True
+    
+    def on_batch_end(self, batch_idx, batch_logs=None):
+        """Called at the end of each batch with optional metrics"""
+        self.model.current_batch = batch_idx + 1  # +1 because batch completed
+        if batch_logs:
+            # Update running training metrics if provided
+            self.model.train_loss = batch_logs.get('train_loss', self.model.train_loss)
+            self.model.train_dice = batch_logs.get('train_dice', self.model.train_dice)
+        self.model.save()
+    
+    def set_epoch_batches(self, total_batches):
+        """Set total number of batches per epoch"""
+        self.model.total_batches_per_epoch = total_batches
+        self.model.save()

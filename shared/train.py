@@ -744,18 +744,21 @@ def train_model(args):
     if not logger.handlers:
         formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
         
-        # Add file handlers for training logs
-        model_handler = logging.FileHandler(model_log_path, mode='w', encoding='utf-8', delay=False)
+        # Add file handlers for training logs (append mode to preserve logs)
+        model_handler = logging.FileHandler(model_log_path, mode='a', encoding='utf-8', delay=False)
         model_handler.setFormatter(formatter)
+        model_handler.setLevel(logging.INFO)  # Only log INFO and above to files
         logger.addHandler(model_handler)
         
-        global_handler = logging.FileHandler(global_log_path, mode='w', encoding='utf-8', delay=False)
-        global_handler.setFormatter(formatter)
+        global_handler = logging.FileHandler(global_log_path, mode='a', encoding='utf-8', delay=False)
+        global_handler.setFormatter(formatter) 
+        global_handler.setLevel(logging.INFO)  # Only log INFO and above to files
         logger.addHandler(global_handler)
         
         # Add console handler for training logs
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(formatter)
+        console_handler.setLevel(logging.INFO)  # Avoid DEBUG spam in console
         logger.addHandler(console_handler)
         
         # Prevent propagation to avoid double logging

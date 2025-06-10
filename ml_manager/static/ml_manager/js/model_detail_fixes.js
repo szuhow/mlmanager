@@ -278,19 +278,27 @@ document.addEventListener('DOMContentLoaded', function() {
     
     function updateLogStats(stats) {
         const statsElements = {
-            'total-lines': stats.total_count,
-            'epoch-count': stats.epoch_count,
-            'batch-count': stats.batch_count,
-            'metrics-count': stats.metrics_count,
-            'last-update': stats.last_update
+            'total-lines': stats.total_count || stats.total_lines,
+            'epoch-count': stats.epoch_count || stats.epoch_logs,
+            'batch-count': stats.batch_count || stats.batch_logs,
+            'metrics-count': stats.metrics_count || stats.model_logs,
+            'last-update': stats.last_update || stats.last_updated
         };
         
         Object.keys(statsElements).forEach(function(id) {
             const element = document.getElementById(id);
-            if (element) {
+            if (element && statsElements[id] !== undefined) {
                 element.textContent = statsElements[id];
             }
         });
+        
+        // Update filter info
+        const filterInfo = document.getElementById('filter-info');
+        if (filterInfo) {
+            const activeLogView = document.querySelector('input[name="logView"]:checked');
+            const viewType = activeLogView ? activeLogView.id.replace('logView', '').toLowerCase() : 'all';
+            filterInfo.textContent = `Type: ${viewType}`;
+        }
     }
     
     // Initialize with default view (no automatic live log fetching)

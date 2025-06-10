@@ -24,6 +24,8 @@ import shutil
 from PIL import Image
 import torch
 import os
+import re
+import hashlib
 from shared.train import run_inference
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
@@ -432,7 +434,7 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                                 'filename': filename,
                                 'epoch': epoch_num,
                                 'path': os.path.join(artifacts_path, filename),
-                                'relative_path': os.path.join(os.path.dirname(os.path.dirname(artifacts_path)), 'artifacts', filename)
+                                'relative_path': os.path.relpath(os.path.join(artifacts_path, filename), 'mlruns')
                             })
                         except ValueError:
                             # Skip files with invalid epoch numbers
@@ -1448,18 +1450,49 @@ def get_training_log(request, model_id):
     """Get training logs for a model"""
     try:
         model = get_object_or_404(MLModel, id=model_id)
+        logs = []
         
-        # Try to find log file
-        log_path = os.path.join('models', 'artifacts', 'training.log')
-        if os.path.exists(log_path):
-            with open(log_path, 'r') as f:
-                logs = f.read()
-        else:
-            logs = "No training logs found"
+        # Priority 1: Model-specific logs in model directory
+        if model.model_directory and os.path.exists(model.model_directory):
+            model_log_path = os.path.join(model.model_directory, 'logs', 'training.log')
+            if os.path.exists(model_log_path):
+                with open(model_log_path, 'r') as f:
+                    logs = f.read().splitlines()
+        
+        # Priority 2: Global training log (filter for model-specific content)
+        if not logs:
+            global_log_path = os.path.join('models', 'artifacts', 'training.log')
+            if os.path.exists(global_log_path):
+                with open(global_log_path, 'r') as f:
+                    all_logs = f.read().splitlines()
+                    # Filter for non-DEBUG logs and model-specific content
+                    logs = [
+                        line for line in all_logs 
+                        if not line.strip().startswith('2025-') or 
+                           not 'DEBUG' in line or
+                           '[TRAIN]' in line or '[EPOCH]' in line or '[VAL]' in line or
+                           '[METRICS]' in line or '[CONFIG]' in line or '[MODEL]' in line or
+                           'ERROR' in line or 'WARNING' in line
+                    ]
+        
+        # If still no logs, check alternative locations
+        if not logs:
+            # Try MLflow artifacts path
+            if model.mlflow_run_id:
+                mlflow_log_path = os.path.join('mlruns', model.mlflow_run_id, 'artifacts', 'training.log')
+                if os.path.exists(mlflow_log_path):
+                    with open(mlflow_log_path, 'r') as f:
+                        logs = f.read().splitlines()
+        
+        if not logs:
+            logs = ["No training logs found", f"Checked locations:", 
+                   f"- Model directory: {model.model_directory}/logs/training.log" if model.model_directory else "- No model directory set",
+                   f"- Global log: models/artifacts/training.log", 
+                   f"- MLflow artifacts: mlruns/{model.mlflow_run_id}/artifacts/training.log" if model.mlflow_run_id else "- No MLflow run ID"]
         
         return JsonResponse({
             'status': 'success',
-            'logs': logs.split('\n')
+            'logs': logs
         })
         
     except Exception as e:
@@ -1478,7 +1511,10 @@ def get_training_progress(request, model_id):
             'progress': {
                 'current_epoch': model.current_epoch or 0,
                 'total_epochs': model.total_epochs or 0,
+                'current_batch': model.current_batch or 0,
+                'total_batches_per_epoch': model.total_batches_per_epoch or 0,
                 'percentage': model.progress_percentage,
+                'batch_progress_percentage': model.batch_progress_percentage,
             },
             'metrics': {
                 'train_loss': model.train_loss,
@@ -1501,16 +1537,27 @@ def serve_training_preview_image(request, model_id, filename):
     try:
         model = get_object_or_404(MLModel, id=model_id)
         
-        # Find image file
+        # Find image file using multiple path strategies
         if model.mlflow_run_id:
-            image_path = os.path.join('mlruns', model.mlflow_run_id, 'artifacts', filename)
-            if os.path.exists(image_path):
-                with open(image_path, 'rb') as f:
-                    response = HttpResponse(f.read(), content_type='image/png')
-                    response['Content-Disposition'] = f'inline; filename="{filename}"'
-                    return response
+            possible_paths = [
+                # Direct run ID path (current MLflow structure) 
+                os.path.join('mlruns', model.mlflow_run_id, 'artifacts', filename),
+                # Legacy experiment-based paths
+                os.path.join('mlruns', '0', model.mlflow_run_id, 'artifacts', filename),
+                os.path.join('mlruns', '1', model.mlflow_run_id, 'artifacts', filename),
+                # Try with experiment ID if available
+                os.path.join('mlruns', model.mlflow_run_id[:32], 'artifacts', filename),
+            ]
+            
+            for image_path in possible_paths:
+                if os.path.exists(image_path):
+                    with open(image_path, 'rb') as f:
+                        response = HttpResponse(f.read(), content_type='image/png')
+                        response['Content-Disposition'] = f'inline; filename="{filename}"'
+                        return response
         
         # Return 404 if image not found
+        logging.warning(f"Training preview image not found: {filename} for model {model_id}")
         return HttpResponse('Image not found', status=404)
         
     except Exception as e:
@@ -1695,23 +1742,81 @@ class ModelLogsView(LoginRequiredMixin, DetailView):
             return None
 
     def _get_training_logs(self):
-        """Get training logs for this model"""
+        """Get training logs for this model with enhanced model-specific prioritization"""
         try:
-            # Try to find logs in the model-specific location first
-            if self.object.model_directory and os.path.exists(self.object.model_directory):
-                log_path = os.path.join(self.object.model_directory, 'logs', 'training.log')
-                if os.path.exists(log_path):
-                    with open(log_path, 'r') as f:
-                        return f.read().splitlines()
+            model_specific_logs = []
+            global_logs = []
             
-            # Fallback to global log location
-            log_path = os.path.join('models', 'artifacts', 'training.log')
-            if os.path.exists(log_path):
-                with open(log_path, 'r') as f:
-                    return f.read().splitlines()
+            # Priority 1: Model-specific logs in model directory
+            if self.object.model_directory and os.path.exists(self.object.model_directory):
+                # Try multiple log locations within model directory
+                model_log_paths = [
+                    os.path.join(self.object.model_directory, 'logs', 'training.log'),
+                    os.path.join(self.object.model_directory, 'training.log'),
+                    os.path.join(self.object.model_directory, 'training_logs', 'training.log')
+                ]
+                
+                for log_path in model_log_paths:
+                    if os.path.exists(log_path):
+                        try:
+                            with open(log_path, 'r') as f:
+                                model_specific_logs = f.read().splitlines()
+                            break
+                        except Exception as e:
+                            continue
+            
+            # Priority 2: MLflow artifacts if available
+            if not model_specific_logs and self.object.mlflow_run_id:
+                mlflow_log_paths = [
+                    f'/app/mlruns/{self.object.mlflow_run_id}/artifacts/training_logs/training.log',
+                    f'mlruns/{self.object.mlflow_run_id}/artifacts/training_logs/training.log',
+                    f'artifacts/training_logs/training_{self.object.id}.log'
+                ]
+                
+                for log_path in mlflow_log_paths:
+                    if os.path.exists(log_path):
+                        try:
+                            with open(log_path, 'r') as f:
+                                model_specific_logs = f.read().splitlines()
+                            break
+                        except Exception as e:
+                            continue
+            
+            # Priority 3: Global log location (fallback)
+            global_log_paths = [
+                os.path.join('models', 'artifacts', 'training.log'),
+                os.path.join('artifacts', 'training_logs', 'training.log'),
+                'training.log'
+            ]
+            
+            for log_path in global_log_paths:
+                if os.path.exists(log_path):
+                    try:
+                        with open(log_path, 'r') as f:
+                            global_logs = f.read().splitlines()
+                        break
+                    except Exception as e:
+                        continue
+            
+            # Return model-specific logs if available, otherwise global logs
+            if model_specific_logs:
+                return model_specific_logs
+            elif global_logs:
+                # If using global logs, try to filter for this model's logs if possible
+                if hasattr(self.object, 'name') and self.object.name:
+                    filtered_logs = [
+                        log for log in global_logs 
+                        if self.object.name.lower() in log.lower() or 
+                           f"model_{self.object.id}" in log.lower()
+                    ]
+                    if filtered_logs:
+                        return filtered_logs
+                return global_logs
             
             return []
+            
         except Exception as e:
             import logging
-            logging.warning(f"Could not load training logs: {e}")
+            logging.warning(f"Could not load training logs for model {self.object.id}: {e}")
             return []
+
