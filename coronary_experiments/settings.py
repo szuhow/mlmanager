@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -130,6 +131,9 @@ MLFLOW_EXPERIMENT_NAME = 'coronary-experiments'
 # Path settings
 BASE_MLRUNS_DIR = BASE_DIR / 'mlruns'
 MLFLOW_ARTIFACT_ROOT = str(BASE_MLRUNS_DIR)
+
+# MLflow UI URL for browser access (set this to your actual MLflow UI address)
+MLFLOW_UI_URL = os.environ.get('MLFLOW_UI_URL', 'http://localhost:5000')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field

@@ -203,12 +203,30 @@ class TrainingTemplate(models.Model):
         help_text="Device to use for training. Auto will use CUDA if available."
     )
     
-    # Augmentation options
+    # Enhanced Augmentation options with richer controls
     use_random_flip = models.BooleanField(default=True)
+    flip_probability = models.FloatField(default=0.5, help_text="Probability of applying flip (0.0-1.0)")
+    
     use_random_rotate = models.BooleanField(default=True)
+    rotation_range = models.IntegerField(default=30, help_text="Maximum rotation angle in degrees (±range)")
+    
     use_random_scale = models.BooleanField(default=True)
+    scale_range_min = models.FloatField(default=0.8, help_text="Minimum scale factor")
+    scale_range_max = models.FloatField(default=1.2, help_text="Maximum scale factor")
+    
     use_random_intensity = models.BooleanField(default=True)
+    intensity_range = models.FloatField(default=0.2, help_text="Intensity variation range (±range)")
+    
+    use_random_crop = models.BooleanField(default=False)
     crop_size = models.IntegerField(default=128)
+    
+    use_elastic_transform = models.BooleanField(default=False)
+    elastic_alpha = models.FloatField(default=34.0, help_text="Elastic transformation strength")
+    elastic_sigma = models.FloatField(default=4.0, help_text="Elastic transformation smoothness")
+    
+    use_gaussian_noise = models.BooleanField(default=False)
+    noise_std = models.FloatField(default=0.01, help_text="Standard deviation of Gaussian noise")
+    
     num_workers = models.IntegerField(default=4)
     
     # Additional metadata
@@ -232,10 +250,21 @@ class TrainingTemplate(models.Model):
             'resolution': self.resolution,
             'device': self.device,
             'use_random_flip': self.use_random_flip,
+            'flip_probability': self.flip_probability,
             'use_random_rotate': self.use_random_rotate,
+            'rotation_range': self.rotation_range,
             'use_random_scale': self.use_random_scale,
+            'scale_range_min': self.scale_range_min,
+            'scale_range_max': self.scale_range_max,
             'use_random_intensity': self.use_random_intensity,
+            'intensity_range': self.intensity_range,
+            'use_random_crop': self.use_random_crop,
             'crop_size': self.crop_size,
+            'use_elastic_transform': self.use_elastic_transform,
+            'elastic_alpha': self.elastic_alpha,
+            'elastic_sigma': self.elastic_sigma,
+            'use_gaussian_noise': self.use_gaussian_noise,
+            'noise_std': self.noise_std,
             'num_workers': self.num_workers,
         }
     

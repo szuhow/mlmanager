@@ -1,4 +1,4 @@
-from django.shortcuts import render, get_object_or_404
+from django.shortcuts import render, get_object_or_404, redirect
 from django.views.generic import ListView, DetailView, FormView, DeleteView
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.urls import reverse_lazy
@@ -218,7 +218,7 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                 'config_logs': [],
                 'metrics_logs': [],
                 'validation_logs': [],
-                'general_logs': []
+                'general_logs': [],
             }
             context['log_stats'] = {
                 'total_count': 1,
@@ -422,35 +422,130 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                 preview_data['error'] = f"Artifacts directory not found. Tried paths: {', '.join(base_paths)}"
                 return preview_data
             
-            # Find all prediction images
+            # Find all prediction images using multiple search strategies for enhanced MLflow structure
             prediction_files = []
+            
+            def search_for_predictions(search_path, search_patterns):
+                """Helper function to search for prediction files"""
+                found_files = []
+                seen_paths = set()  # Track already found files to avoid duplicates
+                
+                try:
+                    if os.path.exists(search_path):
+                        for item in os.listdir(search_path):
+                            item_path = os.path.join(search_path, item)
+                            
+                            # Check if it's a file matching our patterns
+                            if os.path.isfile(item_path) and item_path not in seen_paths:
+                                for pattern_info in search_patterns:
+                                    pattern = pattern_info['pattern']
+                                    epoch_extract = pattern_info['epoch_extract']
+                                    
+                                    if pattern(item):
+                                        try:
+                                            epoch_num = epoch_extract(item)
+                                            found_files.append({
+                                                'filename': item,
+                                                'epoch': epoch_num,
+                                                'path': item_path,
+                                                'relative_path': os.path.relpath(item_path, 'mlruns')
+                                            })
+                                            seen_paths.add(item_path)
+                                            break  # Found a match, don't check other patterns for this file
+                                        except (ValueError, IndexError):
+                                            continue
+                            
+                            # Check subdirectories for enhanced MLflow structure
+                            elif os.path.isdir(item_path):
+                                # Look in organized subdirectories like predictions/epoch_001/
+                                if item in ['predictions', 'visualizations']:
+                                    for subitem in os.listdir(item_path):
+                                        subitem_path = os.path.join(item_path, subitem)
+                                        if os.path.isdir(subitem_path):
+                                            # Check epoch subdirectories
+                                            for epoch_item in os.listdir(subitem_path):
+                                                epoch_item_path = os.path.join(subitem_path, epoch_item)
+                                                if os.path.isfile(epoch_item_path) and epoch_item_path not in seen_paths:
+                                                    for pattern_info in search_patterns:
+                                                        pattern = pattern_info['pattern']
+                                                        epoch_extract_alt = pattern_info.get('epoch_extract_alt')
+                                                        
+                                                        if pattern(epoch_item) and epoch_extract_alt:
+                                                            try:
+                                                                epoch_num = epoch_extract_alt(subitem)  # Extract from directory name
+                                                                found_files.append({
+                                                                    'filename': epoch_item,
+                                                                    'epoch': epoch_num,
+                                                                    'path': epoch_item_path,
+                                                                    'relative_path': os.path.relpath(epoch_item_path, 'mlruns')
+                                                                })
+                                                                seen_paths.add(epoch_item_path)
+                                                                break  # Found a match, don't check other patterns
+                                                            except (ValueError, IndexError):
+                                                                continue
+                                        elif os.path.isfile(subitem_path) and subitem_path not in seen_paths:
+                                            # Direct files in predictions/ directory
+                                            for pattern_info in search_patterns:
+                                                pattern = pattern_info['pattern']
+                                                epoch_extract = pattern_info['epoch_extract']
+                                                
+                                                if pattern(subitem):
+                                                    try:
+                                                        epoch_num = epoch_extract(subitem)
+                                                        found_files.append({
+                                                            'filename': subitem,
+                                                            'epoch': epoch_num,
+                                                            'path': subitem_path,
+                                                            'relative_path': os.path.relpath(subitem_path, 'mlruns')
+                                                        })
+                                                        seen_paths.add(subitem_path)
+                                                        break  # Found a match, don't check other patterns
+                                                    except (ValueError, IndexError):
+                                                        continue
+                except OSError:
+                    pass
+                return found_files
+            
+            # Define search patterns for different MLflow structures (ordered by specificity)
+            search_patterns = [
+                # Most specific: predictions_epoch_N.png (numbered)
+                {
+                    'pattern': lambda f: f.startswith('predictions_epoch_') and f.endswith('.png') and any(c.isdigit() for c in f),
+                    'epoch_extract': lambda f: int(''.join(filter(str.isdigit, f)))
+                },
+                # Directory-based pattern: any PNG file in epoch_N directories
+                {
+                    'pattern': lambda f: f.endswith('.png'),
+                    'epoch_extract': lambda f: 0,  # Will use directory-based extraction
+                    'epoch_extract_alt': lambda d: int(''.join(filter(str.isdigit, d))) if any(c.isdigit() for c in d) else 0
+                }
+            ]
+            
+            # Search in the main artifacts directory
             try:
-                for filename in os.listdir(artifacts_path):
-                    if filename.startswith('predictions_epoch_') and filename.endswith('.png'):
-                        try:
-                            epoch_num = int(filename.replace('predictions_epoch_', '').replace('.png', ''))
-                            # Use the actual found artifacts_path for relative_path
-                            prediction_files.append({
-                                'filename': filename,
-                                'epoch': epoch_num,
-                                'path': os.path.join(artifacts_path, filename),
-                                'relative_path': os.path.relpath(os.path.join(artifacts_path, filename), 'mlruns')
-                            })
-                        except ValueError:
-                            # Skip files with invalid epoch numbers
-                            continue
+                prediction_files.extend(search_for_predictions(artifacts_path, search_patterns))
             except OSError as e:
                 preview_data['error'] = f"Error reading artifacts directory: {str(e)}"
                 return preview_data
             
-            # Sort by epoch number
-            prediction_files.sort(key=lambda x: x['epoch'])
+            # Remove duplicates based on filename and epoch
+            seen_files = set()
+            unique_files = []
+            for file_info in prediction_files:
+                # Create a unique identifier using filename and epoch
+                file_key = (file_info['filename'], file_info['epoch'])
+                if file_key not in seen_files:
+                    seen_files.add(file_key)
+                    unique_files.append(file_info)
             
-            if prediction_files:
-                preview_data['images'] = prediction_files
-                preview_data['latest_epoch'] = prediction_files[-1]['epoch']
+            # Sort by epoch number
+            unique_files.sort(key=lambda x: x['epoch'])
+            
+            if unique_files:
+                preview_data['images'] = unique_files
+                preview_data['latest_epoch'] = unique_files[-1]['epoch']
             else:
-                preview_data['error'] = "No prediction images found in artifacts"
+                preview_data['error'] = f"No prediction images found in artifacts. Searched in: {artifacts_path} using multiple patterns for enhanced MLflow structure."
                 
         except Exception as e:
             logging.error(f"Error getting training preview for model {self.object.id}: {e}")
@@ -710,26 +805,36 @@ class StartTrainingView(LoginRequiredMixin, FormView):
     template_name = 'ml_manager/start_training.html'
     success_url = reverse_lazy('ml_manager:model-list')
 
+    def get_initial(self):
+        initial = super().get_initial()
+        rerun_model_id = self.request.GET.get('rerun')
+        if rerun_model_id:
+            try:
+                model = get_object_or_404(MLModel, pk=rerun_model_id)
+                if model.training_data_info:
+                    # Clean up name to avoid multiple (Rerun) tags
+                    base_name = model.name
+                    if base_name.endswith('(Rerun)'):
+                        base_name = base_name[:-7].rstrip()
+                    initial.update(model.training_data_info)
+                    initial['name'] = f"{base_name} (Rerun)"
+            except MLModel.DoesNotExist:
+                pass
+        return initial
+
     def form_valid(self, form):
-        logger = logging.getLogger(__name__) # Define logger
+        logger = logging.getLogger(__name__)
         logger.info("StartTrainingView.form_valid() called")
-        
         try:
-            # Extract form data
             form_data = form.cleaned_data
             logger.info(f"Form data: {form_data}")
-            
-            # Setup MLflow experiment before creating run
             from .mlflow_utils import setup_mlflow
             setup_mlflow()
-            
-            # Create MLflow run first
-            import mlflow
+            # Create MLflow run first, but DO NOT call mlflow.end_run() here!
             mlflow_run = mlflow.start_run()
             mlflow_run_id = mlflow_run.info.run_id
-            mlflow.end_run()  # End the run, train.py will restart it
-            
-            # Create new model instance
+            # Do not end the run here; let train.py manage run lifecycle
+            # Remove any accidental end_run patching
             ml_model = MLModel.objects.create(
                 name=form_data['name'],
                 description=form_data.get('description', ''),
@@ -741,7 +846,7 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 train_dice=0.0,
                 val_dice=0.0,
                 best_val_dice=0.0,
-                mlflow_run_id=mlflow_run_id,  # Set the run ID
+                mlflow_run_id=mlflow_run_id,
                 training_data_info={
                     'model_type': form_data['model_type'],
                     'data_path': form_data['data_path'],
@@ -757,19 +862,16 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                     'crop_size': form_data['crop_size'],
                     'num_workers': form_data['num_workers'],
                 },
-                # Store model_type directly for easier access if needed
-                model_type=form_data['model_type'] 
+                model_type=form_data['model_type']
             )
             logger.info(f"Created MLModel instance with ID: {ml_model.id}, model_type: {ml_model.model_type}, mlflow_run_id: {mlflow_run_id}")
-
-            # Prepare command for subprocess
             command = [
-                sys.executable, 
+                sys.executable,
                 str(Path(__file__).parent.parent / 'shared' / 'train.py'),
                 '--mode=train',
                 f'--model-id={ml_model.id}',
                 f'--mlflow-run-id={mlflow_run_id}',
-                f'--model-type={form_data["model_type"]}', 
+                f'--model-type={form_data["model_type"]}',
                 f'--data-path={form_data["data_path"]}',
                 f'--batch-size={form_data["batch_size"]}',
                 f'--epochs={form_data["epochs"]}',
@@ -780,46 +882,39 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 f'--crop-size={form_data["crop_size"]}',
                 f'--num-workers={form_data["num_workers"]}'
             ]
-            # Add boolean flags for augmentations
             if form_data.get('use_random_flip'): command.append('--random-flip')
             if form_data.get('use_random_rotate'): command.append('--random-rotate')
             if form_data.get('use_random_scale'): command.append('--random-scale')
             if form_data.get('use_random_intensity'): command.append('--random-intensity')
-
             logger.info(f"Training command: {' '.join(command)}")
-
-            # Prepare environment for subprocess
             current_env = os.environ.copy()
-            project_root = Path(__file__).resolve().parent.parent  # Assuming views.py is in ml_manager
-            
-            # Add ml_manager directory to PYTHONPATH so shared/train.py can import mlflow_utils
+            project_root = Path(__file__).resolve().parent.parent
             ml_manager_path = str(project_root / "ml_manager")
-            shared_path = str(project_root / "shared") # Also add shared path for robustness
-            
+            shared_path = str(project_root / "shared")
             existing_python_path = current_env.get("PYTHONPATH")
             new_paths = [ml_manager_path, shared_path]
             if existing_python_path:
                 current_env["PYTHONPATH"] = ":".join(new_paths) + ":" + existing_python_path
             else:
                 current_env["PYTHONPATH"] = ":".join(new_paths)
-                
             current_env["DJANGO_SETTINGS_MODULE"] = "coronary_experiments.settings"
-            
             logger.info(f"Starting training subprocess with PYTHONPATH: {current_env['PYTHONPATH']}")
             logger.info(f"Working directory for subprocess: {str(project_root)}")
-
             subprocess.Popen(
                 command,
-                shell=False, 
+                shell=False,
                 env=current_env,
                 cwd=str(project_root)
             )
-            messages.success(self.request, f"Training for \'{ml_model.name}\' (ID: {ml_model.id}) started successfully with model type \'{form_data['model_type']}\'.")
+            
+            # Note: MLflow run remains active for training subprocess to use
+            logger.info(f"[MLFLOW] Training subprocess will manage run {mlflow_run_id} lifecycle")
+            
+            messages.success(self.request, f"Training for '{ml_model.name}' (ID: {ml_model.id}) started successfully with model type '{form_data['model_type']}'.")
             return super().form_valid(form)
         except Exception as e:
             logger.error(f"Error in StartTrainingView.form_valid: {e}", exc_info=True)
             messages.error(self.request, f"Failed to start training: {e}")
-            # Ensure the created model is marked as failed if subprocess Popen fails
             if 'ml_model' in locals() and ml_model:
                 ml_model.status = 'failed'
                 ml_model.training_logs = f"Failed to start training process: {e}"
@@ -836,24 +931,27 @@ class StartTrainingView(LoginRequiredMixin, FormView):
             try:
                 model = get_object_or_404(MLModel, pk=rerun_model_id)
                 if model.training_data_info:
-                    training_info = model.training_data_info
+                    # Clean up name to avoid multiple (Rerun) tags
+                    base_name = model.name
+                    if base_name.endswith('(Rerun)'):
+                        base_name = base_name[:-7].rstrip()
                     initial.update({
-                        'name': f"{model.name} (Rerun)",
+                        'name': f"{base_name} (Rerun)",
                         'description': f"Rerun of model: {model.name}",
-                        'model_type': training_info.get('model_type', 'unet'),
-                        'data_path': training_info.get('data_path', ''),
-                        'batch_size': training_info.get('batch_size', 32),
-                        'epochs': model.total_epochs or training_info.get('epochs', 100),
-                        'learning_rate': training_info.get('learning_rate', 0.001),
-                        'validation_split': training_info.get('validation_split', 0.2),
-                        'resolution': training_info.get('resolution', '256'),
-                        'device': training_info.get('device', 'auto'),
-                        'use_random_flip': training_info.get('use_random_flip', True),
-                        'use_random_rotate': training_info.get('use_random_rotate', True),
-                        'use_random_scale': training_info.get('use_random_scale', True),
-                        'use_random_intensity': training_info.get('use_random_intensity', True),
-                        'crop_size': training_info.get('crop_size', 128),
-                        'num_workers': training_info.get('num_workers', 4),
+                        'model_type': model.training_data_info.get('model_type', 'unet'),
+                        'data_path': model.training_data_info.get('data_path', ''),
+                        'batch_size': model.training_data_info.get('batch_size', 32),
+                        'epochs': model.total_epochs or model.training_data_info.get('epochs', 100),
+                        'learning_rate': model.training_data_info.get('learning_rate', 0.001),
+                        'validation_split': model.training_data_info.get('validation_split', 0.2),
+                        'resolution': model.training_data_info.get('resolution', '256'),
+                        'device': model.training_data_info.get('device', 'auto'),
+                        'use_random_flip': model.training_data_info.get('use_random_flip', True),
+                        'use_random_rotate': model.training_data_info.get('use_random_rotate', True),
+                        'use_random_scale': model.training_data_info.get('use_random_scale', True),
+                        'use_random_intensity': model.training_data_info.get('use_random_intensity', True),
+                        'crop_size': model.training_data_info.get('crop_size', 128),
+                        'num_workers': model.training_data_info.get('num_workers', 4),
                     })
             except MLModel.DoesNotExist:
                 pass  # Continue with default initial values
@@ -1536,25 +1634,49 @@ def serve_training_preview_image(request, model_id, filename):
     """Serve training preview images"""
     try:
         model = get_object_or_404(MLModel, id=model_id)
+        logging.info(f"Serving image {filename} for model {model_id}, run_id: {model.mlflow_run_id}")
         
         # Find image file using multiple path strategies
         if model.mlflow_run_id:
-            possible_paths = [
+            # Define possible base paths for MLflow runs
+            base_paths = [
                 # Direct run ID path (current MLflow structure) 
-                os.path.join('mlruns', model.mlflow_run_id, 'artifacts', filename),
+                os.path.join('mlruns', model.mlflow_run_id, 'artifacts'),
                 # Legacy experiment-based paths
-                os.path.join('mlruns', '0', model.mlflow_run_id, 'artifacts', filename),
-                os.path.join('mlruns', '1', model.mlflow_run_id, 'artifacts', filename),
+                os.path.join('mlruns', '0', model.mlflow_run_id, 'artifacts'),
+                os.path.join('mlruns', '1', model.mlflow_run_id, 'artifacts'),
                 # Try with experiment ID if available
-                os.path.join('mlruns', model.mlflow_run_id[:32], 'artifacts', filename),
+                os.path.join('mlruns', model.mlflow_run_id[:32], 'artifacts'),
             ]
             
-            for image_path in possible_paths:
-                if os.path.exists(image_path):
-                    with open(image_path, 'rb') as f:
+            logging.info(f"Searching in base paths: {base_paths}")
+            
+            # Search in each base path
+            for base_path in base_paths:
+                if not os.path.exists(base_path):
+                    logging.debug(f"Base path does not exist: {base_path}")
+                    continue
+                    
+                # Try direct path first
+                direct_path = os.path.join(base_path, filename)
+                logging.debug(f"Trying direct path: {direct_path}")
+                if os.path.exists(direct_path):
+                    logging.info(f"Found image at direct path: {direct_path}")
+                    with open(direct_path, 'rb') as f:
                         response = HttpResponse(f.read(), content_type='image/png')
                         response['Content-Disposition'] = f'inline; filename="{filename}"'
                         return response
+                
+                # Search in subdirectories (predictions/, visualizations/, etc.)
+                logging.debug(f"Walking directory tree from: {base_path}")
+                for root, dirs, files in os.walk(base_path):
+                    if filename in files:
+                        image_path = os.path.join(root, filename)
+                        logging.info(f"Found image at: {image_path}")
+                        with open(image_path, 'rb') as f:
+                            response = HttpResponse(f.read(), content_type='image/png')
+                            response['Content-Disposition'] = f'inline; filename="{filename}"'
+                            return response
         
         # Return 404 if image not found
         logging.warning(f"Training preview image not found: {filename} for model {model_id}")
@@ -1778,7 +1900,7 @@ class ModelLogsView(LoginRequiredMixin, DetailView):
                         try:
                             with open(log_path, 'r') as f:
                                 model_specific_logs = f.read().splitlines()
-                            break
+                                break
                         except Exception as e:
                             continue
             
@@ -1819,4 +1941,20 @@ class ModelLogsView(LoginRequiredMixin, DetailView):
             import logging
             logging.warning(f"Could not load training logs for model {self.object.id}: {e}")
             return []
+
+
+@login_required
+def mlflow_redirect_view(request):
+    """Redirect to MLflow UI (use correct host, not mlflow:5000)"""
+    try:
+        # Try to get MLflow UI URL from settings
+        mlflow_ui_url = getattr(settings, 'MLFLOW_UI_URL', None)
+        if not mlflow_ui_url:
+            # Fallback to tracking URI, but replace 0.0.0.0 with localhost for browser
+            mlflow_uri = getattr(settings, 'MLFLOW_TRACKING_URI', 'http://localhost:5000')
+            mlflow_ui_url = mlflow_uri.replace('0.0.0.0', 'localhost').replace('127.0.0.1', 'localhost')
+        return redirect(mlflow_ui_url)
+    except Exception as e:
+        messages.error(request, f"Could not redirect to MLflow: {e}")
+        return redirect('ml_manager:model-list')
 

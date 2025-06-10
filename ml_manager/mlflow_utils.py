@@ -50,12 +50,18 @@ def log_params_and_metrics(run_id, params=None, metrics=None):
 def create_new_run(params=None, metrics=None):
     """Create a new MLflow run and log initial parameters and metrics"""
     setup_mlflow()
-    with mlflow.start_run() as run:
+    # Start run but don't use context manager - let training subprocess manage lifecycle
+    run = mlflow.start_run()
+    try:
         if params:
             mlflow.log_params(params)
         if metrics:
             mlflow.log_metrics(metrics)
         return run.info.run_id
+    except Exception as e:
+        # If there's an error, end the run to clean up
+        mlflow.end_run()
+        raise e
 
 def register_model(run_id, model_name, model_description=None, tags=None):
     """Register a model in MLflow Model Registry"""

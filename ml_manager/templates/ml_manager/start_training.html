@@ -288,69 +288,146 @@
                                             <hr>
                                         </div>
                                     </div>
-                                    
-                                {% elif field.name == 'use_random_flip' %}
-                                    <div class="row mb-3">
-                                        <div class="col-md-6">
-                                            <div class="form-check">
-                                                {{ field }}
-                                                <label class="form-check-label" for="{{ field.id_for_label }}">
-                                                    {{ field.label }}
-                                                    {% if field.help_text %}
-                                                        <small class="text-muted d-block">{{ field.help_text }}</small>
-                                                    {% endif %}
-                                                </label>
-                                                {{ field.errors }}
+                                    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4 mb-4">
+                                        <!-- Flip Augmentation Card -->
+                                        <div class="col">
+                                            <div class="card h-100 shadow-sm border-primary">
+                                                <div class="card-body">
+                                                    <h6 class="card-title"><i class="fas fa-arrows-alt-h me-1"></i> Random Flip</h6>
+                                                    <div class="form-check mb-2">
+                                                        {{ form.use_random_flip }}
+                                                        <label class="form-check-label" for="{{ form.use_random_flip.id_for_label }}">
+                                                            Enable
+                                                        </label>
+                                                    </div>
+                                                    <label for="{{ form.flip_probability.id_for_label }}" class="form-label small">Flip Probability</label>
+                                                    {{ form.flip_probability.errors }}
+                                                    {{ form.flip_probability }}
+                                                    <small class="text-muted d-block">{{ form.flip_probability.help_text }}</small>
+                                                </div>
                                             </div>
-                                            
-                                            <!-- Random Scale Field -->
-                                            {% for scale_field in form %}
-                                                {% if scale_field.name == 'use_random_scale' %}
-                                                    <div class="form-check mt-2">
-                                                        {{ scale_field }}
-                                                        <label class="form-check-label" for="{{ scale_field.id_for_label }}">
-                                                            {{ scale_field.label }}
-                                                            {% if scale_field.help_text %}
-                                                                <small class="text-muted d-block">{{ scale_field.help_text }}</small>
-                                                            {% endif %}
-                                                        </label>
-                                                        {{ scale_field.errors }}
-                                                    </div>
-                                                {% endif %}
-                                            {% endfor %}
                                         </div>
-                                        <div class="col-md-6">
-                                            <!-- Random Rotate Field -->
-                                            {% for rotate_field in form %}
-                                                {% if rotate_field.name == 'use_random_rotate' %}
-                                                    <div class="form-check">
-                                                        {{ rotate_field }}
-                                                        <label class="form-check-label" for="{{ rotate_field.id_for_label }}">
-                                                            {{ rotate_field.label }}
-                                                            {% if rotate_field.help_text %}
-                                                                <small class="text-muted d-block">{{ rotate_field.help_text }}</small>
-                                                            {% endif %}
+                                        <!-- Rotate Augmentation Card -->
+                                        <div class="col">
+                                            <div class="card h-100 shadow-sm border-success">
+                                                <div class="card-body">
+                                                    <h6 class="card-title"><i class="fas fa-sync-alt me-1"></i> Random Rotate</h6>
+                                                    <div class="form-check mb-2">
+                                                        {{ form.use_random_rotate }}
+                                                        <label class="form-check-label" for="{{ form.use_random_rotate.id_for_label }}">
+                                                            Enable
                                                         </label>
-                                                        {{ rotate_field.errors }}
                                                     </div>
-                                                {% endif %}
-                                            {% endfor %}
-                                            
-                                            <!-- Random Intensity Field -->
-                                            {% for intensity_field in form %}
-                                                {% if intensity_field.name == 'use_random_intensity' %}
-                                                    <div class="form-check mt-2">
-                                                        {{ intensity_field }}
-                                                        <label class="form-check-label" for="{{ intensity_field.id_for_label }}">
-                                                            {{ intensity_field.label }}
-                                                            {% if intensity_field.help_text %}
-                                                                <small class="text-muted d-block">{{ intensity_field.help_text }}</small>
-                                                            {% endif %}
+                                                    <label for="{{ form.rotation_range.id_for_label }}" class="form-label small">Rotation Range (°)</label>
+                                                    {{ form.rotation_range.errors }}
+                                                    {{ form.rotation_range }}
+                                                    <small class="text-muted d-block">{{ form.rotation_range.help_text }}</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <!-- Scale Augmentation Card -->
+                                        <div class="col">
+                                            <div class="card h-100 shadow-sm border-warning">
+                                                <div class="card-body">
+                                                    <h6 class="card-title"><i class="fas fa-expand-arrows-alt me-1"></i> Random Scale</h6>
+                                                    <div class="form-check mb-2">
+                                                        {{ form.use_random_scale }}
+                                                        <label class="form-check-label" for="{{ form.use_random_scale.id_for_label }}">
+                                                            Enable
                                                         </label>
-                                                        {{ intensity_field.errors }}
                                                     </div>
-                                                {% endif %}
-                                            {% endfor %}
+                                                    <div class="mb-2">
+                                                        <label for="{{ form.scale_range_min.id_for_label }}" class="form-label small">Min Scale</label>
+                                                        {{ form.scale_range_min.errors }}
+                                                        {{ form.scale_range_min }}
+                                                    </div>
+                                                    <div class="mb-2">
+                                                        <label for="{{ form.scale_range_max.id_for_label }}" class="form-label small">Max Scale</label>
+                                                        {{ form.scale_range_max.errors }}
+                                                        {{ form.scale_range_max }}
+                                                    </div>
+                                                    <small class="text-muted d-block">Scale range (0.1-2.0)</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <!-- Intensity Augmentation Card -->
+                                        <div class="col">
+                                            <div class="card h-100 shadow-sm border-info">
+                                                <div class="card-body">
+                                                    <h6 class="card-title"><i class="fas fa-adjust me-1"></i> Random Intensity</h6>
+                                                    <div class="form-check mb-2">
+                                                        {{ form.use_random_intensity }}
+                                                        <label class="form-check-label" for="{{ form.use_random_intensity.id_for_label }}">
+                                                            Enable
+                                                        </label>
+                                                    </div>
+                                                    <label for="{{ form.intensity_range.id_for_label }}" class="form-label small">Intensity Range</label>
+                                                    {{ form.intensity_range.errors }}
+                                                    {{ form.intensity_range }}
+                                                    <small class="text-muted d-block">{{ form.intensity_range.help_text }}</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <!-- Crop Augmentation Card -->
+                                        <div class="col">
+                                            <div class="card h-100 shadow-sm border-secondary">
+                                                <div class="card-body">
+                                                    <h6 class="card-title"><i class="fas fa-crop-alt me-1"></i> Random Crop</h6>
+                                                    <div class="form-check mb-2">
+                                                        {{ form.use_random_crop }}
+                                                        <label class="form-check-label" for="{{ form.use_random_crop.id_for_label }}">
+                                                            Enable
+                                                        </label>
+                                                    </div>
+                                                    <label for="{{ form.crop_size.id_for_label }}" class="form-label small">Crop Size (px)</label>
+                                                    {{ form.crop_size.errors }}
+                                                    {{ form.crop_size }}
+                                                    <small class="text-muted d-block">{{ form.crop_size.help_text }}</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <!-- Elastic Transform Card -->
+                                        <div class="col">
+                                            <div class="card h-100 shadow-sm border-danger">
+                                                <div class="card-body">
+                                                    <h6 class="card-title"><i class="fas fa-wave-square me-1"></i> Elastic Transform</h6>
+                                                    <div class="form-check mb-2">
+                                                        {{ form.use_elastic_transform }}
+                                                        <label class="form-check-label" for="{{ form.use_elastic_transform.id_for_label }}">
+                                                            Enable
+                                                        </label>
+                                                    </div>
+                                                    <div class="mb-2">
+                                                        <label for="{{ form.elastic_alpha.id_for_label }}" class="form-label small">Alpha</label>
+                                                        {{ form.elastic_alpha.errors }}
+                                                        {{ form.elastic_alpha }}
+                                                    </div>
+                                                    <div class="mb-2">
+                                                        <label for="{{ form.elastic_sigma.id_for_label }}" class="form-label small">Sigma</label>
+                                                        {{ form.elastic_sigma.errors }}
+                                                        {{ form.elastic_sigma }}
+                                                    </div>
+                                                    <small class="text-muted d-block">Medical image deformation</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <!-- Gaussian Noise Card -->
+                                        <div class="col">
+                                            <div class="card h-100 shadow-sm border-dark">
+                                                <div class="card-body">
+                                                    <h6 class="card-title"><i class="fas fa-braille me-1"></i> Gaussian Noise</h6>
+                                                    <div class="form-check mb-2">
+                                                        {{ form.use_gaussian_noise }}
+                                                        <label class="form-check-label" for="{{ form.use_gaussian_noise.id_for_label }}">
+                                                            Enable
+                                                        </label>
+                                                    </div>
+                                                    <label for="{{ form.noise_std.id_for_label }}" class="form-label small">Noise Std</label>
+                                                    {{ form.noise_std.errors }}
+                                                    {{ form.noise_std }}
+                                                    <small class="text-muted d-block">{{ form.noise_std.help_text }}</small>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                     
@@ -359,6 +436,19 @@
                                         <div class="col-12">
                                             <h5 class="text-primary">Advanced Settings</h5>
                                             <hr>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="row mb-3">
+                                        <div class="col-md-6">
+                                            <label for="{{ form.num_workers.id_for_label }}" class="form-label">
+                                                {{ form.num_workers.label }}
+                                                {% if form.num_workers.help_text %}
+                                                    <small class="text-muted">{{ form.num_workers.help_text }}</small>
+                                                {% endif %}
+                                            </label>
+                                            {{ form.num_workers.errors }}
+                                            {{ form.num_workers }}
                                         </div>
                                     </div>
                                     

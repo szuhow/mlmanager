@@ -265,6 +265,169 @@
         </div>
     </div>
 
+    <!-- Training Configuration Section (Full Width) -->
+    {% if training_details %}
+    <div class="row">
+        <div class="col-12">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-cogs me-2"></i>Training Configuration
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if training_details.error %}
+                        <div class="alert alert-warning">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            {{ training_details.error }}
+                        </div>
+                    {% else %}
+                        <div class="row">
+                            <!-- Basic Configuration -->
+                            <div class="col-md-6">
+                                <h6 class="text-primary mb-3"><i class="fas fa-sliders-h me-1"></i>Training Parameters</h6>
+                                <dl class="row">
+                                    <dt class="col-sm-5">Batch Size:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.batch_size|default:"N/A" }}</dd>
+                                    
+                                    <dt class="col-sm-5">Epochs:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.epochs|default:"N/A" }}</dd>
+                                    
+                                    <dt class="col-sm-5">Learning Rate:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.learning_rate|default:"N/A" }}</dd>
+                                    
+                                    <dt class="col-sm-5">Validation Split:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.validation_split|default:"N/A" }}</dd>
+                                    
+                                    <dt class="col-sm-5">Crop Size:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.crop_size|default:"N/A" }}px</dd>
+                                    
+                                    <dt class="col-sm-5">Workers:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.num_workers|default:"N/A" }}</dd>
+                                </dl>
+                            </div>
+
+                            <!-- Hardware & Environment -->
+                            <div class="col-md-6">
+                                <h6 class="text-success mb-3"><i class="fas fa-microchip me-1"></i>Hardware & Environment</h6>
+                                <dl class="row">
+                                    <dt class="col-sm-5">Device:</dt>
+                                    <dd class="col-sm-7">
+                                        <span class="badge {% if training_details.hardware.device == 'cuda' %}bg-success{% else %}bg-secondary{% endif %}">
+                                            {{ training_details.hardware.device|default:"N/A"|upper }}
+                                        </span>
+                                        {% if training_details.hardware.config_device and training_details.hardware.config_device != training_details.hardware.device %}
+                                            <small class="text-muted">(configured: {{ training_details.hardware.config_device }})</small>
+                                        {% endif %}
+                                    </dd>
+                                    
+                                    <dt class="col-sm-5">PyTorch Version:</dt>
+                                    <dd class="col-sm-7">{{ training_details.hardware.pytorch_version|default:"N/A" }}</dd>
+                                    
+                                    <dt class="col-sm-5">CUDA Available:</dt>
+                                    <dd class="col-sm-7">
+                                        {% if training_details.hardware.cuda_available %}
+                                            <i class="fas fa-check-circle text-success"></i> Yes
+                                        {% else %}
+                                            <i class="fas fa-times-circle text-danger"></i> No
+                                        {% endif %}
+                                    </dd>
+                                    
+                                    <dt class="col-sm-5">Model Type:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.model_type|default:"N/A"|upper }}</dd>
+                                </dl>
+                            </div>
+                        </div>
+
+                        <!-- Data Augmentation Section -->
+                        {% if training_details.augmentation %}
+                        <hr class="my-4">
+                        <div class="row">
+                            <div class="col-12">
+                                <h6 class="text-info mb-3"><i class="fas fa-random me-1"></i>Data Augmentation</h6>
+                                <div class="row row-cols-2 row-cols-md-4 g-3">
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.augmentation.random_flip %}
+                                                    <i class="fas fa-arrows-alt-h text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-arrows-alt-h text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Random Flip</small><br>
+                                                <span class="badge {% if training_details.augmentation.random_flip %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.augmentation.random_flip %}Enabled{% else %}Disabled{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.augmentation.random_rotate %}
+                                                    <i class="fas fa-sync-alt text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-sync-alt text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Random Rotate</small><br>
+                                                <span class="badge {% if training_details.augmentation.random_rotate %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.augmentation.random_rotate %}Enabled{% else %}Disabled{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.augmentation.random_scale %}
+                                                    <i class="fas fa-expand-arrows-alt text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-expand-arrows-alt text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Random Scale</small><br>
+                                                <span class="badge {% if training_details.augmentation.random_scale %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.augmentation.random_scale %}Enabled{% else %}Disabled{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.augmentation.random_intensity %}
+                                                    <i class="fas fa-adjust text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-adjust text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Random Intensity</small><br>
+                                                <span class="badge {% if training_details.augmentation.random_intensity %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.augmentation.random_intensity %}Enabled{% else %}Disabled{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Training Samples Section (Full Width) -->
     {% if training_preview %}
     <div class="row">
@@ -327,6 +490,13 @@
         </div>
     </div>
     {% endif %}
+
+    <!-- Rerun Training Button -->
+    <div class="d-flex justify-content-end mb-3">
+      <a href="{% url 'ml_manager:start-training' %}?rerun={{ model.id }}" class="btn btn-warning">
+        <i class="fas fa-redo"></i> Rerun Training
+      </a>
+    </div>
 </div>
 
 <!-- Training Logs Modal -->
@@ -389,10 +559,28 @@
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="imageModalLabel">Training Sample</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        <div class="d-flex gap-2">
+          <button type="button" class="btn btn-sm btn-outline-info" onclick="downloadImage()" title="Download">
+            <i class="fas fa-download"></i>
+          </button>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
       </div>
-      <div class="modal-body text-center">
-        <img id="modalImage" src="" alt="" class="img-fluid" style="max-height: 80vh; max-width: 100%;">
+      <div class="modal-body text-center p-0" id="imageModalBody" style="overflow: hidden; position: relative; height: 80vh;">
+        <div id="imageContainer" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+          <img id="modalImage" src="" alt="" 
+               style="max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain;"
+               ondragstart="return false;"
+               onload="console.log('Image loaded successfully')"
+               onerror="console.error('Failed to load image:', this.src)">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <small class="text-muted me-auto">
+          <i class="fas fa-info-circle"></i> 
+          Training sample image - Click download to save the image.
+        </small>
+        <span id="imageInfo" class="text-muted"></span>
       </div>
     </div>
   </div>
@@ -488,9 +676,18 @@ function updateTrainingProgress() {
                 updateMetric('best-val-dice', data.metrics.best_val_dice);
             }
             
+            // Refresh training preview images on epoch completion
+            if (data.progress && data.progress.current_epoch) {
+                refreshTrainingPreview(data.progress.current_epoch);
+            }
+            
             // Check if training completed
             if (data.status_changed) {
-                location.reload();
+                // Refresh training preview before full reload
+                setTimeout(() => {
+                    location.reload();
+                }, 2000); // Give 2 seconds to refresh preview images
+                refreshTrainingPreview();
             }
         }
     })
@@ -501,9 +698,101 @@ function updateTrainingProgress() {
 {% endif %}
 </script>
 
-<!-- MLflow Registry Management Scripts -->
+<!-- Training Preview Refresh Function -->
 <script>
-// MLflow Registry Management Functions
+function refreshTrainingPreview(currentEpoch = null) {
+    console.log('Refreshing training preview images...');
+    
+    // Find the training samples card by searching for the specific card header text
+    const trainingSamplesCards = Array.from(document.querySelectorAll('.card-header h5')).filter(h5 => 
+        h5.textContent.includes('Training Samples')
+    );
+    
+    if (trainingSamplesCards.length === 0) {
+        console.log('No training samples card found');
+        return;
+    }
+    
+    const currentTrainingSamplesCard = trainingSamplesCards[0].closest('.card');
+    
+    // Fetch updated training preview
+    fetch(`{% url 'ml_manager:model-detail' model.id %}`, {
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+    })
+    .then(response => response.text())
+    .then(html => {
+        // Parse the response and extract training preview section
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        
+        // Find the training samples section in the response using the same method
+        const newTrainingSamplesCards = Array.from(doc.querySelectorAll('.card-header h5')).filter(h5 => 
+            h5.textContent.includes('Training Samples')
+        );
+        
+        if (newTrainingSamplesCards.length > 0) {
+            const newTrainingSamplesCard = newTrainingSamplesCards[0].closest('.card');
+            
+            if (newTrainingSamplesCard && currentTrainingSamplesCard) {
+                // Replace only the card body content to maintain structure
+                const newCardBody = newTrainingSamplesCard.querySelector('.card-body');
+                const currentCardBody = currentTrainingSamplesCard.querySelector('.card-body');
+                
+                if (newCardBody && currentCardBody) {
+                    currentCardBody.innerHTML = newCardBody.innerHTML;
+                    console.log('Training preview refreshed successfully');
+                    
+                    // Show notification
+                    showRefreshNotification(currentEpoch);
+                } else {
+                    console.log('Could not find card body elements');
+                }
+            }
+        } else {
+            console.log('No training samples card found in response');
+        }
+    })
+    .catch(error => {
+        console.error('Error refreshing training preview:', error);
+        // Show error notification
+        showRefreshNotification(currentEpoch, true);
+    });
+}
+
+function showRefreshNotification(epoch, isError = false) {
+    // Create a small notification
+    const notification = document.createElement('div');
+    notification.className = `alert ${isError ? 'alert-danger' : 'alert-info'} alert-dismissible fade show position-fixed`;
+    notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 300px;';
+    
+    const icon = isError ? 'fas fa-exclamation-triangle' : 'fas fa-sync-alt';
+    const message = isError 
+        ? `Error refreshing training images${epoch ? ` for epoch ${epoch}` : ''}`
+        : `Training images updated${epoch ? ` for epoch ${epoch}` : ''}`;
+    
+    notification.innerHTML = `
+        <i class="${icon} me-2"></i>
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    document.body.appendChild(notification);
+    
+    // Auto-remove after 3 seconds
+    setTimeout(() => {
+        if (notification.parentNode) {
+            notification.remove();
+        }
+    }, 3000);
+}
+</script>
+
+<script>
+// MLflow Registry Management Functions (always available)
+
+
 function registerModel(modelId) {
     if (!confirm('Register this model in MLflow Model Registry?')) {
         return;
@@ -683,6 +972,23 @@ function openImageModal(imageUrl, title) {
     modalInstance.show();
 }
 
+function downloadImage() {
+    const img = document.getElementById('modalImage');
+    const title = document.getElementById('imageModalLabel').textContent;
+    
+    if (!img || !img.src) return;
+    
+    // Create a temporary link element
+    const link = document.createElement('a');
+    link.href = img.src;
+    link.download = `${title.replace(/\s+/g, '_')}.png`;
+    
+    // Trigger download
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
 // Refresh logs button
 document.addEventListener('DOMContentLoaded', function() {
     const refreshBtn = document.getElementById('modal-refresh-logs');
@@ -705,6 +1011,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 
+
 {% if messages %}
   <div class="container mt-3">
     {% for message in messages %}
@@ -721,4 +1028,4 @@ document.addEventListener('DOMContentLoaded', function() {
   <div class="alert alert-warning">MLflow error: {{ mlflow_error }}</div>
 {% endif %}
 
-{% endblock %}
+{% endblock content %}

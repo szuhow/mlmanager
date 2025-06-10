@@ -40,8 +40,11 @@ class TrainingTemplateForm(forms.ModelForm):
         fields = [
             'name', 'description', 'model_type', 'batch_size', 'epochs', 
             'learning_rate', 'validation_split', 'resolution', 'device',
-            'use_random_flip', 'use_random_rotate', 'use_random_scale', 
-            'use_random_intensity', 'crop_size', 'num_workers', 'is_default'
+            'use_random_flip', 'flip_probability', 'use_random_rotate', 'rotation_range',
+            'use_random_scale', 'scale_range_min', 'scale_range_max', 
+            'use_random_intensity', 'intensity_range', 'use_random_crop', 'crop_size',
+            'use_elastic_transform', 'elastic_alpha', 'elastic_sigma',
+            'use_gaussian_noise', 'noise_std', 'num_workers', 'is_default'
         ]
         widgets = {
             'description': forms.Textarea(attrs={'rows': 3}),
@@ -59,10 +62,21 @@ class TrainingTemplateForm(forms.ModelForm):
             'resolution': 'Training image resolution. Higher resolutions require more memory.',
             'device': 'Device to use for training. Auto will detect the best available device.',
             'use_random_flip': 'Apply random horizontal flip augmentation',
+            'flip_probability': 'Probability of applying flip (0.0-1.0)',
             'use_random_rotate': 'Apply random rotation augmentation',
+            'rotation_range': 'Maximum rotation angle in degrees (±range)',
             'use_random_scale': 'Apply random scaling augmentation',
+            'scale_range_min': 'Minimum scale factor',
+            'scale_range_max': 'Maximum scale factor',
             'use_random_intensity': 'Apply random intensity scaling augmentation',
+            'intensity_range': 'Intensity variation range (±range)',
+            'use_random_crop': 'Apply random cropping for data augmentation',
             'crop_size': 'Size of random crop (pixels)',
+            'use_elastic_transform': 'Apply elastic deformation for medical image augmentation',
+            'elastic_alpha': 'Elastic transformation strength',
+            'elastic_sigma': 'Elastic transformation smoothness',
+            'use_gaussian_noise': 'Add Gaussian noise to simulate real-world conditions',
+            'noise_std': 'Standard deviation of Gaussian noise',
             'num_workers': 'Number of data loading workers',
             'is_default': 'Make this the default template for new trainings',
         }
@@ -141,12 +155,30 @@ class TrainingForm(forms.Form):
         help_text="Device to use for training. Auto will detect the best available device."
     )
     
-    # Augmentation options
-    use_random_flip = forms.BooleanField(initial=True, required=False, help_text="Apply random horizontal flip")
-    use_random_rotate = forms.BooleanField(initial=True, required=False, help_text="Apply random rotation")
-    use_random_scale = forms.BooleanField(initial=True, required=False, help_text="Apply random scaling")
-    use_random_intensity = forms.BooleanField(initial=True, required=False, help_text="Apply random intensity scaling")
+    # Enhanced Augmentation options with richer controls
+    use_random_flip = forms.BooleanField(initial=True, required=False, help_text="Apply random horizontal flip to increase data diversity")
+    flip_probability = forms.FloatField(min_value=0.0, max_value=1.0, initial=0.5, required=False, help_text="Probability of applying flip (0.0-1.0)")
+    
+    use_random_rotate = forms.BooleanField(initial=True, required=False, help_text="Apply random rotation to images")
+    rotation_range = forms.IntegerField(min_value=0, max_value=180, initial=30, required=False, help_text="Maximum rotation angle in degrees (±range)")
+    
+    use_random_scale = forms.BooleanField(initial=True, required=False, help_text="Apply random scaling/zoom to images")
+    scale_range_min = forms.FloatField(min_value=0.1, max_value=2.0, initial=0.8, required=False, help_text="Minimum scale factor")
+    scale_range_max = forms.FloatField(min_value=0.1, max_value=2.0, initial=1.2, required=False, help_text="Maximum scale factor")
+    
+    use_random_intensity = forms.BooleanField(initial=True, required=False, help_text="Apply random intensity/brightness adjustments")
+    intensity_range = forms.FloatField(min_value=0.0, max_value=1.0, initial=0.2, required=False, help_text="Intensity variation range (±range)")
+    
+    use_random_crop = forms.BooleanField(initial=False, required=False, help_text="Apply random cropping for data augmentation")
     crop_size = forms.IntegerField(min_value=16, initial=128, help_text="Size of random crop (pixels)")
+    
+    use_elastic_transform = forms.BooleanField(initial=False, required=False, help_text="Apply elastic deformation for medical image augmentation")
+    elastic_alpha = forms.FloatField(min_value=0.0, max_value=100.0, initial=34.0, required=False, help_text="Elastic transformation strength")
+    elastic_sigma = forms.FloatField(min_value=0.0, max_value=10.0, initial=4.0, required=False, help_text="Elastic transformation smoothness")
+    
+    use_gaussian_noise = forms.BooleanField(initial=False, required=False, help_text="Add Gaussian noise to simulate real-world conditions")
+    noise_std = forms.FloatField(min_value=0.0, max_value=0.1, initial=0.01, required=False, help_text="Standard deviation of Gaussian noise")
+    
     num_workers = forms.IntegerField(min_value=0, initial=4, help_text="Number of data loading workers")
     
     def __init__(self, *args, **kwargs):

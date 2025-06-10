@@ -1,0 +1,15 @@
+{
+  "training_completed": true,
+  "total_epochs": 2,
+  "best_validation_dice": 0.11488071084022522,
+  "final_model_path": "models/organized/2025/06/unet-coronary/unet-coronary_20250610_145730_27249310_v1.0.0/weights/model.pth",
+  "model_directory": "models/organized/2025/06/unet-coronary/unet-coronary_20250610_145730_27249310_v1.0.0",
+  "training_duration": 449.71120142936707,
+  "device_used": "cpu",
+  "dataset_info": {
+    "training_samples": 800,
+    "validation_samples": 200,
+    "total_batches_per_epoch": 50,
+    "validation_batches_per_epoch": 13
+  }
+}

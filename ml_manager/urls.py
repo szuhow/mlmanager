@@ -28,6 +28,9 @@ urlpatterns = [
     path('model/<int:pk>/registry/sync/', views.sync_registry_info, name='sync-registry'),
     path('registry/', views.registry_models_list, name='registry-list'),
     
+    # MLflow Dashboard redirect
+    path('mlflow/', views.mlflow_redirect_view, name='mlflow-dashboard'),
+    
     # Training log URL
     path('model/<int:model_id>/logs/', views.get_training_log, name='model-training-log'),
     path('model/<int:pk>/logs/', views.ModelLogsView.as_view(), name='model-logs'),
@@ -35,6 +38,6 @@ urlpatterns = [
     # Training progress URL
     path('model/<int:model_id>/progress/', views.get_training_progress, name='model-progress'),
     
-    # Training preview image URL
-    path('model/<int:model_id>/training-preview/<str:filename>/', views.serve_training_preview_image, name='training-preview-image'),
+    # Training preview image URL  
+    path('model/<int:model_id>/training-preview/<str:filename>', views.serve_training_preview_image, name='training-preview-image'),
 ]

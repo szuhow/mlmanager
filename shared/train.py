@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 logger.info('--- Training script started ---')
 
 import sys
+import time
 import torch
 import torch.optim as optim
 import mlflow
@@ -561,54 +562,111 @@ def save_training_curves(epoch, metrics, logger, model_dir=None):
 
 def save_sample_predictions(model, val_loader, device, epoch, model_dir=None):
     """Save sample predictions from validation set with full image correspondence"""
+    logger.info(f"[PREDICTIONS] Starting to save sample predictions for epoch {epoch+1}")
     model.eval()
+    
+    # Ensure we have a clean matplotlib state
+    plt.close('all')
+    
     with torch.no_grad():
-        # Get a batch of validation data (this will be full-size images due to separate transforms)
-        val_batch = next(iter(val_loader))
-        images = val_batch["image"].to(device)
-        labels = val_batch["label"].to(device)
-        
-        # Generate predictions
-        outputs = model(images)
-        outputs = torch.sigmoid(outputs)
-        outputs = (outputs > 0.5).float()
-        
-        # Create a figure with multiple subplots
-        fig, axes = plt.subplots(3, 4, figsize=(15, 10))
-        plt.suptitle(f'Sample Predictions - Epoch {epoch+1} (Full Images)')
-        
-        for i in range(min(4, images.shape[0])):
-            # Original image
-            axes[0, i].imshow(images[i, 0].cpu(), cmap='gray')
-            axes[0, i].set_title(f'Input #{i+1}')
-            axes[0, i].axis('off')
+        try:
+            val_batch = next(iter(val_loader))
+            images = val_batch["image"].to(device)
+            labels = val_batch["label"].to(device)
+            logger.info(f"[PREDICTIONS] Processing batch with {images.shape[0]} samples, image shape: {images.shape}")
             
-            # Ground truth
-            axes[1, i].imshow(labels[i, 0].cpu(), cmap='gray')
-            axes[1, i].set_title(f'Ground Truth #{i+1}')
-            axes[1, i].axis('off')
+            outputs = model(images)
+            outputs = torch.sigmoid(outputs)
+            outputs = (outputs > 0.5).float()
             
-            # Prediction
-            axes[2, i].imshow(outputs[i, 0].cpu(), cmap='gray')
-            axes[2, i].set_title(f'Prediction #{i+1}')
-            axes[2, i].axis('off')
-        
-        plt.tight_layout()
-        if model_dir:
-            os.makedirs(model_dir, exist_ok=True)
-            filename = os.path.join(model_dir, f'predictions_epoch_{epoch+1}.png')
-        else:
-            filename = f'predictions_epoch_{epoch+1}.png'
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
-        return filename
+            # Create figure with proper settings
+            fig, axes = plt.subplots(3, 4, figsize=(15, 10))
+            plt.suptitle(f'Sample Predictions - Epoch {epoch+1} (Full Images)', fontsize=16)
+            
+            for i in range(min(4, images.shape[0])):
+                # Input image
+                axes[0, i].imshow(images[i, 0].cpu().numpy(), cmap='gray')
+                axes[0, i].set_title(f'Input #{i+1}')
+                axes[0, i].axis('off')
+                
+                # Ground truth
+                axes[1, i].imshow(labels[i, 0].cpu().numpy(), cmap='gray')
+                axes[1, i].set_title(f'Ground Truth #{i+1}')
+                axes[1, i].axis('off')
+                
+                # Prediction
+                axes[2, i].imshow(outputs[i, 0].cpu().numpy(), cmap='gray')
+                axes[2, i].set_title(f'Prediction #{i+1}')
+                axes[2, i].axis('off')
+            
+            plt.tight_layout()
+            
+            # Determine output path - ensure predictions directory exists
+            if model_dir:
+                pred_dir = os.path.join(model_dir, f'predictions/epoch_{epoch+1:03d}')
+                os.makedirs(pred_dir, exist_ok=True)
+                filename = os.path.join(pred_dir, f'predictions_epoch_{epoch+1:03d}.png')
+            else:
+                # Fallback directory
+                fallback_dir = os.path.join('models', 'artifacts', 'predictions')
+                os.makedirs(fallback_dir, exist_ok=True)
+                filename = os.path.join(fallback_dir, f'predictions_epoch_{epoch+1:03d}.png')
+            
+            # Save with high quality and ensure file is written
+            plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white', edgecolor='none')
+            plt.close()
+            
+            # Verify file was created and has content
+            if os.path.exists(filename) and os.path.getsize(filename) > 0:
+                logger.info(f"[PREDICTIONS] Successfully saved prediction samples to: {filename}")
+                return filename
+            else:
+                logger.error(f"[PREDICTIONS] Failed to create valid prediction file: {filename}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"[PREDICTIONS] Error creating sample predictions: {e}")
+            import traceback
+            logger.error(f"[PREDICTIONS] Traceback: {traceback.format_exc()}")
+            plt.close('all')
+            
+            # Try to create a simple fallback image to ensure we have something
+            try:
+                fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+                ax.text(0.5, 0.5, f'Epoch {epoch+1}\nPrediction generation failed\nError: {str(e)[:100]}...', 
+                       ha='center', va='center', fontsize=12, transform=ax.transAxes)
+                ax.set_xlim(0, 1)
+                ax.set_ylim(0, 1)
+                ax.axis('off')
+                
+                if model_dir:
+                    pred_dir = os.path.join(model_dir, f'predictions/epoch_{epoch+1:03d}')
+                    os.makedirs(pred_dir, exist_ok=True)
+                    fallback_filename = os.path.join(pred_dir, f'predictions_epoch_{epoch+1:03d}_error.png')
+                else:
+                    fallback_dir = os.path.join('models', 'artifacts', 'predictions')
+                    os.makedirs(fallback_dir, exist_ok=True)
+                    fallback_filename = os.path.join(fallback_dir, f'predictions_epoch_{epoch+1:03d}_error.png')
+                
+                plt.savefig(fallback_filename, dpi=100, bbox_inches='tight')
+                plt.close()
+                logger.info(f"[PREDICTIONS] Created error fallback image: {fallback_filename}")
+                return fallback_filename
+            except:
+                logger.error(f"[PREDICTIONS] Failed to create even fallback image")
+                return None
 
 def save_config(args, model_dir=None):
     """Save training configuration"""
+    # Extract augmentation flags explicitly
     config = {
         "training_params": vars(args),
-        "device": str(torch.device("cuda" if torch.cuda.is_available() else "cpu")),
+        "device": str(getattr(args, 'device', torch.device("cuda" if torch.cuda.is_available() else "cpu"))),
         "pytorch_version": torch.__version__,
+        "random_flip": getattr(args, 'random_flip', False),
+        "random_rotate": getattr(args, 'random_rotate', False),
+        "random_scale": getattr(args, 'random_scale', False),
+        "random_intensity": getattr(args, 'random_intensity', False),
     }
     if model_dir:
         os.makedirs(model_dir, exist_ok=True)
@@ -769,7 +827,7 @@ def train_model(args):
     logger.info(f"[SETUP] Global log: {global_log_path}")
     logger.info(f"[SETUP] Model directory: {model_dir}")
     
-    # Setup MLflow experiment before starting run
+    # Setup MLflow experiment before handling run
     try:
         current_script_dir = os.path.dirname(os.path.abspath(__file__))
         ml_manager_dir = os.path.abspath(os.path.join(current_script_dir, '..', 'ml_manager'))
@@ -781,7 +839,19 @@ def train_model(args):
     except Exception as e:
         logger.warning(f"[MLFLOW] Failed to setup MLflow experiment: {e}")
     
-    mlflow.start_run(run_id=args.mlflow_run_id)
+    # Handle MLflow run in subprocess context
+    # The run should already be active from Django, but check to be safe
+    current_run = mlflow.active_run()
+    if current_run and current_run.info.run_id == args.mlflow_run_id:
+        logger.info(f"[MLFLOW] Continuing active run {args.mlflow_run_id}")
+    else:
+        # If no active run or different run ID, start the specified run
+        if current_run:
+            mlflow.end_run()  # End any existing run first
+        mlflow.start_run(run_id=args.mlflow_run_id)
+        logger.info(f"[MLFLOW] Started run {args.mlflow_run_id} in training subprocess")
+    
+    training_start_time = time.time()  # Track total training duration
 
     # Initialize system monitoring for MLflow
     system_monitor = None
@@ -957,6 +1027,8 @@ def train_model(args):
         epoch_history = []  # Track metrics for each epoch
         
         for epoch in range(args.epochs):
+            epoch_start_time = time.time()  # Track epoch timing
+            
             # Log epoch start with detailed information
             logger.info(f"[EPOCH] Starting epoch {epoch+1}/{args.epochs}")
             logger.info(f"[EPOCH] Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
@@ -1093,30 +1165,109 @@ def train_model(args):
             mlflow.log_metrics(metrics, step=epoch)
             epoch_history.append(metrics)  # Save metrics for this epoch
             
-            # Save sample predictions every 5 epochs and on best model
-            if epoch % 5 == 0 or val_dice > best_val_dice:
-                pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir)
-                mlflow.log_artifact(pred_file)
+            # Enhanced MLflow artifact logging using the new artifact manager
+            try:
+                from shared.utils.mlflow_artifact_manager import log_epoch_artifacts
+                
+                # Prepare artifacts dictionary for this epoch
+                epoch_artifacts = {}
+                
+                # Save sample predictions every epoch (not just every 5 epochs)
+                try:
+                    pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir)
+                    if pred_file and os.path.exists(pred_file):
+                        epoch_artifacts['predictions'] = pred_file
+                        mlflow.log_artifact(pred_file, artifact_path=f"predictions/epoch_{epoch+1:03d}")
+                        logger.info(f"[MLFLOW] Successfully logged prediction samples: {pred_file}")
+                    else:
+                        logger.warning(f"[MLFLOW] Prediction file was not created or does not exist: {pred_file}")
+                except Exception as pred_error:
+                    logger.error(f"[MLFLOW] Failed to save/log sample predictions: {pred_error}")
                 
                 # Save enhanced training curves if we have enough data
-                if len(epoch_history) >= 2 and val_dice > best_val_dice:
-                    # Create the model directory for enhanced artifacts
-                    model_family = getattr(args, 'model_family', 'UNet-Coronary')
-                    temp_model_dir, _ = create_organized_model_directory(
-                        model_id=args.model_id, 
-                        model_family=model_family, 
-                        version="1.0.0"
-                    )
+                if len(epoch_history) >= 2:
+                    # Use the existing model directory instead of creating a new one
                     
                     enhanced_curves_file = save_enhanced_training_curves(
-                        epoch_history, temp_model_dir, epoch
+                        epoch_history, model_dir, epoch
+                    )
+                    if enhanced_curves_file:
+                        epoch_artifacts['training_curves'] = enhanced_curves_file
+                        # Log training curves with organized path
+                        mlflow.log_artifact(enhanced_curves_file, artifact_path=f"visualizations/training_curves/epoch_{epoch+1:03d}")
+                    
+                    # Save model comparison artifacts
+                    comparison_artifacts = save_model_comparison_artifacts(
+                        model_dir, 
+                        {**metrics, 'epoch_history': epoch_history}, 
+                        epoch
+                    )
+                    if comparison_artifacts:
+                        for i, artifact in enumerate(comparison_artifacts):
+                            epoch_artifacts[f'comparison_{i}'] = artifact
+                            # Log comparison artifacts with organized paths
+                            mlflow.log_artifact(artifact, artifact_path=f"visualizations/comparisons/epoch_{epoch+1:03d}")
+                
+                # Save current epoch configuration and log it
+                epoch_config = {
+                    'epoch': epoch + 1,
+                    'learning_rate': optimizer.param_groups[0]['lr'],
+                    'batch_size': args.batch_size,
+                    'device': str(device),
+                    'metrics': metrics
+                }
+                config_file = os.path.join(model_dir, 'logs', f'epoch_{epoch+1:03d}_config.json')
+                os.makedirs(os.path.dirname(config_file), exist_ok=True)
+                with open(config_file, 'w') as f:
+                    json.dump(epoch_config, f, indent=2)
+                epoch_artifacts['config'] = config_file
+                mlflow.log_artifact(config_file, artifact_path=f"config/epoch_{epoch+1:03d}")
+                
+                # Prepare metadata for this epoch
+                epoch_metadata = {
+                    'learning_rate': optimizer.param_groups[0]['lr'],
+                    'batch_size': args.batch_size,
+                    'total_batches': len(train_loader),
+                    'model_family': getattr(args, 'model_family', 'UNet-Coronary'),
+                    'device': str(device),
+                    'optimizer': 'Adam',
+                    'loss_function': 'DiceLoss',
+                    'epoch_duration': time.time() - epoch_start_time if 'epoch_start_time' in locals() else 0
+                }
+                
+                # Log using enhanced artifact manager
+                logged_paths = log_epoch_artifacts(
+                    epoch=epoch + 1,  # 1-based epoch numbering
+                    model_state=model.state_dict() if val_dice > best_val_dice else None,
+                    metrics=metrics,
+                    artifacts=epoch_artifacts,
+                    metadata=epoch_metadata
+                )
+                
+                logger.info(f"[MLFLOW] Enhanced artifact logging completed for epoch {epoch+1}: {len(logged_paths)} artifacts")
+                logger.info(f"[MLFLOW] Artifact paths: {list(logged_paths.keys())}")
+                
+            except Exception as e:
+                logger.warning(f"[MLFLOW] Enhanced artifact logging failed, falling back to basic logging: {e}")
+                
+                # Fallback to original artifact logging - Generate predictions every epoch
+                pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir)
+                if pred_file:
+                    mlflow.log_artifact(pred_file, artifact_path=f"predictions/epoch_{epoch+1:03d}")
+                    logger.info(f"[MLFLOW] Fallback: Successfully logged prediction samples for epoch {epoch+1}")
+                
+                # Save training curves when we have enough data
+                if len(epoch_history) >= 2:
+                    # Use the existing model directory instead of creating a new one
+                    
+                    enhanced_curves_file = save_enhanced_training_curves(
+                        epoch_history, model_dir, epoch
                     )
                     if enhanced_curves_file:
                         mlflow.log_artifact(enhanced_curves_file)
                     
-                    # Save model comparison artifacts
                     comparison_artifacts = save_model_comparison_artifacts(
-                        temp_model_dir, 
+                        model_dir, 
                         {**metrics, 'epoch_history': epoch_history}, 
                         epoch
                     )
@@ -1135,14 +1286,8 @@ def train_model(args):
             if val_dice > best_val_dice:
                 best_val_dice = val_dice
                 
-                # Create organized model path with metadata
+                # Use existing model directory instead of creating a new one
                 model_name = f"model_{args.model_id if args.model_id else 'unknown'}_epoch_{epoch+1}_dice_{val_dice:.3f}"
-                model_family = getattr(args, 'model_family', 'UNet-Coronary')
-                model_dir, unique_id = create_organized_model_directory(
-                    model_id=args.model_id, 
-                    model_family=model_family, 
-                    version="1.0.0"
-                )
                 
                 best_model_path = os.path.join(model_dir, "weights", "model.pth")
                 torch.save(model.state_dict(), best_model_path)
@@ -1159,26 +1304,267 @@ def train_model(args):
                     arch_info=arch_info
                 )
                 
-                # Log artifacts to MLflow
-                mlflow.log_artifact(best_model_path)
-                mlflow.log_artifact(metadata_path)
+                # Enhanced MLflow artifact logging for best model
+                mlflow.log_artifact(best_model_path, artifact_path=f"checkpoints/best_model/epoch_{epoch+1:03d}")
+                mlflow.log_artifact(metadata_path, artifact_path=f"checkpoints/best_model/metadata")
+                
+                # Log current epoch metrics as best model context
+                best_model_context = {
+                    'epoch': epoch + 1,
+                    'validation_dice': val_dice,
+                    'validation_loss': val_loss,
+                    'train_dice': train_dice,
+                    'train_loss': epoch_loss,
+                    'learning_rate': optimizer.param_groups[0]['lr'],
+                    'improvement': val_dice - best_val_dice if best_val_dice != -1 else val_dice,
+                    'model_path': best_model_path,
+                    'timestamp': time.time()
+                }
+                
+                context_file = os.path.join(model_dir, "weights", "best_model_context.json")
+                with open(context_file, 'w') as f:
+                    json.dump(best_model_context, f, indent=2, default=str)
+                
+                mlflow.log_artifact(context_file, artifact_path=f"checkpoints/best_model/context")
                 
                 logger.info(f"Saved new best model with val_dice: {val_dice:.4f} at {best_model_path}")
+                logger.info(f"[MLFLOW] Best model artifacts logged to checkpoints/best_model/epoch_{epoch+1:03d}")
             
             if callback:
                 callback.on_epoch_end(epoch + 1, metrics)
 
         logger.info(f"Training completed. Best validation Dice score: {best_val_dice:.4f}")
         
-        # Log final model with signature
-        mlflow.pytorch.log_model(
-            model,
-            "model",
-            input_example=sample_batch["image"].cpu().numpy(),
-        )
-        logger.info("[MLFLOW] Model logged to MLflow under \\'model\\' artifact.")
+        # Enhanced final model logging using the new artifact manager
+        try:
+            from shared.utils.mlflow_artifact_manager import log_final_model
+            
+            # Prepare comprehensive model information
+            model_info = {
+                'architecture': getattr(arch_info, 'display_name', 'MONAI UNet') if arch_info else 'MONAI UNet',
+                'framework': getattr(arch_info, 'framework', 'PyTorch') if arch_info else 'PyTorch',
+                'model_family': getattr(args, 'model_family', 'UNet-Coronary'),
+                'architecture_key': getattr(arch_info, 'key', 'monai_unet') if arch_info else 'monai_unet',
+                'version': getattr(arch_info, 'version', '1.0.0') if arch_info else '1.0.0',
+                'total_parameters': sum(p.numel() for p in model.parameters()),
+                'trainable_parameters': sum(p.numel() for p in model.parameters() if p.requires_grad),
+                'model_size_mb': sum(p.numel() * p.element_size() for p in model.parameters()) / (1024 * 1024),
+                'training_config': {
+                    'epochs': args.epochs,
+                    'batch_size': args.batch_size,
+                    'learning_rate': args.learning_rate,
+                    'optimizer': 'Adam',
+                    'loss_function': 'DiceLoss',
+                    'device': str(device),
+                    'validation_split': args.validation_split
+                },
+                'data_info': {
+                    'total_training_batches': len(train_loader),
+                    'total_validation_batches': len(val_loader),
+                    'crop_size': args.crop_size,
+                    'augmentations': {
+                        'random_flip': getattr(args, 'random_flip', False),
+                        'random_rotate': getattr(args, 'random_rotate', False),
+                        'random_scale': getattr(args, 'random_scale', False),
+                        'random_intensity': getattr(args, 'random_intensity', False)
+                    }
+                }
+            }
+            
+            # Best metrics summary
+            best_metrics = {
+                'best_val_dice': best_val_dice,
+                'final_train_loss': epoch_history[-1]['train_loss'] if epoch_history else 0.0,
+                'final_val_loss': epoch_history[-1]['val_loss'] if epoch_history else 0.0,
+                'final_train_dice': epoch_history[-1]['train_dice'] if epoch_history else 0.0,
+                'final_val_dice': epoch_history[-1]['val_dice'] if epoch_history else 0.0,
+                'total_epochs_trained': len(epoch_history),
+                'convergence_epoch': next((i+1 for i, h in enumerate(epoch_history) if h['val_dice'] == best_val_dice), len(epoch_history))
+            }
+            
+            # Use the model directory that was created during training
+            final_model_dir = model_dir if 'model_dir' in locals() else None
+            
+            if final_model_dir:
+                # Log using enhanced artifact manager
+                final_logged_paths = log_final_model(
+                    model_info=model_info,
+                    model_directory=final_model_dir,
+                    best_metrics=best_metrics
+                )
+                
+                # Additional comprehensive artifact logging using MLflow APIs
+                logger.info("[MLFLOW] Logging additional comprehensive artifacts...")
+                
+                # Log final training history as JSON
+                history_file = os.path.join(final_model_dir, "training_history.json")
+                with open(history_file, 'w') as f:
+                    json.dump({
+                        'epoch_history': epoch_history,
+                        'best_metrics': best_metrics,
+                        'training_summary': {
+                            'total_epochs': len(epoch_history),
+                            'best_epoch': next((i+1 for i, h in enumerate(epoch_history) if h['val_dice'] == best_val_dice), len(epoch_history)),
+                            'final_lr': optimizer.param_groups[0]['lr'],
+                            'model_parameters': sum(p.numel() for p in model.parameters())
+                        }
+                    }, f, indent=2)
+                mlflow.log_artifact(history_file, artifact_path="final_model/training_history")
+                
+                # Log final model state with comprehensive metadata
+                if best_model_path and os.path.exists(best_model_path):
+                    mlflow.log_artifact(best_model_path, artifact_path="final_model/weights")
+                
+                # Log complete training configuration
+                final_config = {
+                    'model_info': model_info,
+                    'training_args': vars(args),
+                    'final_metrics': best_metrics,
+                    'device_info': {
+                        'device': str(device),
+                        'cuda_available': torch.cuda.is_available(),
+                        'cuda_device_count': torch.cuda.device_count() if torch.cuda.is_available() else 0
+                    }
+                }
+                config_file = os.path.join(final_model_dir, "complete_config.json")
+                with open(config_file, 'w') as f:
+                    json.dump(final_config, f, indent=2, default=str)
+                mlflow.log_artifact(config_file, artifact_path="final_model/configuration")
+                
+                # Log PyTorch model using MLflow's model logging
+                try:
+                    mlflow.pytorch.log_model(
+                        model,
+                        "pytorch_model",
+                        input_example=sample_batch["image"][:1].cpu().numpy(),  # Single sample
+                        signature=mlflow.models.infer_signature(
+                            sample_batch["image"][:1].cpu().numpy(),
+                            torch.sigmoid(model(sample_batch["image"][:1].to(device))).cpu().numpy()
+                        )
+                    )
+                    logger.info("[MLFLOW] PyTorch model logged with signature and input example")
+                except Exception as model_log_error:
+                    logger.warning(f"[MLFLOW] Failed to log PyTorch model with signature: {model_log_error}")
+                    # Fallback without signature
+                    mlflow.pytorch.log_model(model, "pytorch_model_fallback")
+                
+                logger.info(f"[MLFLOW] Enhanced final model logging completed: {len(final_logged_paths)} artifacts")
+            else:
+                logger.warning("[MLFLOW] No model directory available for enhanced logging, using fallback")
+                raise Exception("No model directory for enhanced logging")
+                
+        except Exception as e:
+            logger.warning(f"[MLFLOW] Enhanced final model logging failed, using fallback: {e}")
+            
+            # Fallback to original final model logging
+            try:
+                mlflow.pytorch.log_model(
+                    model,
+                    "model",
+                    input_example=sample_batch["image"][:1].cpu().numpy(),
+                    signature=mlflow.models.infer_signature(
+                        sample_batch["image"][:1].cpu().numpy(),
+                        torch.sigmoid(model(sample_batch["image"][:1].to(device))).cpu().numpy()
+                    )
+                )
+                logger.info("[MLFLOW] Model logged to MLflow under 'model' artifact (fallback with signature).")
+            except Exception as fallback_signature_error:
+                logger.warning(f"[MLFLOW] Failed to log fallback model with signature: {fallback_signature_error}")
+                # Final fallback without signature
+                mlflow.pytorch.log_model(
+                    model,
+                    "model",
+                    input_example=sample_batch["image"][:1].cpu().numpy(),
+                )
+                logger.info("[MLFLOW] Model logged to MLflow under 'model' artifact (fallback without signature).")
         
-        # Register model in MLflow Model Registry
+        # Enhanced training artifacts and summary logging
+        try:
+            # Log training logs with comprehensive organization
+            from shared.utils.mlflow_artifact_manager import MLflowArtifactManager
+            
+            with MLflowArtifactManager() as artifact_manager:
+                # Collect all training logs
+                log_files = [
+                    os.path.join('models', 'artifacts', 'training.log'),
+                    os.path.join(model_dir, 'logs', 'training.log') if 'model_dir' in locals() else None
+                ]
+                log_files = [f for f in log_files if f and os.path.exists(f)]
+                
+                if log_files:
+                    logged_log_paths = artifact_manager.log_training_logs(log_files, "training")
+                    logger.info(f"[MLFLOW] Logged {len(logged_log_paths)} training log files")
+                    
+                    # Also log individual log files with organized paths
+                    for log_file in log_files:
+                        mlflow.log_artifact(log_file, artifact_path="logs/training")
+                
+                # Log complete training summary
+                training_summary = {
+                    'training_completed': True,
+                    'total_epochs': len(epoch_history),
+                    'best_validation_dice': best_val_dice,
+                    'final_model_path': best_model_path,
+                    'model_directory': model_dir if 'model_dir' in locals() else None,
+                    'training_duration': time.time() - training_start_time if 'training_start_time' in locals() else None,
+                    'device_used': str(device),
+                    'dataset_info': {
+                        'training_samples': len(train_ds),
+                        'validation_samples': len(val_ds),
+                        'total_batches_per_epoch': len(train_loader),
+                        'validation_batches_per_epoch': len(val_loader)
+                    }
+                }
+                
+                summary_file = os.path.join('models', 'artifacts', 'training_summary.json')
+                os.makedirs(os.path.dirname(summary_file), exist_ok=True)
+                with open(summary_file, 'w') as f:
+                    json.dump(training_summary, f, indent=2, default=str)
+                
+                mlflow.log_artifact(summary_file, artifact_path="summaries/training")
+                logger.info("[MLFLOW] Comprehensive training summary logged")
+                
+        except Exception as e:
+            logger.warning(f"[MLFLOW] Failed to log training logs with enhanced manager: {e}")
+            
+            # Fallback: Log training logs using basic MLflow artifact APIs
+            try:
+                # Log available training logs
+                fallback_logs = [
+                    'artifacts/training_logs/training.log',
+                    'models/artifacts/training.log'
+                ]
+                
+                for log_path in fallback_logs:
+                    if os.path.exists(log_path):
+                        mlflow.log_artifact(log_path, artifact_path="logs/training_fallback")
+                        logger.info(f"[MLFLOW] Fallback logged: {log_path}")
+                        
+                # Create and log basic training summary
+                basic_summary = {
+                    'training_completed': True,
+                    'epochs': len(epoch_history),
+                    'best_dice': best_val_dice,
+                    'device': str(device)
+                }
+                
+                fallback_summary_file = 'models/artifacts/basic_training_summary.json'
+                os.makedirs(os.path.dirname(fallback_summary_file), exist_ok=True)
+                with open(fallback_summary_file, 'w') as f:
+                    json.dump(basic_summary, f, indent=2)
+                
+                mlflow.log_artifact(fallback_summary_file, artifact_path="summaries/basic")
+                        
+            except Exception as fallback_e:
+                logger.warning(f"[MLFLOW] Fallback log artifact also failed: {fallback_e}")
+        
+        # Log interactive training plot if available
+        try:
+            interactive_plot_file = save_interactive_training_plot(epoch_history, model_dir)
+            if interactive_plot_file:
+                mlflow.log_artifact(interactive_plot_file)
+        except Exception as e:
+            logger.warning(f"[MLFLOW] Failed to log interactive plot: {e}")
         if hasattr(args, 'model_id') and args.model_id is not None:
             try:
                 # Import registry functions
@@ -1240,14 +1626,6 @@ def train_model(args):
             except Exception as e:
                 logger.warning(f"[REGISTRY] Model registration failed: {e}")
         
-        # Log final artifacts
-        mlflow.log_artifact('artifacts/training_logs/training.log')
-        
-        # Save interactive training plot (plotly HTML)
-        interactive_plot_file = save_interactive_training_plot(epoch_history, model_dir)
-        if interactive_plot_file:
-            mlflow.log_artifact(interactive_plot_file)
-        
         if callback:
             callback.on_training_end({"best_val_dice": best_val_dice})
     except Exception as e:
@@ -1264,11 +1642,13 @@ def train_model(args):
             except Exception as e:
                 logger.warning(f"[MONITORING] Failed to stop system monitoring: {e}")
         
-        mlflow.end_run()
+        # Only call mlflow.end_run() at the very end, after all logging is complete
+        if mlflow.active_run():
+            mlflow.end_run()
 
 # Placeholder for save_interactive_training_plot
 def save_interactive_training_plot(epoch_history, model_dir):
-    logger.info("[PLOT] `save_interactive_training_plot` called, placeholder implementation. Skipping actual plot generation.")
+    logger.info("[PLOT] `save_interactive_training_plot` called, placeholder implementation.")
     # Example: Create a dummy file to satisfy logging if needed
     # dummy_plot_path = os.path.join(model_dir, "interactive_plot_placeholder.html")
     # with open(dummy_plot_path, "w") as f:
@@ -1429,23 +1809,69 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
             
             logger.info(f"Saved prediction to {output_filename}")
             
-            # Log prediction to MLflow if a run is active
+            # Enhanced MLflow artifact logging for predictions
             try:
                 if mlflow.active_run():
-                    mlflow.log_artifact(output_filename, artifact_path="predictions")
+                    # Log all prediction outputs with organized structure
+                    mlflow.log_artifact(output_filename, artifact_path="predictions/comparisons")
+                    mlflow.log_artifact(input_only_filename, artifact_path="predictions/inputs")
+                    mlflow.log_artifact(pred_only_filename, artifact_path="predictions/outputs")
+                    
+                    # Create and log prediction metadata
+                    prediction_metadata = {
+                        'input_file': os.path.basename(input_file),
+                        'prediction_timestamp': time.time(),
+                        'device_used': str(device),
+                        'model_type': model_type,
+                        'resolution': resolution,
+                        'input_shape': img.shape,
+                        'output_shape': pred.shape,
+                        'prediction_threshold': 0.5,
+                        'files_generated': {
+                            'comparison': os.path.basename(output_filename),
+                            'input_only': os.path.basename(input_only_filename),
+                            'prediction_only': os.path.basename(pred_only_filename)
+                        }
+                    }
+                    
+                    # Save metadata file
+                    metadata_filename = os.path.join(output_dir, f"metadata_{os.path.splitext(os.path.basename(input_file))[0]}.json")
+                    with open(metadata_filename, 'w') as f:
+                        json.dump(prediction_metadata, f, indent=2, default=str)
+                    
+                    mlflow.log_artifact(metadata_filename, artifact_path="predictions/metadata")
+                    
+                    logger.info(f"[MLFLOW] Logged prediction artifacts for {os.path.basename(input_file)}")
+                    
             except Exception as e:
                 logger.warning(f"Failed to log prediction to MLflow: {e}")
 
 def inference_mode(args):
-    """Run the model in inference mode"""
+    """Run the model in inference mode with enhanced MLflow logging"""
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)s %(message)s',
         handlers=[logging.StreamHandler(sys.stdout)],
         force=True
     )
+    
+    inference_start_time = time.time()
+    
     if args.mlflow_run_id:
         mlflow.start_run(run_id=args.mlflow_run_id)
+        
+        # Log inference parameters
+        mlflow.log_param("inference_mode", True)
+        mlflow.log_param("input_path", args.input_path)
+        mlflow.log_param("output_dir", args.output_dir)
+        mlflow.log_param("device", args.device)
+        mlflow.log_param("model_type", getattr(args, 'model_type', 'unet'))
+        mlflow.log_param("resolution", getattr(args, 'resolution', 'original'))
+        
+        # Set inference tags
+        mlflow.set_tag("task", "inference")
+        mlflow.set_tag("mode", "prediction")
+        
     try:
         run_inference(
             model_path=args.model_path,
@@ -1456,6 +1882,45 @@ def inference_mode(args):
             model_type=getattr(args, 'model_type', 'unet'),
             resolution=getattr(args, 'resolution', 'original')
         )
+        
+        # Log inference summary if MLflow run is active
+        if args.mlflow_run_id and mlflow.active_run():
+            inference_duration = time.time() - inference_start_time
+            
+            # Count input files
+            if os.path.isdir(args.input_path):
+                input_count = len([f for f in os.listdir(args.input_path) 
+                                 if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp'))])
+            else:
+                input_count = 1
+            
+            # Count output files
+            output_count = len([f for f in os.listdir(args.output_dir) 
+                              if f.lower().endswith(('.png', '.jpg', '.jpeg'))]) if os.path.exists(args.output_dir) else 0
+            
+            mlflow.log_metric("inference_duration_seconds", inference_duration)
+            mlflow.log_metric("input_files_processed", input_count)
+            mlflow.log_metric("output_files_generated", output_count)
+            mlflow.log_metric("processing_rate_files_per_second", input_count / inference_duration if inference_duration > 0 else 0)
+            
+            # Create and log inference summary
+            inference_summary = {
+                'inference_completed': True,
+                'duration_seconds': inference_duration,
+                'input_files_processed': input_count,
+                'output_files_generated': output_count,
+                'processing_rate': input_count / inference_duration if inference_duration > 0 else 0,
+                'device_used': args.device,
+                'model_type': getattr(args, 'model_type', 'unet'),
+                'resolution': getattr(args, 'resolution', 'original')
+            }
+            
+            summary_file = os.path.join(args.output_dir, 'inference_summary.json')
+            with open(summary_file, 'w') as f:
+                json.dump(inference_summary, f, indent=2, default=str)
+            
+            mlflow.log_artifact(summary_file, artifact_path="inference/summary")
+            
     finally:
         if args.mlflow_run_id:
             mlflow.end_run()

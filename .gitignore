@@ -163,8 +163,6 @@ cython_debug/
 
 
 *.pth
-.env
 models/organized/*
 shared/datasets/data/*
-.env
 mlruns/*
