@@ -1,5 +1,14 @@
-# Coronary-experiments
+# MLManager - Coronary Artery ML Model Management Platform
 
-Wspólne funkcjonalności można wrzucać do _shared/_ i importować stamtąd w notebookach.
+A comprehensive, enterprise-ready platform for managing machine learning models specialized in coronary artery analysis with MLflow integration and Django web interface.
 
-Uwaga - na ten moment lock na PyTorcha = 2.4.1 ze względu na kompatybilność. Nie podnosimy do ^2.5.0. Wymagany Python==3.11.9.
+## 🏗️ Professional Architecture
+
+MLManager follows industry best practices with clean separation of concerns and scalable architecture:
+
+- **🔧 Configuration Management**: Environment-specific configs for all components
+- **🌐 Django Application**: Service-oriented architecture with REST API
+- **🤖 ML Pipeline**: Organized training, inference, and utilities
+- **🏗️ Infrastructure**: Complete DevOps setup with monitoring and CI/CD
+- **📊 Data Management**: Structured data organization with automated backups
+- **🧪 Testing Strategy**: Comprehensive unit, integration, and e2e tests

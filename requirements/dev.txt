@@ -1,0 +1,15 @@
+-r base.txt
+
+# Development dependencies
+pytest>=7.0.0
+pytest-django>=4.5.0
+pytest-cov>=4.0.0
+black>=22.0.0
+isort>=5.10.0
+flake8>=5.0.0
+mypy>=0.991
+django-debug-toolbar>=3.2.0
+django-extensions>=3.2.0
+ipython>=8.0.0
+jupyter>=1.0.0
+pre-commit>=2.20.0

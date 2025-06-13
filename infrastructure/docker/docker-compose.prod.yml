@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.12.1
+    container_name: mlflow-prod
+    environment:
+      - MLFLOW_TRACKING_URI=http://0.0.0.0:5000
+      - MLFLOW_ARTIFACT_ROOT=/mlflow/artifacts
+      - MLFLOW_BACKEND_STORE_URI=sqlite:////mlflow/data/mlflow.db
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+      - mlflow_data_prod:/mlflow/data
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlflow/data/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+    restart: unless-stopped
+
+  django:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+    container_name: web-prod
+    environment:
+      - PYTHONPATH=/app
+      - DJANGO_SETTINGS_MODULE=core.config.settings
+      - ENVIRONMENT=production
+      - PYTHONUNBUFFERED=1
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    command: >
+      sh -c "python core/manage.py collectstatic --noinput &&
+             python core/manage.py migrate &&
+             python core/manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - django_data_prod:/data
+      - django_static:/app/core/staticfiles
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mlflow
+    restart: unless-stopped
+    shm_size: 2gb
+
+volumes:
+  django_data_prod:
+  mlflow_data_prod:
+  mlflow_artifacts:
+  django_static:
+
+networks:
+  default:
+    driver: bridge

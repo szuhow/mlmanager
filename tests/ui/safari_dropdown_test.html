@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Safari Dropdown Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+        
+        .test-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .test-header {
+            background: #007bff;
+            color: white;
+            padding: 20px;
+        }
+        
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .table th,
+        .table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        .table th {
+            background: #f8f9fa;
+            font-weight: 600;
+        }
+        
+        .table tbody tr:hover {
+            background: #f8f9fa;
+        }
+        
+        /* CUSTOM DROPDOWN - COMPLETELY SEPARATE FROM BOOTSTRAP */
+        .custom-dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .custom-dropdown-toggle {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 0.375rem 0.75rem;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            line-height: 1.5;
+            transition: background-color 0.15s ease-in-out;
+        }
+        
+        .custom-dropdown-toggle:hover {
+            background: #5a6268;
+        }
+        
+        .custom-dropdown-toggle:focus {
+            outline: none;
+            box-shadow: 0 0 0 0.2rem rgba(108, 117, 125, 0.25);
+        }
+        
+        .custom-dropdown-toggle::after {
+            content: "";
+            display: inline-block;
+            margin-left: 0.5rem;
+            vertical-align: 0.125rem;
+            border-top: 0.3em solid;
+            border-right: 0.3em solid transparent;
+            border-bottom: 0;
+            border-left: 0.3em solid transparent;
+            transition: transform 0.15s ease-in-out;
+        }
+        
+        .custom-dropdown.show .custom-dropdown-toggle::after {
+            transform: rotate(180deg);
+        }
+        
+        .custom-dropdown-menu {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            z-index: 1000;
+            display: none;
+            min-width: 10rem;
+            padding: 0.5rem 0;
+            margin: 0.125rem 0 0;
+            font-size: 0.875rem;
+            color: #212529;
+            text-align: left;
+            background-color: #fff;
+            background-clip: padding-box;
+            border: 1px solid rgba(0,0,0,.15);
+            border-radius: 0.25rem;
+            box-shadow: 0 0.5rem 1rem rgba(0,0,0,.175);
+        }
+        
+        .custom-dropdown-menu.show {
+            display: block;
+        }
+        
+        .custom-dropdown-item {
+            display: block;
+            width: 100%;
+            padding: 0.375rem 1rem;
+            clear: both;
+            font-weight: 400;
+            color: #212529;
+            text-align: inherit;
+            text-decoration: none;
+            white-space: nowrap;
+            background-color: transparent;
+            border: 0;
+            cursor: pointer;
+            transition: color 0.15s ease-in-out, background-color 0.15s ease-in-out;
+        }
+        
+        .custom-dropdown-item:hover,
+        .custom-dropdown-item:focus {
+            color: #1e2125;
+            background-color: #e9ecef;
+            text-decoration: none;
+        }
+        
+        /* Safari-specific fixes */
+        @supports (-webkit-touch-callout: none) {
+            .custom-dropdown-menu {
+                -webkit-transform: translate3d(0,0,1px);
+                transform: translate3d(0,0,1px);
+                z-index: 99999 !important;
+            }
+            
+            .custom-dropdown-menu.show {
+                position: fixed !important;
+                z-index: 99999 !important;
+            }
+            
+            .table tbody tr.dropdown-open {
+                z-index: 100000 !important;
+                position: relative !important;
+                -webkit-transform: translate3d(0,0,1px);
+                transform: translate3d(0,0,1px);
+            }
+            
+            .actions-cell {
+                -webkit-transform: translateZ(0);
+                transform: translateZ(0);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <div class="test-header">
+            <h1>🧪 Safari Dropdown Test</h1>
+            <p>Test dropdown functionality in Safari</p>
+        </div>
+        
+        <div style="padding: 20px;">
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Model Name</th>
+                            <th>Status</th>
+                            <th>Progress</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Test Model 1</td>
+                            <td><span style="background: #28a745; color: white; padding: 4px 8px; border-radius: 4px;">Completed</span></td>
+                            <td>100%</td>
+                            <td class="actions-cell">
+                                <div class="custom-dropdown">
+                                    <button class="custom-dropdown-toggle" type="button">
+                                        Actions
+                                    </button>
+                                    <div class="custom-dropdown-menu">
+                                        <a class="custom-dropdown-item" href="#">
+                                            <i>👁️</i> View Details
+                                        </a>
+                                        <a class="custom-dropdown-item" href="#">
+                                            <i>📊</i> Predictions
+                                        </a>
+                                        <a class="custom-dropdown-item" href="#">
+                                            <i>🧠</i> Run Inference
+                                        </a>
+                                        <hr style="margin: 0.5rem 0; border-top: 1px solid #dee2e6;">
+                                        <a class="custom-dropdown-item" href="#" style="color: #dc3545;">
+                                            <i>🗑️</i> Delete
+                                        </a>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Test Model 2</td>
+                            <td><span style="background: #ffc107; color: black; padding: 4px 8px; border-radius: 4px;">Training</span></td>
+                            <td>67%</td>
+                            <td class="actions-cell">
+                                <div class="custom-dropdown">
+                                    <button class="custom-dropdown-toggle" type="button">
+                                        Actions
+                                    </button>
+                                    <div class="custom-dropdown-menu">
+                                        <a class="custom-dropdown-item" href="#">
+                                            <i>👁️</i> View Details
+                                        </a>
+                                        <a class="custom-dropdown-item" href="#">
+                                            <i>⏹️</i> Stop Training
+                                        </a>
+                                        <hr style="margin: 0.5rem 0; border-top: 1px solid #dee2e6;">
+                                        <a class="custom-dropdown-item" href="#" style="color: #dc3545;">
+                                            <i>🗑️</i> Delete
+                                        </a>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Test Model 3</td>
+                            <td><span style="background: #dc3545; color: white; padding: 4px 8px; border-radius: 4px;">Failed</span></td>
+                            <td>0%</td>
+                            <td class="actions-cell">
+                                <div class="custom-dropdown">
+                                    <button class="custom-dropdown-toggle" type="button">
+                                        Actions
+                                    </button>
+                                    <div class="custom-dropdown-menu">
+                                        <a class="custom-dropdown-item" href="#">
+                                            <i>👁️</i> View Details
+                                        </a>
+                                        <a class="custom-dropdown-item" href="#" style="color: #ffc107;">
+                                            <i>🔄</i> Rerun Training
+                                        </a>
+                                        <hr style="margin: 0.5rem 0; border-top: 1px solid #dee2e6;">
+                                        <a class="custom-dropdown-item" href="#" style="color: #dc3545;">
+                                            <i>🗑️</i> Delete
+                                        </a>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <div style="margin-top: 30px; padding: 20px; background: #e9ecef; border-radius: 8px;">
+                <h3>🔍 Debug Info</h3>
+                <p id="debug-info">Click a dropdown to see debug information</p>
+                <button onclick="runDebugTest()" style="margin-top: 10px; padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                    Run Debug Test
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Simple dropdown functionality
+        function initDropdowns() {
+            document.querySelectorAll('.custom-dropdown').forEach(dropdown => {
+                const toggle = dropdown.querySelector('.custom-dropdown-toggle');
+                const menu = dropdown.querySelector('.custom-dropdown-menu');
+                
+                if (toggle && menu) {
+                    toggle.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        
+                        const isOpen = dropdown.classList.contains('show');
+                        
+                        // Close all other dropdowns
+                        document.querySelectorAll('.custom-dropdown.show').forEach(d => {
+                            d.classList.remove('show');
+                            d.querySelector('.custom-dropdown-menu').classList.remove('show');
+                            const row = d.closest('tr');
+                            if (row) row.classList.remove('dropdown-open');
+                        });
+                        
+                        if (!isOpen) {
+                            dropdown.classList.add('show');
+                            menu.classList.add('show');
+                            
+                            const parentRow = dropdown.closest('tr');
+                            if (parentRow) {
+                                parentRow.classList.add('dropdown-open');
+                            }
+                            
+                            // Safari-specific positioning
+                            if (navigator.vendor && navigator.vendor.indexOf('Apple') > -1) {
+                                const rect = toggle.getBoundingClientRect();
+                                menu.style.position = 'fixed';
+                                menu.style.top = (rect.bottom + window.scrollY) + 'px';
+                                menu.style.left = (rect.left + window.scrollX) + 'px';
+                                menu.style.zIndex = '99999';
+                                
+                                // Check if menu would go off screen
+                                const menuRect = menu.getBoundingClientRect();
+                                if (rect.left + menuRect.width > window.innerWidth) {
+                                    menu.style.left = (rect.right + window.scrollX - menuRect.width) + 'px';
+                                }
+                                if (rect.bottom + menuRect.height > window.innerHeight) {
+                                    menu.style.top = (rect.top + window.scrollY - menuRect.height) + 'px';
+                                }
+                            }
+                            
+                            updateDebugInfo('Dropdown opened', dropdown);
+                        }
+                    });
+                }
+            });
+            
+            // Close on outside click
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('.custom-dropdown')) {
+                    document.querySelectorAll('.custom-dropdown.show').forEach(dropdown => {
+                        dropdown.classList.remove('show');
+                        dropdown.querySelector('.custom-dropdown-menu').classList.remove('show');
+                        const row = dropdown.closest('tr');
+                        if (row) row.classList.remove('dropdown-open');
+                    });
+                }
+            });
+        }
+        
+        function updateDebugInfo(action, dropdown) {
+            const debugEl = document.getElementById('debug-info');
+            const menu = dropdown.querySelector('.custom-dropdown-menu');
+            const computedStyle = window.getComputedStyle(menu);
+            
+            debugEl.innerHTML = `
+                <strong>${action}</strong><br>
+                Position: ${computedStyle.position}<br>
+                Z-index: ${computedStyle.zIndex}<br>
+                Display: ${computedStyle.display}<br>
+                Top: ${computedStyle.top}<br>
+                Left: ${computedStyle.left}<br>
+                Safari: ${navigator.vendor && navigator.vendor.indexOf('Apple') > -1 ? 'Yes' : 'No'}<br>
+                User Agent: ${navigator.userAgent}
+            `;
+        }
+        
+        function runDebugTest() {
+            const firstDropdown = document.querySelector('.custom-dropdown');
+            if (firstDropdown) {
+                const toggle = firstDropdown.querySelector('.custom-dropdown-toggle');
+                toggle.click();
+                setTimeout(() => {
+                    updateDebugInfo('Debug test completed', firstDropdown);
+                }, 100);
+            }
+        }
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', initDropdowns);
+    </script>
+</body>
+</html>

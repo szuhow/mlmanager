@@ -1,0 +1,748 @@
+{% extends "ml_manager/base.html" %}
+{% load static %}
+
+{% block title %}ML Models{% endblock %}
+
+{% block extra_css %}
+<style>
+    .progress {
+        transition: width 0.3s ease;
+    }
+    .badge {
+        transition: all 0.3s ease;
+    }
+    #update-indicator {
+        animation: slideInRight 0.3s ease;
+    }
+    @keyframes slideInRight {
+        from { transform: translateX(100%); }
+        to { transform: translateX(0); }
+    }
+    
+    /* Make the models table more prominent and spacious */
+    .table > tbody > tr > td {
+        padding: 1rem 0.75rem;
+        vertical-align: middle;
+    }
+    .table > thead > tr > th {
+        padding: 1rem 0.75rem;
+        font-weight: 600;
+        background-color: #f8f9fa;
+        border-bottom: 2px solid #dee2e6;
+    }
+    .table tbody tr:hover {
+        background-color: #f8f9fa;
+        transform: scale(1.001);
+        transition: all 0.2s ease;
+    }
+    .model-name {
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+    .model-description {
+        font-size: 0.9rem;
+        color: #6c757d;
+        margin-top: 0.25rem;
+    }
+    .status-badge {
+        font-size: 0.9rem;
+        padding: 0.5rem 1rem;
+    }
+    .progress {
+        height: 1.5rem;
+        border-radius: 0.5rem;
+    }
+    .progress-bar {
+        font-size: 0.8rem;
+        font-weight: 600;
+    }
+    .performance-badge {
+        font-size: 0.9rem;
+        padding: 0.5rem 1rem;
+    }
+    
+    /* CUSTOM DROPDOWN - COMPLETELY SEPARATE FROM BOOTSTRAP */
+    .custom-dropdown {
+        position: relative;
+        display: inline-block;
+    }
+    
+    .custom-dropdown-toggle {
+        background: #6c757d;
+        color: white;
+        border: none;
+        padding: 0.375rem 0.75rem;
+        border-radius: 0.375rem;
+        cursor: pointer;
+        font-size: 0.875rem;
+        line-height: 1.5;
+        position: relative;
+        z-index: 1;
+        /* Prevent flickering during updates */
+        transition: none !important;
+        animation: none !important;
+    }
+    
+    .custom-dropdown-toggle:hover {
+        background: #5a6268;
+    }
+    
+    .custom-dropdown-toggle:focus {
+        outline: none;
+        box-shadow: 0 0 0 0.2rem rgba(108, 117, 125, 0.25);
+    }
+    
+    .custom-dropdown-toggle::after {
+        content: '';
+        display: inline-block;
+        margin-left: 0.5rem;
+        vertical-align: 0.15em;
+        border-top: 0.3em solid;
+        border-right: 0.3em solid transparent;
+        border-bottom: 0;
+        border-left: 0.3em solid transparent;
+        transition: transform 0.15s ease;
+    }
+    
+    .custom-dropdown.show .custom-dropdown-toggle::after {
+        transform: rotate(180deg);
+    }
+    
+    .custom-dropdown-menu {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        z-index: 10000;
+        display: none;
+        min-width: 10rem;
+        padding: 0.5rem 0;
+        margin: 0.125rem 0 0;
+        font-size: 0.875rem;
+        color: #212529;
+        text-align: left;
+        list-style: none;
+        background-color: #fff;
+        background-clip: padding-box;
+        border: 1px solid rgba(0,0,0,.15);
+        border-radius: 0.375rem;
+        box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.175);
+        /* Prevent flickering during updates */
+        transition: none !important;
+        animation: none !important;
+        backface-visibility: hidden;
+        will-change: auto;
+    }
+    
+    .custom-dropdown-menu.show {
+        display: block;
+    }
+    
+    .custom-dropdown-menu.dropdown-menu-end {
+        right: 0;
+        left: auto;
+    }
+    
+    .custom-dropdown-menu.dropup {
+        top: auto;
+        bottom: 100%;
+        margin-top: 0;
+        margin-bottom: 0.125rem;
+    }
+    
+    .custom-dropdown-item {
+        display: block;
+        width: 100%;
+        padding: 0.375rem 1rem;
+        clear: both;
+        font-weight: 400;
+        color: #212529;
+        text-align: inherit;
+        text-decoration: none;
+        white-space: nowrap;
+        background-color: transparent;
+        border: 0;
+        cursor: pointer;
+        transition: color 0.15s ease-in-out, background-color 0.15s ease-in-out;
+    }
+    
+    .custom-dropdown-item:hover,
+    .custom-dropdown-item:focus {
+        color: #1e2125;
+        background-color: #e9ecef;
+        text-decoration: none;
+    }
+    
+    .custom-dropdown-item.text-danger:hover,
+    .custom-dropdown-item.text-danger:focus {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+    
+    .custom-dropdown-item.text-warning:hover,
+    .custom-dropdown-item.text-warning:focus {
+        background-color: #fff3cd;
+        color: #856404;
+    }
+    
+    .custom-dropdown-divider {
+        height: 0;
+        margin: 0.5rem 0;
+        overflow: hidden;
+        border-top: 1px solid #dee2e6;
+    }
+    
+    /* Table fixes */
+    .table-responsive {
+        overflow: visible !important;
+    }
+    
+    .table tbody tr {
+        position: relative;
+    }
+    
+    .table tbody td:last-child {
+        overflow: visible !important;
+    }
+    
+    .card-body {
+        overflow: visible !important;
+    }
+    
+    /* Row state management */
+    tbody tr.dropdown-open {
+        z-index: 9999;
+        position: relative;
+    }
+    
+    .actions-cell {
+        position: relative;
+        overflow: visible !important;
+    }
+    
+    /* Additional anti-flicker protections */
+    .custom-dropdown,
+    .custom-dropdown * {
+        backface-visibility: hidden;
+        -webkit-backface-visibility: hidden;
+        transform: translateZ(0);
+        -webkit-transform: translateZ(0);
+    }
+    
+    /* Prevent updates during dropdown interaction */
+    tr[data-update-paused="true"] .progress-bar,
+    tr[data-update-paused="true"] .badge {
+        transition: none !important;
+        animation: none !important;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+{% csrf_token %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>Machine Learning Models</h1>
+    <div>
+        <button id="toggle-updates" class="btn btn-outline-success btn-sm me-2">
+            <i class="fas fa-play"></i> Start Live Updates
+        </button>
+        <button id="manual-refresh" class="btn btn-outline-info btn-sm me-2" title="Manual Refresh">
+            <i class="fas fa-sync-alt"></i>
+        </button>
+        <a href="{% url 'ml_manager:template-list' %}" class="btn btn-outline-secondary me-2">
+            <i class="fas fa-clipboard-list"></i> Templates
+        </a>
+        <a href="{% url 'ml_manager:start-training' %}" class="btn btn-primary">
+            <i class="fas fa-plus"></i> Start New Training
+        </a>
+    </div>
+</div>
+
+<!-- Filters and Search -->
+<div class="card mb-4">
+    <div class="card-body">
+        <form method="get" class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label">Search Models</label>
+                <input type="text" name="search" class="form-control" placeholder="Search by name or description..." value="{{ search_query }}">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Status Filter</label>
+                <select name="status" class="form-select">
+                    <option value="">All Status</option>
+                    <option value="training" {% if status_filter == 'training' %}selected{% endif %}>Training</option>
+                    <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>Completed</option>
+                    <option value="failed" {% if status_filter == 'failed' %}selected{% endif %}>Failed</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Sort By</label>
+                <select name="sort" class="form-select">
+                    <option value="-created_at" {% if sort_by == '-created_at' %}selected{% endif %}>Newest First</option>
+                    <option value="created_at" {% if sort_by == 'created_at' %}selected{% endif %}>Oldest First</option>
+                    <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Name A-Z</option>
+                    <option value="-name" {% if sort_by == '-name' %}selected{% endif %}>Name Z-A</option>
+                    <option value="-best_val_dice" {% if sort_by == '-best_val_dice' %}selected{% endif %}>Best Performance</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">&nbsp;</label>
+                <div class="d-grid">
+                    <button type="submit" class="btn btn-outline-primary">
+                        <i class="fas fa-search"></i> Filter
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="card-title mb-0">Models ({{ models|length }})</h5>
+                    <div id="batch-actions" style="display: none;" class="mt-2">
+                        <button type="button" class="btn btn-sm btn-danger" id="delete-selected-btn">
+                            <i class="fas fa-trash"></i> Delete Selected (<span id="selected-count">0</span>)
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="deselect-all-btn">
+                            <i class="fas fa-times"></i> Deselect All
+                        </button>
+                    </div>
+                </div>
+                <small class="text-muted">
+                    {% if search_query or status_filter %}
+                        Filtered results - <a href="{% url 'ml_manager:model-list' %}">Clear filters</a>
+                    {% endif %}
+                </small>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th style="width: 40px;">
+                                    <input type="checkbox" id="select-all-checkbox" class="form-check-input">
+                                </th>
+                                <th>Name</th>
+                                <th>Status</th>
+                                <th>Progress</th>
+                                <th>Performance</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for model in models %}
+                            <tr data-model-id="{{ model.pk }}" data-model-status="{{ model.status }}">
+                                <td>
+                                    <input type="checkbox" class="form-check-input model-checkbox" value="{{ model.pk }}">
+                                </td>
+                                <td>
+                                    <div class="model-name">{{ model.name }}</div>
+                                    {% if model.description %}
+                                        <div class="model-description">{{ model.description|truncatechars:80 }}</div>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="badge status-badge {% if model.status == 'completed' %}bg-success{% elif model.status == 'training' %}bg-warning{% else %}bg-danger{% endif %}">
+                                        {{ model.status|title }}
+                                    </span>
+                                </td>
+                                <td>
+                                    {% if model.status == 'training' %}
+                                        <div class="progress" style="width: 120px;">
+                                            <div class="progress-bar" role="progressbar" style="width: {{ model.progress_percentage }}%">
+                                                {{ model.current_epoch }}/{{ model.total_epochs }}
+                                            </div>
+                                        </div>
+                                    {% else %}
+                                        <span class="text-muted">{{ model.current_epoch }}/{{ model.total_epochs }}</span>
+                                    {% endif %}
+                                </td>
+                                <td class="performance-cell">
+                                    {% if model.best_val_dice > 0 %}
+                                        <span class="badge performance-badge bg-info">{{ model.best_val_dice|floatformat:3 }}</span>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <small>
+                                        {{ model.created_at|timesince }} ago<br>
+                                        <span class="text-muted">{{ model.created_at|date:"M d, H:i" }}</span>
+                                    </small>
+                                </td>
+                                <td class="actions-cell">
+                                    <div class="custom-dropdown">
+                                        <button class="custom-dropdown-toggle" type="button">
+                                            Actions
+                                        </button>
+                                        <div class="custom-dropdown-menu">
+                                            <a class="custom-dropdown-item" href="{% url 'ml_manager:model-detail' model.pk %}">
+                                                <i class="fas fa-eye"></i> View Details
+                                            </a>
+                                            <a class="custom-dropdown-item" href="{% url 'ml_manager:model-predictions' model.pk %}">
+                                                <i class="fas fa-chart-line"></i> Predictions
+                                            </a>
+                                            {% if model.status == 'completed' %}
+                                            <a class="custom-dropdown-item" href="{% url 'ml_manager:model-inference' model.pk %}">
+                                                <i class="fas fa-brain"></i> Run Inference
+                                            </a>
+                                            <div class="custom-dropdown-divider"></div>
+                                            <a class="custom-dropdown-item" href="{% url 'ml_manager:save-as-template' model.pk %}">
+                                                <i class="fas fa-save"></i> Save as Template
+                                            </a>
+                                            {% endif %}
+                                            {% if model.status == 'failed' %}
+                                            <div class="custom-dropdown-divider"></div>
+                                            <a class="custom-dropdown-item text-warning" href="{% url 'ml_manager:start-training' %}?rerun={{ model.pk }}">
+                                                <i class="fas fa-redo"></i> Rerun Training
+                                            </a>
+                                            {% endif %}
+                                            <div class="custom-dropdown-divider"></div>
+                                            <a class="custom-dropdown-item text-danger" href="{% url 'ml_manager:model-delete' model.pk %}" 
+                                               onclick="return confirm('Are you sure you want to delete this model?');">
+                                                <i class="fas fa-trash"></i> Delete
+                                            </a>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="7" class="text-center py-4">
+                                    <i class="fas fa-database fa-2x text-muted mb-2"></i>
+                                    <p class="text-muted">No models found</p>
+                                    {% if search_query or status_filter %}
+                                        <a href="{% url 'ml_manager:model-list' %}" class="btn btn-sm btn-outline-primary">Clear Filters</a>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MLflow Experiments section moved below and made smaller -->
+<div class="row mt-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="card-title mb-0">MLflow Experiments</h6>
+            </div>
+            <div class="card-body">
+                <div class="list-group list-group-flush">
+                    {% for exp in experiments %}
+                    <a href="http://localhost:5000/#/experiments/{{ exp.experiment_id }}" class="list-group-item list-group-item-action border-0 px-0" target="_blank">
+                        <small>{{ exp.name }}</small>
+                    </a>
+                    {% empty %}
+                    <div class="text-center"><small class="text-muted">No experiments found</small></div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'ml_manager/js/model_progress.js' %}"></script>
+<script src="{% static 'ml_manager/js/safari-dropdown-fixes.js' %}"></script>
+<script>
+// Add CSRF token to the page
+const csrfToken = '{{ csrf_token }}';
+
+document.addEventListener('DOMContentLoaded', function() {
+    const selectAllCheckbox = document.getElementById('select-all-checkbox');
+    const modelCheckboxes = document.querySelectorAll('.model-checkbox');
+    const batchActions = document.getElementById('batch-actions');
+    const selectedCount = document.getElementById('selected-count');
+    const deleteSelectedBtn = document.getElementById('delete-selected-btn');
+    const deselectAllBtn = document.getElementById('deselect-all-btn');
+
+    // CUSTOM DROPDOWN IMPLEMENTATION - NO BOOTSTRAP
+    function initCustomDropdowns() {
+        const dropdowns = document.querySelectorAll('.custom-dropdown');
+        
+        dropdowns.forEach(dropdown => {
+            const toggle = dropdown.querySelector('.custom-dropdown-toggle');
+            const menu = dropdown.querySelector('.custom-dropdown-menu');
+            
+            if (toggle && menu) {
+                // Add click handler with debouncing
+                let clickTimeout = null;
+                
+                toggle.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    // Clear any pending clicks
+                    if (clickTimeout) {
+                        clearTimeout(clickTimeout);
+                    }
+                    
+                    // Debounce the click to prevent rapid toggling
+                    clickTimeout = setTimeout(() => {
+                        const isOpen = menu.classList.contains('show');
+                        
+                        // Close all other dropdowns
+                        closeAllDropdowns();
+                        
+                        if (!isOpen) {
+                            openDropdown(dropdown, toggle, menu);
+                        }
+                        clickTimeout = null;
+                    }, 50); // 50ms debounce
+                });
+            }
+        });
+        
+        // Close dropdowns when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.custom-dropdown')) {
+                closeAllDropdowns();
+            }
+        });
+        
+        // Prevent dropdown from closing when clicking inside
+        document.querySelectorAll('.custom-dropdown-menu').forEach(menu => {
+            menu.addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+        });
+    }
+    
+    function openDropdown(dropdown, toggle, menu) {
+        const parentRow = dropdown.closest('tr');
+        
+        // Pause live updates for this row to prevent flickering
+        if (parentRow && window.modelProgressUpdater) {
+            window.modelProgressUpdater.pauseUpdateForRow(parentRow);
+        }
+        
+        // Add classes
+        dropdown.classList.add('show');
+        menu.classList.add('show');
+        toggle.setAttribute('aria-expanded', 'true');
+        
+        if (parentRow) {
+            parentRow.classList.add('dropdown-open');
+        }
+        
+        // Smart positioning
+        positionDropdown(toggle, menu);
+    }
+    
+    function closeAllDropdowns() {
+        document.querySelectorAll('.custom-dropdown.show').forEach(dropdown => {
+            const toggle = dropdown.querySelector('.custom-dropdown-toggle');
+            const menu = dropdown.querySelector('.custom-dropdown-menu');
+            const parentRow = dropdown.closest('tr');
+            
+            dropdown.classList.remove('show');
+            menu.classList.remove('show', 'dropup', 'dropdown-menu-end');
+            toggle.setAttribute('aria-expanded', 'false');
+            
+            if (parentRow) {
+                parentRow.classList.remove('dropdown-open');
+                // Resume live updates for this row
+                if (window.modelProgressUpdater) {
+                    window.modelProgressUpdater.resumeUpdateForRow(parentRow);
+                }
+            }
+        });
+    }
+    
+    function positionDropdown(toggle, menu) {
+        const rect = toggle.getBoundingClientRect();
+        const windowHeight = window.innerHeight;
+        const windowWidth = window.innerWidth;
+        
+        // Reset classes
+        menu.classList.remove('dropup', 'dropdown-menu-end');
+        
+        // Force a reflow to get accurate measurements
+        menu.style.visibility = 'hidden';
+        menu.style.display = 'block';
+        const menuRect = menu.getBoundingClientRect();
+        menu.style.visibility = '';
+        menu.style.display = '';
+        
+        // Check if dropdown would go off bottom of screen
+        if (rect.bottom + menuRect.height > windowHeight) {
+            menu.classList.add('dropup');
+        }
+        
+        // Check if dropdown would go off right of screen
+        if (rect.left + menuRect.width > windowWidth) {
+            menu.classList.add('dropdown-menu-end');
+        }
+    }
+
+    // Initialize custom dropdowns
+    initCustomDropdowns();
+    
+    // Make modelProgressUpdater available globally for dropdown integration
+    window.modelProgressUpdater = window.modelProgressUpdater || null;
+
+    function updateBatchActions() {
+        const checkedBoxes = document.querySelectorAll('.model-checkbox:checked');
+        const count = checkedBoxes.length;
+        
+        selectedCount.textContent = count;
+        
+        if (count > 0) {
+            batchActions.style.display = 'block';
+        } else {
+            batchActions.style.display = 'none';
+        }
+        
+        // Update select all checkbox state
+        if (count === 0) {
+            selectAllCheckbox.indeterminate = false;
+            selectAllCheckbox.checked = false;
+        } else if (count === modelCheckboxes.length) {
+            selectAllCheckbox.indeterminate = false;
+            selectAllCheckbox.checked = true;
+        } else {
+            selectAllCheckbox.indeterminate = true;
+        }
+    }
+
+    // Select all functionality
+    selectAllCheckbox.addEventListener('change', function() {
+        modelCheckboxes.forEach(checkbox => {
+            checkbox.checked = this.checked;
+        });
+        updateBatchActions();
+    });
+
+    // Individual checkbox functionality
+    modelCheckboxes.forEach(checkbox => {
+        checkbox.addEventListener('change', updateBatchActions);
+    });
+
+    // Deselect all functionality
+    deselectAllBtn.addEventListener('click', function() {
+        modelCheckboxes.forEach(checkbox => {
+            checkbox.checked = false;
+        });
+        selectAllCheckbox.checked = false;
+        selectAllCheckbox.indeterminate = false;
+        updateBatchActions();
+    });
+
+    // Delete selected functionality
+    deleteSelectedBtn.addEventListener('click', function() {
+        const checkedBoxes = document.querySelectorAll('.model-checkbox:checked');
+        const modelIds = Array.from(checkedBoxes).map(cb => cb.value);
+        
+        if (modelIds.length === 0) {
+            alert('No models selected for deletion.');
+            return;
+        }
+        
+        const confirmMessage = `Are you sure you want to delete ${modelIds.length} model(s)? This action cannot be undone.`;
+        
+        if (confirm(confirmMessage)) {
+            // Create form data
+            const formData = new FormData();
+            modelIds.forEach(id => formData.append('model_ids', id));
+            formData.append('csrfmiddlewaretoken', csrfToken);
+            
+            // Show loading state
+            deleteSelectedBtn.disabled = true;
+            deleteSelectedBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+            
+            // Submit batch delete request
+            fetch('{% url "ml_manager:batch-delete-models" %}', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': csrfToken
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Remove deleted rows from the table
+                    checkedBoxes.forEach(checkbox => {
+                        const row = checkbox.closest('tr');
+                        if (row) {
+                            row.style.transition = 'opacity 0.3s ease';
+                            row.style.opacity = '0.3';
+                            row.style.backgroundColor = '#f8d7da';
+                            
+                            setTimeout(() => {
+                                if (row.parentNode) {
+                                    row.remove();
+                                    updateModelCount();
+                                }
+                            }, 1000);
+                        }
+                    });
+                    
+                    // Reset selection
+                    updateBatchActions();
+                    
+                    // Show success message
+                    showNotification('success', `Successfully deleted ${modelIds.length} model(s)`);
+                } else {
+                    alert(data.message || 'Error deleting models');
+                }
+                
+                // Reset button state
+                deleteSelectedBtn.disabled = false;
+                deleteSelectedBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Selected (<span id="selected-count">0</span>)';
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error deleting models');
+                deleteSelectedBtn.disabled = false;
+                deleteSelectedBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Selected (<span id="selected-count">0</span>)';
+            });
+        }
+    });
+
+    // Helper function to update model count in header
+    function updateModelCount() {
+        const visibleRows = document.querySelectorAll('tbody tr:not([data-model-deleted="true"])');
+        const titleElement = document.querySelector('.card-title');
+        if (titleElement) {
+            titleElement.textContent = `Models (${visibleRows.length})`;
+        }
+    }
+
+    // Helper function to show notifications
+    function showNotification(type, message) {
+        // Remove existing notifications
+        const existing = document.querySelector('.notification-toast');
+        if (existing) existing.remove();
+        
+        const toast = document.createElement('div');
+        toast.className = `alert alert-${type} alert-dismissible fade show position-fixed notification-toast`;
+        toast.style.cssText = 'top: 20px; right: 20px; z-index: 15000; min-width: 300px;';
+        toast.innerHTML = `
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        document.body.appendChild(toast);
+        
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.remove();
+            }
+        }, 5000);
+    }
+});
+</script>
+{% endblock %}

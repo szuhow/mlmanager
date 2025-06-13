@@ -1,0 +1,1092 @@
+{% extends "ml_manager/base.html" %}
+{% load static %}
+{% load l10n %}
+
+{% block title %}{{ model.name }} - Details{% endblock %}
+
+{% block extra_css %}
+<style>
+/* Remove dark mode and custom log coloring, use default Bootstrap */
+.log-display, .log-section, .log-entry, #modal-logs-content {
+    background: none !important;
+    color: inherit !important;
+    border-radius: 0 !important;
+    font-family: 'Monaco', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.4;
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    padding: 0;
+}
+
+#modal-logs-content {
+    background-color: #fff !important;
+    color: #212529 !important;
+    font-family: 'Courier New', monospace;
+}
+
+.log-entry {
+    background: none !important;
+    color: inherit !important;
+    border-left: none !important;
+    font-weight: normal !important;
+    padding: 2px 0;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+{% csrf_token %}
+<div class="container-fluid" data-model-id="{{ model.pk }}" data-model-status="{{ model.status }}">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>{{ model.name }}</h1>
+        <div class="d-flex gap-2">
+            <button class="btn btn-outline-secondary" onclick="openLogsModal()">
+                <i class="fas fa-file-alt me-1"></i>
+                Training Logs
+                {% if model.status == 'training' %}
+                <span class="badge bg-warning ms-1">Live</span>
+                {% elif model.status == 'completed' %}
+                <span class="badge bg-success ms-1">Complete</span>
+                {% elif model.status == 'failed' %}
+                <span class="badge bg-danger ms-1">Failed</span>
+                {% endif %}
+            </button>
+            <a href="{% url 'ml_manager:model-inference' model.pk %}" class="btn btn-primary">Run Inference</a>
+            <a href="{% url 'ml_manager:model-list' %}" class="btn btn-secondary">Back to List</a>
+        </div>
+    </div>
+
+    {% if mlflow_error %}
+    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+        <strong>MLflow Warning:</strong> {{ mlflow_error }}
+        <br><small>Training data may still be displayed from cached model information.</small>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endif %}
+
+    <div class="row">
+        <!-- Left Column -->
+        <div class="col-md-6">
+            <!-- Model Information Card -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Model Information</h5>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-4">Status</dt>
+                        <dd class="col-sm-8">
+                            <span class="badge {% if model.status == 'completed' %}bg-success{% elif model.status == 'training' %}bg-warning{% else %}bg-danger{% endif %}">
+                                {{ model.status }}
+                            </span>
+                        </dd>
+
+                        <dt class="col-sm-4">MLflow Run ID</dt>
+                        <dd class="col-sm-8">
+                            {{ model.mlflow_run_id }}
+                            {% if mlflow_ui_url %}
+                            <br>
+                            <a href="{{ mlflow_ui_url }}" target="_blank" class="btn btn-sm btn-outline-primary mt-2">
+                                <i class="fas fa-external-link-alt me-1"></i>View in MLflow
+                            </a>
+                            {% endif %}
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+
+            <!-- Training Progress Card -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Training Progress</h5>
+                </div>
+                <div class="card-body" id="training-progress">
+                    {% if model.status == 'training' %}
+                    <div class="progress progress-enhanced mb-3">
+                        <div class="progress-bar" role="progressbar" 
+                             style="width: {{ progress_percentage|default:0 }}%"
+                             aria-valuenow="{{ model.current_epoch }}" 
+                             aria-valuemin="0" 
+                             aria-valuemax="{{ model.total_epochs }}">
+                            Epoch {{ model.current_epoch }}/{{ model.total_epochs }} ({{ progress_percentage|default:0 }}%)
+                        </div>
+                    </div>
+                    
+                    <!-- Batch progress within current epoch -->
+                    {% if model.total_batches_per_epoch > 0 %}
+                    <div class="progress progress-sm mb-3" style="height: 8px;">
+                        <div class="progress-bar bg-info" role="progressbar" 
+                             style="width: {{ model.batch_progress_percentage|default:0 }}%"
+                             aria-valuenow="{{ model.current_batch }}" 
+                             aria-valuemin="0" 
+                             aria-valuemax="{{ model.total_batches_per_epoch }}">
+                        </div>
+                    </div>
+                    <small class="text-muted mb-3 d-block">
+                        Batch {{ model.current_batch }}/{{ model.total_batches_per_epoch }} in current epoch
+                    </small>
+                    {% endif %}
+                    
+                    <div class="training-metrics">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="metric-item">
+                                    <span class="metric-label">Current Epoch:</span>
+                                    <span class="metric-value"><span id="current-epoch">{{ model.current_epoch }}</span> / <span id="total-epochs">{{ model.total_epochs }}</span></span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Training Loss:</span>
+                                    <span class="metric-value" id="train-loss">{{ model.train_loss|floatformat:4 }}</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Training Dice:</span>
+                                    <span class="metric-value" id="train-dice">{{ model.train_dice|floatformat:4 }}</span>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="metric-item">
+                                    <span class="metric-label">Validation Loss:</span>
+                                    <span class="metric-value" id="val-loss">{{ model.val_loss|floatformat:4 }}</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Validation Dice:</span>
+                                    <span class="metric-value" id="val-dice">{{ model.val_dice|floatformat:4 }}</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Best Validation Dice:</span>
+                                    <span class="metric-value" id="best-val-dice">{{ model.best_val_dice|floatformat:4 }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="d-flex justify-content-between align-items-center">
+                        <button id="stopTrainingBtn" class="btn btn-danger"
+                                {% if model.stop_requested %}disabled{% endif %}>
+                            {% if model.stop_requested %}Stop Requested{% else %}Stop Training{% endif %}
+                        </button>
+                        
+                        <div class="d-flex align-items-center gap-3">
+                            <button id="manualRefreshBtn" class="btn btn-outline-info btn-sm">
+                                <i class="fas fa-sync-alt"></i> Refresh Now
+                            </button>
+                            
+                            <small class="text-muted">
+                                <span id="last-update-time">Updates every 2 seconds</span>
+                            </small>
+                            
+                            <div id="update-status" class="text-success" style="display: none;">
+                                <i class="fas fa-circle" style="font-size: 0.5rem;"></i> Live
+                            </div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-{{ model.status|yesno:'success,danger' }}">
+                        <strong>Training {{ model.status|title }}</strong>
+                        {% if model.status == 'completed' %}
+                            <br><small>Training completed successfully!</small>
+                        {% elif model.status == 'failed' %}
+                            <br><small>Training failed. Check logs for details.</small>
+                        {% endif %}
+                    </div>
+                    
+                    {% if model.best_val_dice %}
+                    <div class="training-metrics">
+                        <div class="metric-item">
+                            <span class="metric-label">Final Validation Dice:</span>
+                            <span class="metric-value">{{ model.best_val_dice|floatformat:4 }}</span>
+                        </div>
+                        {% if model.train_loss %}
+                        <div class="metric-item">
+                            <span class="metric-label">Final Training Loss:</span>
+                            <span class="metric-value">{{ model.train_loss|floatformat:4 }}</span>
+                        </div>
+                        {% endif %}
+                        {% if model.val_loss %}
+                        <div class="metric-item">
+                            <span class="metric-label">Final Validation Loss:</span>
+                            <span class="metric-value">{{ model.val_loss|floatformat:4 }}</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column -->
+        <div class="col-md-6">
+            <!-- MLflow Model Registry Information -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-archive me-2"></i>MLflow Registry
+                    </h5>
+                    <div class="btn-group btn-group-sm">
+                        {% if model.is_registered %}
+                            <button class="btn btn-outline-primary btn-sm" onclick="syncRegistryInfo({{ model.pk }})">
+                                <i class="fas fa-sync-alt"></i> Sync
+                            </button>
+                        {% else %}
+                            <button class="btn btn-primary btn-sm" onclick="registerModel({{ model.pk }})">
+                                <i class="fas fa-plus"></i> Register
+                            </button>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="card-body">
+                    {% if model.is_registered %}
+                    <dl class="row">
+                        <dt class="col-sm-4">Registry Name</dt>
+                        <dd class="col-sm-8" id="registry-name">{{ model.registry_model_name }}</dd>
+                        
+                        <dt class="col-sm-4">Version</dt>
+                        <dd class="col-sm-8" id="registry-version">v{{ model.registry_model_version }}</dd>
+                        
+                        <dt class="col-sm-4">Stage</dt>
+                        <dd class="col-sm-8">
+                            <span id="registry-stage" class="badge 
+                                {% if model.registry_stage == 'Production' %}bg-success
+                                {% elif model.registry_stage == 'Staging' %}bg-warning
+                                {% elif model.registry_stage == 'Archived' %}bg-secondary
+                                {% else %}bg-light text-dark{% endif %}">
+                                {{ model.registry_stage|default:"None" }}
+                            </span>
+                        </dd>
+                        
+                        <dt class="col-sm-4">Registered</dt>
+                        <dd class="col-sm-8">
+                            <i class="fas fa-check-circle text-success"></i>
+                            <small class="text-muted">Model is registered in MLflow Registry</small>
+                        </dd>
+                    </dl>
+                    {% else %}
+                    <div class="alert alert-info mb-0">
+                        <i class="fas fa-info-circle me-2"></i>
+                        <strong>Not Registered</strong><br>
+                        <small>This model is not yet registered in MLflow Model Registry. Click "Register" to add it for better version management and deployment tracking.</small>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Training Configuration Section (Full Width) -->
+    {% if training_details %}
+    <div class="row">
+        <div class="col-12">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-cogs me-2"></i>Training Configuration
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if training_details.error %}
+                        <div class="alert alert-warning">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            {{ training_details.error }}
+                        </div>
+                    {% else %}
+                        <div class="row">
+                            <!-- Basic Configuration -->
+                            <div class="col-md-6">
+                                <h6 class="text-primary mb-3"><i class="fas fa-sliders-h me-1"></i>Training Parameters</h6>
+                                <dl class="row">
+                                    <dt class="col-sm-5">Batch Size:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.batch_size|default:"N/A" }}</dd>
+                                    
+                                    <dt class="col-sm-5">Epochs:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.epochs|default:"N/A" }}</dd>
+                                    
+                                    <dt class="col-sm-5">Learning Rate:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.learning_rate|default:"N/A" }}</dd>
+                                    
+                                    <dt class="col-sm-5">Validation Split:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.validation_split|default:"N/A" }}</dd>
+                                    
+                                    <dt class="col-sm-5">Crop Size:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.crop_size|default:"N/A" }}px</dd>
+                                    
+                                    <dt class="col-sm-5">Workers:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.num_workers|default:"N/A" }}</dd>
+                                </dl>
+                            </div>
+
+                            <!-- Hardware & Environment -->
+                            <div class="col-md-6">
+                                <h6 class="text-success mb-3"><i class="fas fa-microchip me-1"></i>Hardware & Environment</h6>
+                                <dl class="row">
+                                    <dt class="col-sm-5">Device:</dt>
+                                    <dd class="col-sm-7">
+                                        <span class="badge {% if training_details.hardware.device == 'cuda' %}bg-success{% else %}bg-secondary{% endif %}">
+                                            {{ training_details.hardware.device|default:"N/A"|upper }}
+                                        </span>
+                                        {% if training_details.hardware.config_device and training_details.hardware.config_device != training_details.hardware.device %}
+                                            <small class="text-muted">(configured: {{ training_details.hardware.config_device }})</small>
+                                        {% endif %}
+                                    </dd>
+                                    
+                                    <dt class="col-sm-5">PyTorch Version:</dt>
+                                    <dd class="col-sm-7">{{ training_details.hardware.pytorch_version|default:"N/A" }}</dd>
+                                    
+                                    <dt class="col-sm-5">CUDA Available:</dt>
+                                    <dd class="col-sm-7">
+                                        {% if training_details.hardware.cuda_available %}
+                                            <i class="fas fa-check-circle text-success"></i> Yes
+                                        {% else %}
+                                            <i class="fas fa-times-circle text-danger"></i> No
+                                        {% endif %}
+                                    </dd>
+                                    
+                                    <dt class="col-sm-5">Model Type:</dt>
+                                    <dd class="col-sm-7">{{ training_details.config.model_type|default:"N/A"|upper }}</dd>
+                                </dl>
+                            </div>
+                        </div>
+
+                        <!-- Data Augmentation Section -->
+                        {% if training_details.augmentation %}
+                        <hr class="my-4">
+                        <div class="row">
+                            <div class="col-12">
+                                <h6 class="text-info mb-3"><i class="fas fa-random me-1"></i>Data Augmentation</h6>
+                                <div class="row row-cols-2 row-cols-md-4 g-3">
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.augmentation.random_flip %}
+                                                    <i class="fas fa-arrows-alt-h text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-arrows-alt-h text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Random Flip</small><br>
+                                                <span class="badge {% if training_details.augmentation.random_flip %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.augmentation.random_flip %}Enabled{% else %}Disabled{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.augmentation.random_rotate %}
+                                                    <i class="fas fa-sync-alt text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-sync-alt text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Random Rotate</small><br>
+                                                <span class="badge {% if training_details.augmentation.random_rotate %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.augmentation.random_rotate %}Enabled{% else %}Disabled{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.augmentation.random_scale %}
+                                                    <i class="fas fa-expand-arrows-alt text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-expand-arrows-alt text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Random Scale</small><br>
+                                                <span class="badge {% if training_details.augmentation.random_scale %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.augmentation.random_scale %}Enabled{% else %}Disabled{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.augmentation.random_intensity %}
+                                                    <i class="fas fa-adjust text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-adjust text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Random Intensity</small><br>
+                                                <span class="badge {% if training_details.augmentation.random_intensity %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.augmentation.random_intensity %}Enabled{% else %}Disabled{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Training Samples Section (Full Width) -->
+    {% if training_preview %}
+    <div class="row">
+        <div class="col-12">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-images me-2"></i>Training Samples
+                        {% if training_preview.latest_epoch %}
+                            <small class="text-muted">Latest: Epoch {{ training_preview.latest_epoch }}</small>
+                        {% endif %}
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if training_preview.error %}
+                        <div class="alert alert-warning">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            {{ training_preview.error }}
+                        </div>
+                    {% elif training_preview.images %}
+                        <p class="text-muted mb-3">
+                            <i class="fas fa-info-circle me-1"></i>
+                            Prediction samples generated during training. Shows model performance evolution across epochs.
+                        </p>
+                        <div class="row">
+                            {% for image in training_preview.images %}
+                            <div class="col-md-6 col-lg-4 mb-3">
+                                <div class="card">
+                                    <div class="card-header py-2">
+                                        <small class="text-muted">Epoch {{ image.epoch }}</small>
+                                    </div>
+                                    <div class="card-body p-2">
+                                        <img src="{% url 'ml_manager:training-preview-image' model.id image.filename %}" 
+                                             class="img-fluid training-sample-image" 
+                                             alt="Epoch {{ image.epoch }} predictions"
+                                             style="max-height: 300px; width: 100%; object-fit: contain; cursor: pointer;"
+                                             onclick="openImageModal('{% url 'ml_manager:training-preview-image' model.id image.filename %}', 'Epoch {{ image.epoch }} Predictions')">
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <div class="text-center py-4">
+                            <i class="fas fa-images fa-3x text-muted mb-3"></i>
+                            <h6 class="text-muted">No Training Samples Yet</h6>
+                            <p class="text-muted mb-0">
+                                {% if model.status == 'training' %}
+                                    Sample images will appear here after the first epoch completes.
+                                {% elif model.status == 'completed' %}
+                                    No sample images were generated during training.
+                                {% else %}
+                                    Training samples will be available once training starts.
+                                {% endif %}
+                            </p>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Rerun Training Button -->
+    <div class="d-flex justify-content-end mb-3">
+      <a href="{% url 'ml_manager:start-training' %}?rerun={{ model.id }}" class="btn btn-warning">
+        <i class="fas fa-redo"></i> Rerun Training
+      </a>
+    </div>
+</div>
+
+<!-- Training Logs Modal -->
+<div class="modal fade" id="logsModal" tabindex="-1" aria-labelledby="logsModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="logsModalLabel">
+          <i class="fas fa-file-alt"></i> Training Logs - {{ model.name }}
+        </h5>
+        <div class="d-flex gap-2 align-items-center">
+          <!-- Refresh button -->
+          <button class="btn btn-outline-info btn-sm" id="modal-refresh-logs">
+            <i class="fas fa-sync-alt"></i> Refresh
+          </button>
+          
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+      </div>
+      <div class="modal-body p-0">
+        <!-- Log statistics -->
+        <div class="bg-light border-bottom p-3">
+          <div class="row text-center">
+            <div class="col">
+              <small class="text-muted">Total Lines: <span id="modal-total-lines">0</span></small>
+            </div>
+            <div class="col">
+              <small class="text-muted">Model: <strong>{{ model.name }}</strong></small>
+            </div>
+            <div class="col">
+              <small class="text-muted">Status: <strong>{{ model.status|title }}</strong></small>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Logs content -->
+        <div id="modal-logs-content" style="height: 60vh; overflow-y: auto; padding: 1rem; font-family: 'Courier New', monospace;">
+          <div class="text-center py-5">
+            <i class="fas fa-spinner fa-spin fa-2x text-primary"></i>
+            <p class="mt-2">Loading logs...</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <div class="me-auto">
+          <small class="text-muted">
+            <i class="fas fa-info-circle"></i> 
+            Showing model-specific logs only.
+          </small>
+        </div>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Image Modal for Training Samples -->
+<div class="modal fade" id="imageModal" tabindex="-1" aria-labelledby="imageModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="imageModalLabel">Training Sample</h5>
+        <div class="d-flex gap-2">
+          <button type="button" class="btn btn-sm btn-outline-info" onclick="downloadImage()" title="Download">
+            <i class="fas fa-download"></i>
+          </button>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+      </div>
+      <div class="modal-body text-center p-0" id="imageModalBody" style="overflow: hidden; position: relative; height: 80vh;">
+        <div id="imageContainer" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+          <img id="modalImage" src="" alt="" 
+               style="max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain;"
+               ondragstart="return false;"
+               onload="console.log('Image loaded successfully')"
+               onerror="console.error('Failed to load image:', this.src)">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <small class="text-muted me-auto">
+          <i class="fas fa-info-circle"></i> 
+          Training sample image - Click download to save the image.
+        </small>
+        <span id="imageInfo" class="text-muted"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    {% if model.status == 'training' %}
+    const stopBtn = document.getElementById('stopTrainingBtn');
+    const manualRefreshBtn = document.getElementById('manualRefreshBtn');
+    const modelId = {{ model.id|unlocalize }};
+    let lastUpdateTime = Date.now();
+
+    // Stop training functionality
+    if (stopBtn) {
+        stopBtn.addEventListener('click', function() {
+            if (confirm('Are you sure you want to stop training? This cannot be undone.')) {
+                stopTraining(modelId);
+            }
+        });
+    }
+
+    // Manual refresh functionality
+    if (manualRefreshBtn) {
+        manualRefreshBtn.addEventListener('click', function() {
+            updateTrainingProgress();
+            manualRefreshBtn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Refreshing...';
+            setTimeout(() => {
+                manualRefreshBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Now';
+            }, 1000);
+        });
+    }
+
+    // Start progress updates if training
+    setInterval(updateTrainingProgress, 2000);
+    
+    // Show live indicator
+    const updateStatus = document.getElementById('update-status');
+    if (updateStatus) {
+        updateStatus.style.display = 'inline-block';
+    }
+    {% endif %}
+});
+
+{% if model.status == 'training' %}
+function stopTraining(modelId) {
+    const formData = new FormData();
+    formData.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
+    
+    fetch(`{% url 'ml_manager:stop-training' model.id %}`, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            document.getElementById('stopTrainingBtn').disabled = true;
+            document.getElementById('stopTrainingBtn').textContent = 'Stop Requested';
+            showAlert('info', 'Stop request sent. Training will stop after current epoch.');
+        } else {
+            showAlert('danger', data.message || 'Failed to stop training');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showAlert('danger', 'Error stopping training');
+    });
+}
+
+function updateTrainingProgress() {
+    const modelId = {{ model.id|unlocalize }};
+    const updateStatus = document.getElementById('update-status');
+    const lastUpdateTimeElement = document.getElementById('last-update-time');
+    
+    // Show loading indicator
+    if (updateStatus) {
+        updateStatus.innerHTML = '<i class="fas fa-circle text-warning" style="font-size: 0.5rem;"></i> Updating...';
+    }
+    
+    fetch(`{% url 'ml_manager:model-progress' model.id %}`)
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            // Update main progress bar (epoch progress)
+            const progressBar = document.querySelector('.progress-bar');
+            if (progressBar && data.progress) {
+                progressBar.style.width = data.progress.percentage + '%';
+                progressBar.textContent = `Epoch ${data.progress.current_epoch}/${data.progress.total_epochs} (${data.progress.percentage.toFixed(1)}%)`;
+                progressBar.setAttribute('aria-valuenow', data.progress.current_epoch);
+            }
+            
+            // Update batch progress bar
+            const batchProgressBar = document.querySelector('.progress-bar.bg-info');
+            if (batchProgressBar && data.progress.batch_progress_percentage !== undefined) {
+                batchProgressBar.style.width = data.progress.batch_progress_percentage + '%';
+                batchProgressBar.setAttribute('aria-valuenow', data.progress.current_batch);
+            }
+            
+            // Update batch text
+            const batchText = document.querySelector('small.text-muted.mb-3.d-block');
+            if (batchText && data.progress.current_batch && data.progress.total_batches_per_epoch) {
+                batchText.textContent = `Batch ${data.progress.current_batch}/${data.progress.total_batches_per_epoch} in current epoch`;
+            }
+            
+            // Update metrics
+            if (data.metrics) {
+                const updateMetric = (id, value) => {
+                    const element = document.getElementById(id);
+                    if (element && value !== null && value !== undefined) {
+                        element.textContent = value.toFixed(4);
+                        // Add visual flash for updates
+                        element.style.backgroundColor = '#e7f3ff';
+                        setTimeout(() => {
+                            element.style.backgroundColor = '';
+                        }, 500);
+                    }
+                };
+                
+                updateMetric('current-epoch', data.progress.current_epoch);
+                updateMetric('train-loss', data.metrics.train_loss);
+                updateMetric('train-dice', data.metrics.train_dice);
+                updateMetric('val-loss', data.metrics.val_loss);
+                updateMetric('val-dice', data.metrics.val_dice);
+                updateMetric('best-val-dice', data.metrics.best_val_dice);
+            }
+            
+            // Update last update time
+            if (lastUpdateTimeElement) {
+                const now = new Date();
+                lastUpdateTimeElement.textContent = `Last updated: ${now.toLocaleTimeString()}`;
+            }
+            
+            // Show success indicator
+            if (updateStatus) {
+                updateStatus.innerHTML = '<i class="fas fa-circle text-success" style="font-size: 0.5rem;"></i> Live';
+            }
+            
+            // Refresh training preview images on epoch completion
+            if (data.progress && data.progress.current_epoch) {
+                refreshTrainingPreview(data.progress.current_epoch);
+            }
+            
+            // Check if training completed
+            if (data.status_changed) {
+                // Refresh training preview before full reload
+                setTimeout(() => {
+                    location.reload();
+                }, 2000); // Give 2 seconds to refresh preview images
+                refreshTrainingPreview();
+            }
+        } else {
+            // Show error indicator
+            if (updateStatus) {
+                updateStatus.innerHTML = '<i class="fas fa-circle text-danger" style="font-size: 0.5rem;"></i> Error';
+            }
+        }
+    })
+    .catch(error => {
+        console.error('Progress update error:', error);
+        // Show error indicator
+        if (updateStatus) {
+            updateStatus.innerHTML = '<i class="fas fa-circle text-danger" style="font-size: 0.5rem;"></i> Error';
+        }
+    });
+}
+{% endif %}
+</script>
+
+<!-- Training Preview Refresh Function -->
+<script>
+function refreshTrainingPreview(currentEpoch = null) {
+    console.log('Refreshing training preview images...');
+    
+    // Find the training samples card by searching for the specific card header text
+    const trainingSamplesCards = Array.from(document.querySelectorAll('.card-header h5')).filter(h5 => 
+        h5.textContent.includes('Training Samples')
+    );
+    
+    if (trainingSamplesCards.length === 0) {
+        console.log('No training samples card found');
+        return;
+    }
+    
+    const currentTrainingSamplesCard = trainingSamplesCards[0].closest('.card');
+    
+    // Fetch updated training preview
+    fetch(`{% url 'ml_manager:model-detail' model.id %}`, {
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+    })
+    .then(response => response.text())
+    .then(html => {
+        // Parse the response and extract training preview section
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        
+        // Find the training samples section in the response using the same method
+        const newTrainingSamplesCards = Array.from(doc.querySelectorAll('.card-header h5')).filter(h5 => 
+            h5.textContent.includes('Training Samples')
+        );
+        
+        if (newTrainingSamplesCards.length > 0) {
+            const newTrainingSamplesCard = newTrainingSamplesCards[0].closest('.card');
+            
+            if (newTrainingSamplesCard && currentTrainingSamplesCard) {
+                // Replace only the card body content to maintain structure
+                const newCardBody = newTrainingSamplesCard.querySelector('.card-body');
+                const currentCardBody = currentTrainingSamplesCard.querySelector('.card-body');
+                
+                if (newCardBody && currentCardBody) {
+                    currentCardBody.innerHTML = newCardBody.innerHTML;
+                    console.log('Training preview refreshed successfully');
+                    
+                    // Show notification
+                    showRefreshNotification(currentEpoch);
+                } else {
+                    console.log('Could not find card body elements');
+                }
+            }
+        } else {
+            console.log('No training samples card found in response');
+        }
+    })
+    .catch(error => {
+        console.error('Error refreshing training preview:', error);
+        // Show error notification
+        showRefreshNotification(currentEpoch, true);
+    });
+}
+
+function showRefreshNotification(epoch, isError = false) {
+    // Create a small notification
+    const notification = document.createElement('div');
+    notification.className = `alert ${isError ? 'alert-danger' : 'alert-info'} alert-dismissible fade show position-fixed`;
+    notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 300px;';
+    
+    const icon = isError ? 'fas fa-exclamation-triangle' : 'fas fa-sync-alt';
+    const message = isError 
+        ? `Error refreshing training images${epoch ? ` for epoch ${epoch}` : ''}`
+        : `Training images updated${epoch ? ` for epoch ${epoch}` : ''}`;
+    
+    notification.innerHTML = `
+        <i class="${icon} me-2"></i>
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    document.body.appendChild(notification);
+    
+    // Auto-remove after 3 seconds
+    setTimeout(() => {
+        if (notification.parentNode) {
+            notification.remove();
+        }
+    }, 3000);
+}
+</script>
+
+<script>
+// MLflow Registry Management Functions (always available)
+
+
+function registerModel(modelId) {
+    if (!confirm('Register this model in MLflow Model Registry?')) {
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
+    
+    fetch(`/ml_manager/model/${modelId}/registry/register/`, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            showAlert('success', data.message);
+            location.reload(); // Refresh to show registry info
+        } else {
+            showAlert('danger', data.message);
+        }
+    })
+    .catch(error => {
+        console.error('Registry error:', error);
+        showAlert('danger', 'Failed to register model');
+    });
+}
+
+function syncRegistryInfo(modelId) {
+    fetch(`/ml_manager/model/${modelId}/registry/sync/`, {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            showAlert('success', data.message);
+        } else {
+            showAlert('warning', data.message);
+        }
+    })
+    .catch(error => {
+        console.error('Sync error:', error);
+        showAlert('danger', 'Failed to sync registry information');
+    });
+}
+
+function showAlert(type, message) {
+    // Create alert element
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert alert-${type} alert-dismissible fade show mt-3`;
+    alertDiv.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    // Insert after the header
+    const header = document.querySelector('h1').parentElement;
+    header.insertAdjacentElement('afterend', alertDiv);
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        if (alertDiv.parentElement) {
+            alertDiv.remove();
+        }
+    }, 5000);
+}
+
+// Logs Modal Functions - Enhanced with error handling
+function openLogsModal() {
+    console.log('Opening logs modal...');
+    try {
+        const modalElement = document.getElementById('logsModal');
+        if (!modalElement) {
+            console.error('Logs modal element not found');
+            return;
+        }
+        
+        // Check if Bootstrap is available
+        if (typeof bootstrap === 'undefined') {
+            console.error('Bootstrap is not loaded');
+            alert('Unable to open logs modal: Bootstrap library not loaded');
+            return;
+        }
+        
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
+        
+        // Load logs when modal opens
+        loadModalLogs();
+        console.log('Logs modal opened successfully');
+    } catch (error) {
+        console.error('Error opening logs modal:', error);
+        alert('Error opening logs modal: ' + error.message);
+    }
+}
+
+// Enhanced load modal logs function
+function loadModalLogs() {
+    const logsContent = document.getElementById('modal-logs-content');
+    const totalLinesSpan = document.getElementById('modal-total-lines');
+    const modelId = {{ model.id|unlocalize }};
+    
+    if (!logsContent) {
+        console.error('Modal logs content element not found');
+        return;
+    }
+    
+    logsContent.innerHTML = '<div class="text-center py-5"><i class="fas fa-spinner fa-spin fa-2x text-primary"></i><p class="mt-2">Loading logs...</p></div>';
+    
+    fetch(`{% url 'ml_manager:model-training-log' model.id %}`, {
+        method: 'GET',
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+            'Content-Type': 'application/json',
+        },
+        credentials: 'same-origin'  // Include cookies for authentication
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return response.json();
+    })
+    .then(data => {
+        let logsToDisplay = [];
+        if (data.logs && Array.isArray(data.logs)) {
+            logsToDisplay = data.logs.filter(line => line && line.trim() !== '');
+        }
+        
+        // Filter out DEBUG log lines
+        logsToDisplay = logsToDisplay.filter(line => {
+            const text = typeof line === 'object' && line.content ? line.content : String(line);
+            return !/^\d{4}-\d{2}-\d{2}.*\bDEBUG\b/.test(text);
+        });
+        
+        if (logsToDisplay.length > 0) {
+            const logHTML = logsToDisplay.map(line => {
+                const text = typeof line === 'object' && line.content ? line.content : String(line);
+                const escapedLine = text.replace(/&/g, '&amp;')
+                                       .replace(/</g, '&lt;')
+                                       .replace(/>/g, '&gt;');
+                return `<div class="log-entry">${escapedLine}</div>`;
+            }).join('');
+            logsContent.innerHTML = logHTML;
+            if (totalLinesSpan) totalLinesSpan.textContent = logsToDisplay.length;
+        } else {
+            logsContent.innerHTML = '<div class="text-center py-5"><i class="fas fa-info-circle fa-2x text-warning"></i><p class="mt-2">No logs available yet.</p></div>';
+            if (totalLinesSpan) totalLinesSpan.textContent = '0';
+        }
+        logsContent.scrollTop = logsContent.scrollHeight;
+    })
+    .catch(error => {
+        console.error('Error loading logs:', error);
+        logsContent.innerHTML = `<div class="text-center py-5"><i class="fas fa-exclamation-triangle fa-2x text-danger"></i><p class="mt-2">Failed to load logs: ${error.message}</p><p class="text-muted">Please check browser console for details.</p></div>`;
+    });
+}
+
+// Image Modal Functions
+function openImageModal(imageUrl, title) {
+    console.log('Opening image modal with URL:', imageUrl);
+    const modal = document.getElementById('imageModal');
+    const modalImage = document.getElementById('modalImage');
+    const modalTitle = document.getElementById('imageModalLabel');
+    
+    if (!modal || !modalImage || !modalTitle) {
+        console.error('Image modal elements not found');
+        return;
+    }
+    
+    modalImage.src = imageUrl;
+    modalImage.alt = title;
+    modalTitle.textContent = title;
+    
+    const modalInstance = new bootstrap.Modal(modal);
+    modalInstance.show();
+}
+
+function downloadImage() {
+    const img = document.getElementById('modalImage');
+    const title = document.getElementById('imageModalLabel').textContent;
+    
+    if (!img || !img.src) return;
+    
+    // Create a temporary link element
+    const link = document.createElement('a');
+    link.href = img.src;
+    link.download = `${title.replace(/\s+/g, '_')}.png`;
+    
+    // Trigger download
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+// Refresh logs button
+document.addEventListener('DOMContentLoaded', function() {
+    const refreshBtn = document.getElementById('modal-refresh-logs');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', function() {
+            const btn = this;
+            const originalHTML = btn.innerHTML;
+            
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+            btn.disabled = true;
+            
+            loadModalLogs();
+            
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+                btn.disabled = false;
+            }, 1000);
+        });
+    }
+});
+</script>
+
+
+{% if messages %}
+  <div class="container mt-3">
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% if model is None %}
+  <div class="alert alert-danger">Model context variable is missing!</div>
+{% endif %}
+
+{% if mlflow_error %}
+  <div class="alert alert-warning">MLflow error: {{ mlflow_error }}</div>
+{% endif %}
+
+{% endblock content %}

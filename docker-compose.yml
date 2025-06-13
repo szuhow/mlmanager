@@ -11,8 +11,8 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./mlruns:/mlflow/artifacts
-      - mlflow_data:/mlflow/data
+      - ./data/mlflow:/mlflow/artifacts
+      - ./data/mlflow:/mlflow/data
     command: >
       mlflow server
       --backend-store-uri sqlite:////mlflow/data/mlflow.db
@@ -21,25 +21,31 @@ services:
 
   django:
     build:
-      context: ./
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
     container_name: web
     environment:
       - PYTHONPATH=/app
-      - DJANGO_SETTINGS_MODULE=coronary_experiments.settings
+      - DJANGO_SETTINGS_MODULE=core.config.settings.development
+      - ENVIRONMENT=development
       - PYTHONUNBUFFERED=1
       - MLFLOW_TRACKING_URI=http://mlflow:5000
-    command: python manage.py runserver 0.0.0.0:8000
+      - MLFLOW_ARTIFACT_ROOT=/app/data/mlflow
+    command: python core/manage.py runserver 0.0.0.0:8000
     volumes:
       - ./:/app
       - django_data:/data
+      - ~/Desktop:/host/desktop
+      - ~/Downloads:/host/downloads
+      - ~/Documents:/host/documents
     ports:
       - "8000:8000"
-    shm_size: 2gb  # Increase shared memory for DataLoader workers
+    depends_on:
+      - mlflow
+    shm_size: 2gb
 
 volumes:
   django_data:
-  mlflow_data:
 
 networks:
   default:

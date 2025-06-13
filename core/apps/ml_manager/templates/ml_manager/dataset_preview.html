@@ -1,0 +1,291 @@
+{% extends 'ml_manager/base.html' %}
+{% load static %}
+
+{% block title %}Dataset Preview{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h1 class="h3 mb-0">
+                    <i class="fas fa-images me-2"></i>
+                    Dataset Preview
+                </h1>
+                <a href="{% url 'ml_manager:model-list' %}" class="btn btn-outline-secondary">
+                    <i class="fas fa-arrow-left me-1"></i>Back to Models
+                </a>
+            </div>
+
+            <!-- Dataset Selection Form -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-folder-open me-2"></i>
+                        Select Dataset
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %}
+                        <div class="row">
+                            <div class="col-md-6">
+                                <label for="data_path" class="form-label">Dataset Path</label>
+                                <input type="text" 
+                                       class="form-control" 
+                                       id="data_path" 
+                                       name="data_path" 
+                                       value="{{ data_path }}"
+                                       placeholder="/app/data/datasets/"
+                                       required>
+                                <small class="text-muted">Path to the dataset directory</small>
+                            </div>
+                            <div class="col-md-4">
+                                <label for="dataset_type" class="form-label">Dataset Type</label>
+                                <select class="form-select" id="dataset_type" name="dataset_type">
+                                    {% for value, label in dataset_type_choices %}
+                                        <option value="{{ value }}" {% if value == dataset_type %}selected{% endif %}>
+                                            {{ label }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-2 d-flex align-items-end">
+                                <button type="submit" class="btn btn-primary w-100">
+                                    <i class="fas fa-search me-1"></i>
+                                    Preview
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Error Message -->
+            {% if error_message %}
+            <div class="alert alert-danger" role="alert">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                <strong>Error:</strong> {{ error_message }}
+            </div>
+            {% endif %}
+
+            <!-- Dataset Info -->
+            {% if detected_type %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-info-circle me-2"></i>
+                        Dataset Information
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <strong>Detected Type:</strong> 
+                            <span class="badge bg-info">{{ detected_type }}</span>
+                        </div>
+                        <div class="col-md-6">
+                            <strong>Total Samples:</strong> {{ total_samples|default:"N/A" }}
+                        </div>
+                    </div>
+                    {% if dataset_info %}
+                    <div class="mt-3">
+                        <strong>Details:</strong>
+                        <ul class="mb-0">
+                            {% for key, value in dataset_info.items %}
+                            <li><strong>{{ key|title }}:</strong> {{ value }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Sample Images -->
+            {% if samples %}
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-images me-2"></i>
+                        Sample Images and Masks ({{ samples|length }} samples)
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        {% for sample in samples %}
+                        <div class="col-xl-4 col-lg-6 col-md-12 mb-4">
+                            <div class="card h-100 border-primary">
+                                <div class="card-header bg-primary text-white">
+                                    <h6 class="card-title mb-0">
+                                        Sample #{{ sample.index|add:1 }}
+                                        {% if sample.filename %}
+                                        <small class="d-block text-white-50">{{ sample.filename }}</small>
+                                        {% endif %}
+                                    </h6>
+                                </div>
+                                <div class="card-body p-2">
+                                    <div class="row">
+                                        <!-- Original Image -->
+                                        <div class="col-6">
+                                            <div class="text-center mb-2">
+                                                <strong class="small">Input Image</strong>
+                                            </div>
+                                            <div class="position-relative">
+                                                <img src="{{ sample.image_url }}" 
+                                                     class="img-fluid rounded border" 
+                                                     alt="Sample {{ sample.index|add:1 }} - Image"
+                                                     style="max-height: 200px; width: 100%; object-fit: contain; background: #f8f9fa;">
+                                                <div class="position-absolute top-0 end-0">
+                                                    <span class="badge bg-secondary small">IMG</span>
+                                                </div>
+                                            </div>
+                                            <div class="small text-muted mt-1">
+                                                <div>Shape: {{ sample.image_shape }}</div>
+                                                <div>Range: {{ sample.image_min|floatformat:3 }} - {{ sample.image_max|floatformat:3 }}</div>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Mask -->
+                                        <div class="col-6">
+                                            <div class="text-center mb-2">
+                                                <strong class="small">Ground Truth Mask</strong>
+                                            </div>
+                                            <div class="position-relative">
+                                                {% if sample.mask_url %}
+                                                <img src="{{ sample.mask_url }}" 
+                                                     class="img-fluid rounded border" 
+                                                     alt="Sample {{ sample.index|add:1 }} - Mask"
+                                                     style="max-height: 200px; width: 100%; object-fit: contain; background: #f8f9fa;">
+                                                <div class="position-absolute top-0 end-0">
+                                                    <span class="badge bg-success small">MASK</span>
+                                                </div>
+                                                {% else %}
+                                                <div class="text-center p-4 border rounded bg-light">
+                                                    <i class="fas fa-file-code fa-2x text-muted mb-2"></i>
+                                                    <div class="small text-muted">
+                                                        <strong>{{ sample.mask_shape }}</strong><br>
+                                                        Annotations in JSON format
+                                                    </div>
+                                                </div>
+                                                {% endif %}
+                                            </div>
+                                            <div class="small text-muted mt-1">
+                                                <div>Shape: {{ sample.mask_shape }}</div>
+                                                {% if sample.mask_url %}
+                                                <div>Range: {{ sample.mask_min|floatformat:3 }} - {{ sample.mask_max|floatformat:3 }}</div>
+                                                {% if sample.mask_coverage %}
+                                                <div>Coverage: {{ sample.mask_coverage }}</div>
+                                                {% endif %}
+                                                {% else %}
+                                                <div>Format: {{ sample.mask_min }} annotations</div>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Analysis -->
+                                    <div class="mt-2 p-2 bg-light rounded">
+                                        <div class="small">
+                                            <strong>Quick Analysis:</strong>
+                                            {% if sample.analysis %}
+                                                <span class="text-info">{{ sample.analysis }}</span>
+                                            {% elif sample.mask_min == sample.mask_max %}
+                                                <span class="text-danger">⚠️ Mask has no variation (all same value)</span>
+                                            {% elif sample.mask_min == 0 and sample.mask_max == 0 %}
+                                                <span class="text-danger">⚠️ Mask is empty (all zeros)</span>
+                                            {% elif sample.mask_min == 255 and sample.mask_max == 255 %}
+                                                <span class="text-warning">⚠️ Mask is completely white</span>
+                                            {% else %}
+                                                <span class="text-success">✓ Mask has proper variation</span>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    
+                    <!-- Overall Analysis -->
+                    <div class="alert alert-info mt-4">
+                        <h6><i class="fas fa-chart-line me-2"></i>Dataset Analysis</h6>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <strong>Common Issues to Check:</strong>
+                                <ul class="mb-0">
+                                    <li>Are masks properly normalized (0-1 or 0-255)?</li>
+                                    <li>Do masks contain actual segmentation data?</li>
+                                    <li>Are image and mask pairs correctly aligned?</li>
+                                    <li>Is there sufficient contrast in the masks?</li>
+                                </ul>
+                            </div>
+                            <div class="col-md-6">
+                                <strong>Training Tips:</strong>
+                                <ul class="mb-0">
+                                    <li>If masks are all 0 or 255, check data preprocessing</li>
+                                    <li>Binary masks should be 0 (background) and 1 (foreground)</li>
+                                    <li>Verify that transforms don't corrupt the masks</li>
+                                    <li>Check that dataset loading returns correct data types</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<style>
+.card-img-overlay {
+    background: rgba(0,0,0,0.5);
+    color: white;
+}
+
+.img-hover {
+    transition: transform 0.2s;
+}
+
+.img-hover:hover {
+    transform: scale(1.05);
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Add image hover effects
+    document.querySelectorAll('img').forEach(img => {
+        img.classList.add('img-hover');
+        
+        // Add click to zoom functionality
+        img.addEventListener('click', function() {
+            const modal = document.createElement('div');
+            modal.className = 'modal fade';
+            modal.innerHTML = `
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Image Preview</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body text-center">
+                            <img src="${this.src}" class="img-fluid" alt="Preview">
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            
+            const bootstrapModal = new bootstrap.Modal(modal);
+            bootstrapModal.show();
+            
+            modal.addEventListener('hidden.bs.modal', function() {
+                document.body.removeChild(modal);
+            });
+        });
+    });
+});
+</script>
+{% endblock %}
