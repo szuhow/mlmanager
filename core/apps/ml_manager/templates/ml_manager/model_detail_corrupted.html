@@ -1195,7 +1195,7 @@ function registerModel(modelId) {
     const formData = new FormData();
     formData.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
     
-    fetch(`/ml_manager/model/${modelId}/registry/register/`, {
+    fetch(`/ml/model/${modelId}/registry/register/`, {
         method: 'POST',
         body: formData
     })
@@ -1223,7 +1223,7 @@ function transitionStage(modelId, stage) {
     formData.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
     formData.append('stage', stage);
     
-    fetch(`/ml_manager/model/${modelId}/registry/transition/`, {
+    fetch(`/ml/model/${modelId}/registry/transition/`, {
         method: 'POST',
         body: formData
     })
@@ -1248,7 +1248,7 @@ function transitionStage(modelId, stage) {
 }
 
 function syncRegistryInfo(modelId) {
-    fetch(`/ml_manager/model/${modelId}/registry/sync/`, {
+    fetch(`/ml/model/${modelId}/registry/sync/`, {
         method: 'POST',
         headers: {
             'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value

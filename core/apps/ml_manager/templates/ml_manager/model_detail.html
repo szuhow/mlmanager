@@ -511,23 +511,42 @@
                             <i class="fas fa-info-circle me-1"></i>
                             Prediction samples generated during training. Shows model performance evolution across epochs.
                         </p>
-                        <div class="row">
-                            {% for image in training_preview.images %}
-                            <div class="col-md-6 col-lg-4 mb-3">
-                                <div class="card">
-                                    <div class="card-header py-2">
-                                        <small class="text-muted">Epoch {{ image.epoch }}</small>
-                                    </div>
-                                    <div class="card-body p-2">
-                                        <img src="{% url 'ml_manager:training-preview-image' model.id image.filename %}" 
-                                             class="img-fluid training-sample-image" 
-                                             alt="Epoch {{ image.epoch }} predictions"
-                                             style="max-height: 300px; width: 100%; object-fit: contain; cursor: pointer;"
-                                             onclick="openImageModal('{% url 'ml_manager:training-preview-image' model.id image.filename %}', 'Epoch {{ image.epoch }} Predictions')">
+                        <div class="training-samples-container">
+                            <!-- Navigation controls will be inserted here by JavaScript -->
+                            <div class="row">
+                                {% for image in training_preview.images %}
+                                <div class="col-md-6 col-lg-4 mb-3" data-epoch="{{ image.epoch }}">
+                                    <div class="card">
+                                        <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                                            <small class="text-muted">Epoch {{ image.epoch }}</small>
+                                            <div class="epoch-controls">
+                                                {% if not forloop.first %}
+                                                    <button class="btn btn-outline-secondary btn-sm me-1" 
+                                                            onclick="showPreviousEpoch({{ image.epoch }})" 
+                                                            title="Previous Epoch">
+                                                        <i class="fas fa-chevron-left"></i>
+                                                    </button>
+                                                {% endif %}
+                                                {% if not forloop.last %}
+                                                    <button class="btn btn-outline-secondary btn-sm" 
+                                                            onclick="showNextEpoch({{ image.epoch }})" 
+                                                            title="Next Epoch">
+                                                        <i class="fas fa-chevron-right"></i>
+                                                    </button>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                        <div class="card-body p-2">
+                                            <img src="{% url 'ml_manager:training-preview-image' model.id image.filename %}" 
+                                                 class="img-fluid training-sample-image" 
+                                                 alt="Epoch {{ image.epoch }} predictions"
+                                                 style="max-height: 300px; width: 100%; object-fit: contain; cursor: pointer;"
+                                                 onclick="openImageModal('{% url 'ml_manager:training-preview-image' model.id image.filename %}', 'Epoch {{ image.epoch }} Predictions')">
+                                        </div>
                                     </div>
                                 </div>
+                                {% endfor %}
                             </div>
-                            {% endfor %}
                         </div>
                     {% else %}
                         <div class="text-center py-4">
@@ -645,461 +664,95 @@
   </div>
 </div>
 
+<!-- Load static files -->
+{% load static %}
+
+<!-- Include Simple Model Detail Manager -->
+<script src="{% static 'ml_manager/js/model_detail_simple.js' %}"></script>
+
+<!-- Initialize JavaScript Components -->
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    {% if model.status == 'training' %}
-    const stopBtn = document.getElementById('stopTrainingBtn');
-    const manualRefreshBtn = document.getElementById('manualRefreshBtn');
+    // Get model data from template
     const modelId = {{ model.id|unlocalize }};
-    let lastUpdateTime = Date.now();
-
-    // Stop training functionality
-    if (stopBtn) {
-        stopBtn.addEventListener('click', function() {
-            if (confirm('Are you sure you want to stop training? This cannot be undone.')) {
-                stopTraining(modelId);
-            }
-        });
-    }
-
-    // Manual refresh functionality
-    if (manualRefreshBtn) {
-        manualRefreshBtn.addEventListener('click', function() {
-            updateTrainingProgress();
-            manualRefreshBtn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Refreshing...';
-            setTimeout(() => {
-                manualRefreshBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Now';
-            }, 1000);
-        });
-    }
-
-    // Start progress updates if training
-    setInterval(updateTrainingProgress, 2000);
     
-    // Show live indicator
-    const updateStatus = document.getElementById('update-status');
-    if (updateStatus) {
-        updateStatus.style.display = 'inline-block';
+    // Initialize unified manager
+    window.modelDetailManager = new ModelDetailManager(modelId);
+    
+    // Initialize epoch navigation if training images exist
+    const hasEpochImages = document.querySelectorAll('[data-epoch]').length > 0;
+    if (hasEpochImages) {
+        window.epochNavigator = new EpochNavigator();
     }
-    {% endif %}
 });
 
-{% if model.status == 'training' %}
-function stopTraining(modelId) {
-    const formData = new FormData();
-    formData.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
-    
-    fetch(`{% url 'ml_manager:stop-training' model.id %}`, {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.status === 'success') {
-            document.getElementById('stopTrainingBtn').disabled = true;
-            document.getElementById('stopTrainingBtn').textContent = 'Stop Requested';
-            showAlert('info', 'Stop request sent. Training will stop after current epoch.');
-        } else {
-            showAlert('danger', data.message || 'Failed to stop training');
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        showAlert('danger', 'Error stopping training');
-    });
-}
-
-function updateTrainingProgress() {
-    const modelId = {{ model.id|unlocalize }};
-    const updateStatus = document.getElementById('update-status');
-    const lastUpdateTimeElement = document.getElementById('last-update-time');
-    
-    // Show loading indicator
-    if (updateStatus) {
-        updateStatus.innerHTML = '<i class="fas fa-circle text-warning" style="font-size: 0.5rem;"></i> Updating...';
-    }
-    
-    fetch(`{% url 'ml_manager:model-progress' model.id %}`)
-    .then(response => response.json())
-    .then(data => {
-        if (data.status === 'success') {
-            // Update main progress bar (epoch progress)
-            const progressBar = document.querySelector('.progress-bar');
-            if (progressBar && data.progress) {
-                progressBar.style.width = data.progress.percentage + '%';
-                progressBar.textContent = `Epoch ${data.progress.current_epoch}/${data.progress.total_epochs} (${data.progress.percentage.toFixed(1)}%)`;
-                progressBar.setAttribute('aria-valuenow', data.progress.current_epoch);
-            }
-            
-            // Update batch progress bar
-            const batchProgressBar = document.querySelector('.progress-bar.bg-info');
-            if (batchProgressBar && data.progress.batch_progress_percentage !== undefined) {
-                batchProgressBar.style.width = data.progress.batch_progress_percentage + '%';
-                batchProgressBar.setAttribute('aria-valuenow', data.progress.current_batch);
-            }
-            
-            // Update batch text
-            const batchText = document.querySelector('small.text-muted.mb-3.d-block');
-            if (batchText && data.progress.current_batch && data.progress.total_batches_per_epoch) {
-                batchText.textContent = `Batch ${data.progress.current_batch}/${data.progress.total_batches_per_epoch} in current epoch`;
-            }
-            
-            // Update metrics
-            if (data.metrics) {
-                const updateMetric = (id, value) => {
-                    const element = document.getElementById(id);
-                    if (element && value !== null && value !== undefined) {
-                        element.textContent = value.toFixed(4);
-                        // Add visual flash for updates
-                        element.style.backgroundColor = '#e7f3ff';
-                        setTimeout(() => {
-                            element.style.backgroundColor = '';
-                        }, 500);
-                    }
-                };
-                
-                updateMetric('current-epoch', data.progress.current_epoch);
-                updateMetric('train-loss', data.metrics.train_loss);
-                updateMetric('train-dice', data.metrics.train_dice);
-                updateMetric('val-loss', data.metrics.val_loss);
-                updateMetric('val-dice', data.metrics.val_dice);
-                updateMetric('best-val-dice', data.metrics.best_val_dice);
-            }
-            
-            // Update last update time
-            if (lastUpdateTimeElement) {
-                const now = new Date();
-                lastUpdateTimeElement.textContent = `Last updated: ${now.toLocaleTimeString()}`;
-            }
-            
-            // Show success indicator
-            if (updateStatus) {
-                updateStatus.innerHTML = '<i class="fas fa-circle text-success" style="font-size: 0.5rem;"></i> Live';
-            }
-            
-            // Refresh training preview images on epoch completion
-            if (data.progress && data.progress.current_epoch) {
-                refreshTrainingPreview(data.progress.current_epoch);
-            }
-            
-            // Check if training completed
-            if (data.status_changed) {
-                // Refresh training preview before full reload
-                setTimeout(() => {
-                    location.reload();
-                }, 2000); // Give 2 seconds to refresh preview images
-                refreshTrainingPreview();
-            }
-        } else {
-            // Show error indicator
-            if (updateStatus) {
-                updateStatus.innerHTML = '<i class="fas fa-circle text-danger" style="font-size: 0.5rem;"></i> Error';
-            }
-        }
-    })
-    .catch(error => {
-        console.error('Progress update error:', error);
-        // Show error indicator
-        if (updateStatus) {
-            updateStatus.innerHTML = '<i class="fas fa-circle text-danger" style="font-size: 0.5rem;"></i> Error';
-        }
-    });
-}
-{% endif %}
-</script>
-
-<!-- Training Preview Refresh Function -->
-<script>
-function refreshTrainingPreview(currentEpoch = null) {
-    console.log('Refreshing training preview images...');
-    
-    // Find the training samples card by searching for the specific card header text
-    const trainingSamplesCards = Array.from(document.querySelectorAll('.card-header h5')).filter(h5 => 
-        h5.textContent.includes('Training Samples')
-    );
-    
-    if (trainingSamplesCards.length === 0) {
-        console.log('No training samples card found');
-        return;
-    }
-    
-    const currentTrainingSamplesCard = trainingSamplesCards[0].closest('.card');
-    
-    // Fetch updated training preview
-    fetch(`{% url 'ml_manager:model-detail' model.id %}`, {
-        headers: {
-            'X-Requested-With': 'XMLHttpRequest'
-        }
-    })
-    .then(response => response.text())
-    .then(html => {
-        // Parse the response and extract training preview section
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        
-        // Find the training samples section in the response using the same method
-        const newTrainingSamplesCards = Array.from(doc.querySelectorAll('.card-header h5')).filter(h5 => 
-            h5.textContent.includes('Training Samples')
-        );
-        
-        if (newTrainingSamplesCards.length > 0) {
-            const newTrainingSamplesCard = newTrainingSamplesCards[0].closest('.card');
-            
-            if (newTrainingSamplesCard && currentTrainingSamplesCard) {
-                // Replace only the card body content to maintain structure
-                const newCardBody = newTrainingSamplesCard.querySelector('.card-body');
-                const currentCardBody = currentTrainingSamplesCard.querySelector('.card-body');
-                
-                if (newCardBody && currentCardBody) {
-                    currentCardBody.innerHTML = newCardBody.innerHTML;
-                    console.log('Training preview refreshed successfully');
-                    
-                    // Show notification
-                    showRefreshNotification(currentEpoch);
-                } else {
-                    console.log('Could not find card body elements');
-                }
-            }
-        } else {
-            console.log('No training samples card found in response');
-        }
-    })
-    .catch(error => {
-        console.error('Error refreshing training preview:', error);
-        // Show error notification
-        showRefreshNotification(currentEpoch, true);
-    });
-}
-
-function showRefreshNotification(epoch, isError = false) {
-    // Create a small notification
-    const notification = document.createElement('div');
-    notification.className = `alert ${isError ? 'alert-danger' : 'alert-info'} alert-dismissible fade show position-fixed`;
-    notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 300px;';
-    
-    const icon = isError ? 'fas fa-exclamation-triangle' : 'fas fa-sync-alt';
-    const message = isError 
-        ? `Error refreshing training images${epoch ? ` for epoch ${epoch}` : ''}`
-        : `Training images updated${epoch ? ` for epoch ${epoch}` : ''}`;
-    
-    notification.innerHTML = `
-        <i class="${icon} me-2"></i>
-        ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    `;
-    
-    document.body.appendChild(notification);
-    
-    // Auto-remove after 3 seconds
-    setTimeout(() => {
-        if (notification.parentNode) {
-            notification.remove();
-        }
-    }, 3000);
-}
-</script>
-
-<script>
-// MLflow Registry Management Functions (always available)
-
-
-function registerModel(modelId) {
-    if (!confirm('Register this model in MLflow Model Registry?')) {
-        return;
-    }
-    
-    const formData = new FormData();
-    formData.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
-    
-    fetch(`/ml_manager/model/${modelId}/registry/register/`, {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.status === 'success') {
-            showAlert('success', data.message);
-            location.reload(); // Refresh to show registry info
-        } else {
-            showAlert('danger', data.message);
-        }
-    })
-    .catch(error => {
-        console.error('Registry error:', error);
-        showAlert('danger', 'Failed to register model');
-    });
-}
-
-function syncRegistryInfo(modelId) {
-    fetch(`/ml_manager/model/${modelId}/registry/sync/`, {
-        method: 'POST',
-        headers: {
-            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.status === 'success') {
-            showAlert('success', data.message);
-        } else {
-            showAlert('warning', data.message);
-        }
-    })
-    .catch(error => {
-        console.error('Sync error:', error);
-        showAlert('danger', 'Failed to sync registry information');
-    });
-}
-
-function showAlert(type, message) {
-    // Create alert element
-    const alertDiv = document.createElement('div');
-    alertDiv.className = `alert alert-${type} alert-dismissible fade show mt-3`;
-    alertDiv.innerHTML = `
-        ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    `;
-    
-    // Insert after the header
-    const header = document.querySelector('h1').parentElement;
-    header.insertAdjacentElement('afterend', alertDiv);
-    
-    // Auto-remove after 5 seconds
-    setTimeout(() => {
-        if (alertDiv.parentElement) {
-            alertDiv.remove();
-        }
-    }, 5000);
-}
-
-// Logs Modal Functions - Enhanced with error handling
-function openLogsModal() {
-    console.log('Opening logs modal...');
-    try {
-        const modalElement = document.getElementById('logsModal');
-        if (!modalElement) {
-            console.error('Logs modal element not found');
-            return;
-        }
-        
-        // Check if Bootstrap is available
-        if (typeof bootstrap === 'undefined') {
-            console.error('Bootstrap is not loaded');
-            alert('Unable to open logs modal: Bootstrap library not loaded');
-            return;
-        }
-        
-        const modal = new bootstrap.Modal(modalElement);
-        modal.show();
-        
-        // Load logs when modal opens
-        loadModalLogs();
-        console.log('Logs modal opened successfully');
-    } catch (error) {
-        console.error('Error opening logs modal:', error);
-        alert('Error opening logs modal: ' + error.message);
-    }
-}
-
-// Enhanced load modal logs function
-function loadModalLogs() {
-    const logsContent = document.getElementById('modal-logs-content');
-    const totalLinesSpan = document.getElementById('modal-total-lines');
-    const modelId = {{ model.id|unlocalize }};
-    
-    if (!logsContent) {
-        console.error('Modal logs content element not found');
-        return;
-    }
-    
-    logsContent.innerHTML = '<div class="text-center py-5"><i class="fas fa-spinner fa-spin fa-2x text-primary"></i><p class="mt-2">Loading logs...</p></div>';
-    
-    fetch(`{% url 'ml_manager:model-training-log' model.id %}`, {
-        method: 'GET',
-        headers: {
-            'X-Requested-With': 'XMLHttpRequest',
-            'Content-Type': 'application/json',
-        },
-        credentials: 'same-origin'  // Include cookies for authentication
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        return response.json();
-    })
-    .then(data => {
-        let logsToDisplay = [];
-        if (data.logs && Array.isArray(data.logs)) {
-            logsToDisplay = data.logs.filter(line => line && line.trim() !== '');
-        }
-        
-        // Filter out DEBUG log lines
-        logsToDisplay = logsToDisplay.filter(line => {
-            const text = typeof line === 'object' && line.content ? line.content : String(line);
-            return !/^\d{4}-\d{2}-\d{2}.*\bDEBUG\b/.test(text);
-        });
-        
-        if (logsToDisplay.length > 0) {
-            const logHTML = logsToDisplay.map(line => {
-                const text = typeof line === 'object' && line.content ? line.content : String(line);
-                const escapedLine = text.replace(/&/g, '&amp;')
-                                       .replace(/</g, '&lt;')
-                                       .replace(/>/g, '&gt;');
-                return `<div class="log-entry">${escapedLine}</div>`;
-            }).join('');
-            logsContent.innerHTML = logHTML;
-            if (totalLinesSpan) totalLinesSpan.textContent = logsToDisplay.length;
-        } else {
-            logsContent.innerHTML = '<div class="text-center py-5"><i class="fas fa-info-circle fa-2x text-warning"></i><p class="mt-2">No logs available yet.</p></div>';
-            if (totalLinesSpan) totalLinesSpan.textContent = '0';
-        }
-        logsContent.scrollTop = logsContent.scrollHeight;
-    })
-    .catch(error => {
-        console.error('Error loading logs:', error);
-        logsContent.innerHTML = `<div class="text-center py-5"><i class="fas fa-exclamation-triangle fa-2x text-danger"></i><p class="mt-2">Failed to load logs: ${error.message}</p><p class="text-muted">Please check browser console for details.</p></div>`;
-    });
-}
-
-// Image Modal Functions
+// Global functions for template compatibility
 function openImageModal(imageUrl, title) {
-    console.log('Opening image modal with URL:', imageUrl);
     const modal = document.getElementById('imageModal');
     const modalImage = document.getElementById('modalImage');
     const modalTitle = document.getElementById('imageModalLabel');
     
-    if (!modal || !modalImage || !modalTitle) {
-        console.error('Image modal elements not found');
-        return;
+    if (modal && modalImage && modalTitle) {
+        modalImage.src = imageUrl;
+        modalImage.alt = title;
+        modalTitle.textContent = title;
+        
+        const modalInstance = new bootstrap.Modal(modal);
+        modalInstance.show();
     }
-    
-    modalImage.src = imageUrl;
-    modalImage.alt = title;
-    modalTitle.textContent = title;
-    
-    const modalInstance = new bootstrap.Modal(modal);
-    modalInstance.show();
 }
 
 function downloadImage() {
-    const img = document.getElementById('modalImage');
-    const title = document.getElementById('imageModalLabel').textContent;
-    
-    if (!img || !img.src) return;
-    
-    // Create a temporary link element
-    const link = document.createElement('a');
-    link.href = img.src;
-    link.download = `${title.replace(/\s+/g, '_')}.png`;
-    
-    // Trigger download
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const modalImage = document.getElementById('modalImage');
+    if (modalImage && modalImage.src) {
+        const a = document.createElement('a');
+        a.href = modalImage.src;
+        a.download = modalImage.alt || 'training_image.png';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
 }
 
-// Refresh logs button
+function showPreviousEpoch() {
+    if (window.epochNavigator) {
+        window.epochNavigator.previous();
+    }
+}
+
+function showNextEpoch() {
+    if (window.epochNavigator) {
+        window.epochNavigator.next();
+    }
+}
+
+// MLflow Registry Management Functions - Delegated to unified manager
+function registerModel(modelId) {
+    if (window.modelDetailManager) {
+        window.modelDetailManager.registerModel(modelId);
+    }
+}
+
+function syncRegistryInfo(modelId) {
+    if (window.modelDetailManager) {
+        window.modelDetailManager.syncRegistryInfo(modelId);
+    }
+}
+
+// Logs Modal Functions - Delegated to unified manager
+function openLogsModal() {
+    if (window.modelDetailManager) {
+        window.modelDetailManager.openLogsModal();
+    }
+}
+
+function loadModalLogs() {
+    if (window.modelDetailManager) {
+        window.modelDetailManager.loadModalLogs();
+    }
+}
+
+// Initialize refresh button functionality
 document.addEventListener('DOMContentLoaded', function() {
     const refreshBtn = document.getElementById('modal-refresh-logs');
     if (refreshBtn) {
@@ -1110,7 +763,10 @@ document.addEventListener('DOMContentLoaded', function() {
             btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
             btn.disabled = true;
             
-            loadModalLogs();
+            // Delegate to unified manager
+            if (window.modelDetailManager) {
+                window.modelDetailManager.loadModalLogs();
+            }
             
             setTimeout(() => {
                 btn.innerHTML = originalHTML;
