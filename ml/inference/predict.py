@@ -4,7 +4,15 @@ import torch
 from pathlib import Path
 from PIL import Image
 from torchvision import transforms
-from ..training.models.unet import UNet
+
+# Handle both absolute and relative imports
+try:
+    from ..training.models.unet import UNet
+except ImportError:
+    # Fallback for absolute import when script is run directly
+    import sys
+    sys.path.append(str(Path(__file__).parent.parent))
+    from training.models.unet import UNet
 
 def find_model_file(model_dir, epoch):
     model_files = list(Path(model_dir).glob(f'best_model_epoch_{epoch}_*.pth'))
@@ -13,19 +21,18 @@ def find_model_file(model_dir, epoch):
     return model_files[0]
 
 def load_model(model_path):
-    model = UNet(n_channels=1, n_classes=1, bilinear=False)  # Zastąp UNet odpowiednią klasą modelu
+    model = UNet(n_channels=3, n_classes=1, bilinear=False)  # Use 3 channels for RGB input like training
     checkpoint = torch.load(model_path, weights_only=True)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     return model
 
 def inference(model, image):
-    # Step 2: Preprocess the image
+    # Step 2: Preprocess the image to match training transforms
     transform = transforms.Compose([
-        transforms.Grayscale(num_output_channels=1),  # Konwersja obrazu RGB na obraz w skali szarości
-        # transforms.Resize((256, 256)),  # Resize to the model's input size
-        transforms.ToTensor(),         # Convert to a PyTorch tensor
-        # transforms.Normalize(mean=[0.5], std=[0.5])  # Normalize to [-1, 1]
+        # Keep RGB format - do NOT convert to grayscale since models expect 3 channels
+        transforms.ToTensor(),         # Convert to a PyTorch tensor (RGB)
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Same normalization as training
     ])
     input_tensor = transform(image).unsqueeze(0)  # Add batch dimension
 

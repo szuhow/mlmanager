@@ -216,7 +216,6 @@ def setup_default_architectures():
     # Add discovery paths
     registry.add_discovery_path(base_dir / 'unet')
     registry.add_discovery_path(base_dir / 'unet-old')
-    registry.add_discovery_path(base_dir / 'resunet')
     
     # Manual registration for known architectures
     try:
@@ -230,7 +229,7 @@ def setup_default_architectures():
             model_class=MonaiUNet,
             default_config={
                 'spatial_dims': 2,
-                'in_channels': 1,
+                'in_channels': 3,  # Updated for RGB input
                 'out_channels': 1,
                 'channels': (16, 32, 64, 128, 256),
                 'strides': (2, 2, 2, 2),
@@ -252,7 +251,7 @@ def setup_default_architectures():
             model_class=MonaiUNet,
             default_config={
                 'spatial_dims': 2,
-                'in_channels': 1,
+                'in_channels': 3,  # Updated for RGB input
                 'out_channels': 1,
                 'channels': (16, 32, 64, 128, 256),
                 'strides': (2, 2, 2, 2),
@@ -282,7 +281,7 @@ def setup_default_architectures():
                     description='Local U-Net implementation',
                     model_class=local_unet_module.UNet,
                     default_config={
-                        'n_channels': 1,
+                        'n_channels': 3,  # Updated for RGB input
                         'n_classes': 1,
                         'bilinear': False,
                     },
@@ -324,15 +323,28 @@ def setup_default_architectures():
                 version='1.0.0'
             )
         
-        # Register Residual U-Net models manually for better control
-        resunet_path = base_dir / 'resunet' / 'resunet_model.py'
-        if resunet_path.exists():
+        # Register Residual U-Net models from the correct path
+        # ResUNet models are in ml/training/models/, not ml/utils/resunet/
+        training_models_path = base_dir.parent / 'training' / 'models' / 'resunet_model.py'
+        if training_models_path.exists():
             # Import the models to register them properly
             try:
+                import sys
                 import importlib.util
-                spec = importlib.util.spec_from_file_location("resunet_models", str(resunet_path))
-                resunet_module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(resunet_module)
+                
+                # Add the models directory to Python path temporarily for proper imports
+                models_dir = str(training_models_path.parent)
+                if models_dir not in sys.path:
+                    sys.path.insert(0, models_dir)
+                
+                try:
+                    spec = importlib.util.spec_from_file_location("resunet_models", str(training_models_path))
+                    resunet_module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(resunet_module)
+                finally:
+                    # Remove from path after import
+                    if models_dir in sys.path:
+                        sys.path.remove(models_dir)
                 
                 # Register standard Residual U-Net
                 registry.register(ArchitectureInfo(
@@ -342,7 +354,7 @@ def setup_default_architectures():
                     description='U-Net with residual connections for improved gradient flow and feature learning',
                     model_class=resunet_module.ResUNet,
                     default_config={
-                        'n_channels': 1,
+                        'n_channels': 3,  # Updated for RGB input
                         'n_classes': 1,
                         'bilinear': False,
                         'use_attention': False
@@ -362,7 +374,7 @@ def setup_default_architectures():
                     description='Deeper U-Net with residual connections for complex feature extraction',
                     model_class=resunet_module.DeepResUNet,
                     default_config={
-                        'n_channels': 1,
+                        'n_channels': 3,  # Updated for RGB input
                         'n_classes': 1,
                         'bilinear': False,
                         'use_attention': False
@@ -374,14 +386,19 @@ def setup_default_architectures():
                     version='1.0.0'
                 ))
                 
-                # Register convenience functions as well
+                # Register Residual U-Net with Attention
                 registry.register(ArchitectureInfo(
-                    key='resunet_basic',
-                    display_name='Residual U-Net (Basic)',
+                    key='resunet_attention',
+                    display_name='Residual U-Net with Attention',
                     framework='PyTorch',
-                    description='Basic Residual U-Net without attention mechanisms',
-                    model_class=resunet_module.create_resunet,
-                    default_config={},  # Convenience function has defaults
+                    description='Standard Residual U-Net with attention gates for better feature selection',
+                    model_class=resunet_module.ResUNet,
+                    default_config={
+                        'n_channels': 3,  # Updated for RGB input
+                        'n_classes': 1,
+                        'bilinear': False,
+                        'use_attention': True
+                    },
                     category='medical_segmentation',
                     supports_2d=True,
                     supports_3d=False,
@@ -389,22 +406,75 @@ def setup_default_architectures():
                     version='1.0.0'
                 ))
                 
+                # Register Deep Residual U-Net with Attention
                 registry.register(ArchitectureInfo(
-                    key='attention_resunet',
-                    display_name='Attention Residual U-Net',
+                    key='deep_resunet_attention',
+                    display_name='Deep Residual U-Net with Attention',
                     framework='PyTorch',
-                    description='Residual U-Net with attention gates for better feature selection',
-                    model_class=resunet_module.create_attention_resunet,
-                    default_config={},  # Convenience function has defaults
+                    description='Deeper Residual U-Net with attention gates for complex feature extraction and better localization',
+                    model_class=resunet_module.DeepResUNet,
+                    default_config={
+                        'n_channels': 3,  # Updated for RGB input
+                        'n_classes': 1,
+                        'bilinear': False,
+                        'use_attention': True
+                    },
                     category='medical_segmentation',
                     supports_2d=True,
                     supports_3d=False,
                     author='Custom Implementation',
                     version='1.0.0'
                 ))
+                
+                # # Register convenience functions as well
+                # registry.register(ArchitectureInfo(
+                #     key='create_resunet',
+                #     display_name='Create Residual U-Net (Function)',
+                #     framework='PyTorch',
+                #     description='Convenience function to create a standard Residual U-Net',
+                #     model_class=resunet_module.create_resunet,
+                #     default_config={},  # Convenience function has defaults
+                #     category='medical_segmentation',
+                #     supports_2d=True,
+                #     supports_3d=False,
+                #     author='Custom Implementation',
+                #     version='1.0.0'
+                # ))
+                
+                # registry.register(ArchitectureInfo(
+                #     key='create_deep_resunet',
+                #     display_name='Create Deep Residual U-Net (Function)',
+                #     framework='PyTorch',
+                #     description='Convenience function to create a deeper Residual U-Net',
+                #     model_class=resunet_module.create_deep_resunet,
+                #     default_config={},  # Convenience function has defaults
+                #     category='medical_segmentation',
+                #     supports_2d=True,
+                #     supports_3d=False,
+                #     author='Custom Implementation',
+                #     version='1.0.0'
+                # ))
+                
+                # registry.register(ArchitectureInfo(
+                #     key='create_attention_resunet',
+                #     display_name='Create Attention Residual U-Net (Function)',
+                #     framework='PyTorch',
+                #     description='Convenience function to create a Residual U-Net with attention gates',
+                #     model_class=resunet_module.create_attention_resunet,
+                #     default_config={},  # Convenience function has defaults
+                #     category='medical_segmentation',
+                #     supports_2d=True,
+                #     supports_3d=False,
+                #     author='Custom Implementation',
+                #     version='1.0.0'
+                # ))
+                
+                logger.info("Successfully registered all ResUNet model variants")
                 
             except Exception as e:
                 logger.error(f"Error registering Residual U-Net models: {e}")
+        else:
+            logger.warning(f"ResUNet models not found at {training_models_path}")
     
     except Exception as e:
         logger.error(f"Error setting up default architectures: {e}")

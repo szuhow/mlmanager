@@ -28,7 +28,7 @@ print_header() {
 
 # Check if containers are running
 check_containers() {
-    if ! docker-compose ps | grep -q "Up"; then
+    if ! docker compose ps | grep -q "Up"; then
         print_error "Containers are not running. Start them first with: ./dev.sh start"
         exit 1
     fi
@@ -37,7 +37,7 @@ check_containers() {
 # Run Django management commands
 run_django_command() {
     print_status "Running: python core/manage.py $1"
-    docker-compose exec django python core/manage.py $@
+    docker compose exec -T django python core/manage.py $@
 }
 
 # Main setup function
@@ -70,7 +70,7 @@ setup_django() {
     fi
     
     # Create superuser using Django shell
-    docker-compose exec django python core/manage.py shell << EOF
+    docker compose exec -T django python core/manage.py shell << EOF
 from django.contrib.auth import get_user_model
 User = get_user_model()
 
@@ -114,7 +114,7 @@ for root, dirs, files in os.walk('.'):
 EOF
         
         # Remove database file
-        docker-compose exec django rm -f db.sqlite3
+        docker compose exec django rm -f db.sqlite3
         
         # Recreate migrations and database
         run_django_command makemigrations
@@ -133,18 +133,27 @@ show_help() {
     echo "Usage: $0 [command]"
     echo ""
     echo "Commands:"
-    echo "  setup     - Full Django setup (migrations + superuser)"
-    echo "  migrate   - Run migrations only"
-    echo "  user      - Create superuser only"
-    echo "  reset     - Reset database (dangerous!)"
-    echo "  shell     - Open Django shell"
-    echo "  logs      - Show Django logs"
-    echo "  test      - Run Django tests"
+    echo "  setup              - Full Django setup (migrations + superuser)"
+    echo "  migrate            - Create and apply migrations + collect static"
+    echo "  migrate-only       - Apply existing migrations only"
+    echo "  makemigrations     - Create new migrations only"
+    echo "  user               - Create superuser (non-interactive)"
+    echo "  user-interactive   - Create superuser (interactive)"
+    echo "  reset              - Reset database (dangerous!)"
+    echo "  shell              - Open Django shell"
+    echo "  logs               - Show Django logs"
+    echo "  test               - Run Django tests"
+    echo "  dbshell            - Open database shell"
+    echo ""
+    echo "Environment Variables:"
+    echo "  DJANGO_SUPERUSER_USERNAME - Superuser username"
+    echo "  DJANGO_SUPERUSER_EMAIL    - Superuser email"
+    echo "  DJANGO_SUPERUSER_PASSWORD - Superuser password (default: admin123)"
     echo ""
     echo "Examples:"
     echo "  $0 setup"
     echo "  $0 migrate"
-    echo "  $0 user"
+    echo "  DJANGO_SUPERUSER_USERNAME=admin DJANGO_SUPERUSER_EMAIL=admin@example.com $0 user"
 }
 
 # Main script logic
@@ -157,11 +166,47 @@ case $1 in
         print_status "Creating and applying migrations..."
         run_django_command makemigrations
         run_django_command migrate
+        print_status "Collecting static files..."
+        run_django_command collectstatic --noinput
+        print_status "Migrations completed!"
+        ;;
+    "migrate-only")
+        check_containers
+        print_status "Applying migrations only..."
+        run_django_command migrate
+        ;;
+    "makemigrations")
+        check_containers
+        print_status "Creating new migrations..."
+        run_django_command makemigrations
         ;;
     "user")
         check_containers
         print_header "Creating Django superuser..."
-        run_django_command createsuperuser
+        
+        # Use environment variables if available, otherwise prompt
+        if [ -z "$DJANGO_SUPERUSER_USERNAME" ]; then
+            read -p "Enter superuser username: " DJANGO_SUPERUSER_USERNAME
+        fi
+        if [ -z "$DJANGO_SUPERUSER_EMAIL" ]; then
+            read -p "Enter superuser email: " DJANGO_SUPERUSER_EMAIL
+        fi
+        if [ -z "$DJANGO_SUPERUSER_PASSWORD" ]; then
+            DJANGO_SUPERUSER_PASSWORD="admin123"
+        fi
+        
+        export DJANGO_SUPERUSER_USERNAME
+        export DJANGO_SUPERUSER_EMAIL
+        export DJANGO_SUPERUSER_PASSWORD
+        
+        run_django_command createsuperuser --noinput
+        print_status "Superuser created with username: $DJANGO_SUPERUSER_USERNAME"
+        print_status "Default password: $DJANGO_SUPERUSER_PASSWORD"
+        ;;
+    "user-interactive")
+        check_containers
+        print_header "Creating Django superuser (interactive)..."
+        docker compose exec django python core/manage.py createsuperuser
         ;;
     "reset")
         check_containers
@@ -173,7 +218,7 @@ case $1 in
         run_django_command shell
         ;;
     "logs")
-        docker-compose logs -f django
+        docker compose logs -f django
         ;;
     "test")
         check_containers

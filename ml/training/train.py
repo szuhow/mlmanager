@@ -2826,32 +2826,35 @@ def get_inference_transforms(image_size=(256, 256), use_original_size=False):
         
         img = Image.open(filepath)
         
-        # Convert to grayscale if needed
-        if img.mode != 'L':
-            img = img.convert('L')
+        # Keep RGB format to match training (3 channels)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
         
         # Convert to numpy array and add channel dimension
         img_array = np.array(img)
-        if len(img_array.shape) == 2:
-            img_array = img_array[np.newaxis, ...]  # Add channel dimension
+        if len(img_array.shape) == 3:
+            # Convert HWC to CHW format
+            img_array = img_array.transpose(2, 0, 1)  # HWC -> CHW
         
-        # Convert to torch tensor
-        img_tensor = torch.from_numpy(img_array).float()
+        # Convert to torch tensor and normalize to [0, 1]
+        img_tensor = torch.from_numpy(img_array).float() / 255.0
+        
+        # Apply RGB normalization to match training
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+        img_tensor = (img_tensor - mean) / std
         
         return img_tensor
     
     if use_original_size:
-        # Don't resize, just load and scale intensity
+        # Don't resize, just load with RGB normalization
         return Compose([
             Lambda(load_pil_compatible_image),
-            ScaleIntensity(),
         ])
     else:
         return Compose([
             Lambda(load_pil_compatible_image),
             Resize(spatial_size=image_size, mode="bilinear"),
-            ScaleIntensity(),
-            # ToTensor is not needed since we already have a tensor
         ])
 
 def get_display_oriented_image(input_file, target_size=(256, 256)):
@@ -2887,8 +2890,9 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
     device = torch.device(device if torch.cuda.is_available() else "cpu")
     os.makedirs(output_dir, exist_ok=True)
     
-    # Create model using architecture registry
+    # Create model using architecture registry - use 3 channels for RGB input (matching training)
     model_config = get_default_model_config(model_type)
+    model_config["in_channels"] = 3  # Force 3 channels for RGB input to match training
     model, arch_info = create_model_from_registry(model_type, device, **model_config)
     
     if weights_path:
