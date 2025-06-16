@@ -1,6 +1,10 @@
 """ Full assembly of the parts to form the complete Residual U-Net network """
 
-from shared.resunet.resunet_parts import *
+try:
+    from .resunet_parts import *
+except ImportError:
+    # Fallback for when imported dynamically without package context
+    from resunet_parts import *
 import torch.utils.checkpoint as cp
 
 

@@ -52,6 +52,12 @@ django-setup:
 django-migrate:
 	@./scripts/development/django-setup.sh migrate
 
+django-migrate-only:
+	@./scripts/development/django-setup.sh migrate-only
+
+django-makemigrations:
+	@./scripts/development/django-setup.sh makemigrations
+
 django-user:
 	@./scripts/development/django-setup.sh user
 
@@ -85,10 +91,12 @@ help:
 	@echo "  start/stop     - Start/stop services"
 	@echo "  logs           - View logs"
 	@echo "  shell          - Django container shell"
-	@echo "  django-setup   - Setup Django (migrations + superuser)"
-	@echo "  django-migrate - Run migrations only"
-	@echo "  django-user    - Create superuser only"
-	@echo "  django-shell   - Django shell"
+	@echo "  django-setup       - Setup Django (migrations + superuser)"
+	@echo "  django-migrate     - Create and apply migrations + static files"
+	@echo "  django-migrate-only - Apply existing migrations only"
+	@echo "  django-makemigrations - Create new migrations only"
+	@echo "  django-user        - Create superuser only"
+	@echo "  django-shell       - Django shell"
 	@echo "  test           - Run all tests"
 	@echo "  test-unit      - Run unit tests"
 	@echo "  test-integration - Run integration tests"
