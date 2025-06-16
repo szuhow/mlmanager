@@ -98,6 +98,92 @@
                 </div>
             </div>
 
+            <!-- Learning Rate Scheduler Configuration -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-chart-line me-2"></i>Learning Rate Scheduler
+                        {% if template.lr_scheduler == 'none' %}
+                            <span class="badge bg-secondary ms-2">Disabled</span>
+                        {% elif template.lr_scheduler == 'plateau' %}
+                            <span class="badge bg-warning ms-2">Adaptive</span>
+                        {% elif template.lr_scheduler == 'step' %}
+                            <span class="badge bg-success ms-2">Step-wise</span>
+                        {% elif template.lr_scheduler == 'exponential' %}
+                            <span class="badge bg-danger ms-2">Exponential</span>
+                        {% elif template.lr_scheduler == 'cosine' %}
+                            <span class="badge bg-info ms-2">Cosine</span>
+                        {% elif template.lr_scheduler == 'adaptive' %}
+                            <span class="badge bg-primary ms-2">Custom</span>
+                        {% endif %}
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if template.lr_scheduler == 'none' %}
+                        <div class="text-center text-muted py-3">
+                            <i class="fas fa-ban fa-2x mb-2"></i>
+                            <p class="mb-0">No learning rate scheduling configured</p>
+                            <small>Learning rate will remain constant throughout training</small>
+                        </div>
+                    {% else %}
+                        <dl class="row">
+                            <dt class="col-sm-4">Scheduler Type:</dt>
+                            <dd class="col-sm-8">
+                                <span class="badge bg-primary">{{ template.get_lr_scheduler_display }}</span>
+                            </dd>
+                            
+                            <dt class="col-sm-4">Minimum LR:</dt>
+                            <dd class="col-sm-8"><code>{{ template.min_lr }}</code></dd>
+                            
+                            {% if template.lr_scheduler == 'plateau' %}
+                                <dt class="col-sm-4">Patience:</dt>
+                                <dd class="col-sm-8">{{ template.lr_patience }} epochs</dd>
+                                
+                                <dt class="col-sm-4">Reduction Factor:</dt>
+                                <dd class="col-sm-8">{{ template.lr_factor }}</dd>
+                            {% endif %}
+                            
+                            {% if template.lr_scheduler == 'step' %}
+                                <dt class="col-sm-4">Step Size:</dt>
+                                <dd class="col-sm-8">{{ template.lr_step_size }} epochs</dd>
+                                
+                                <dt class="col-sm-4">Decay Factor (Gamma):</dt>
+                                <dd class="col-sm-8">{{ template.lr_gamma }}</dd>
+                            {% endif %}
+                            
+                            {% if template.lr_scheduler == 'exponential' %}
+                                <dt class="col-sm-4">Decay Factor (Gamma):</dt>
+                                <dd class="col-sm-8">{{ template.lr_gamma }} <small class="text-muted">(per epoch)</small></dd>
+                            {% endif %}
+                            
+                            {% if template.lr_scheduler == 'adaptive' %}
+                                <dt class="col-sm-4">Patience:</dt>
+                                <dd class="col-sm-8">{{ template.lr_patience }} epochs</dd>
+                                
+                                <dt class="col-sm-4">Reduction Factor:</dt>
+                                <dd class="col-sm-8">{{ template.lr_factor }}</dd>
+                            {% endif %}
+                        </dl>
+                        
+                        <!-- Scheduler Description -->
+                        <div class="border rounded p-3 bg-light mt-3">
+                            <h6 class="text-primary mb-2"><i class="fas fa-info-circle me-1"></i>Scheduler Description</h6>
+                            {% if template.lr_scheduler == 'plateau' %}
+                                <p class="small mb-0">Reduces learning rate when validation loss stops improving. Monitors plateau and reduces LR by a factor of {{ template.lr_factor }} after {{ template.lr_patience }} epochs with no improvement.</p>
+                            {% elif template.lr_scheduler == 'step' %}
+                                <p class="small mb-0">Reduces learning rate at fixed epoch intervals. LR is multiplied by {{ template.lr_gamma }} every {{ template.lr_step_size }} epochs.</p>
+                            {% elif template.lr_scheduler == 'exponential' %}
+                                <p class="small mb-0">Exponentially decays the learning rate each epoch. LR is multiplied by {{ template.lr_gamma }} every epoch.</p>
+                            {% elif template.lr_scheduler == 'cosine' %}
+                                <p class="small mb-0">Cosine annealing scheduler that varies learning rate following a cosine function. Provides smooth decay with potential for escaping local minima.</p>
+                            {% elif template.lr_scheduler == 'adaptive' %}
+                                <p class="small mb-0">Custom adaptive scheduler that automatically adjusts learning rate based on training dynamics and validation performance.</p>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+
             <!-- Data Augmentation -->
             <div class="card mb-4">
                 <div class="card-header">

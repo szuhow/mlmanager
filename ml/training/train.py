@@ -70,6 +70,9 @@ from monai.transforms import (
 # Import architecture registry
 from ml.utils.architecture_registry import registry as architecture_registry
 
+# Import dynamic learning rate scheduler
+from ml.utils.dynamic_lr_scheduler import DynamicLearningRateScheduler
+
 # Import ARCADE dataset integration
 try:
     from ml.datasets.torch_arcade_loader import (
@@ -77,7 +80,8 @@ try:
         get_arcade_dataset_info,
         ARCADEBinarySegmentation,
         ARCADESemanticSegmentation,
-        ARCADEStenosisDetection
+        ARCADEStenosisDetection,
+        ARCADEArteryClassification
     )
     ARCADE_AVAILABLE = True
     logger.info("[ARCADE] ARCADE dataset integration available")
@@ -265,7 +269,7 @@ def get_default_model_config(model_type):
     
     # Check if architecture has default config
     try:
-        from .architecture_registry import architecture_registry
+        from ml.utils.architecture_registry import registry as architecture_registry
         arch_info = architecture_registry.get_architecture(model_type)
         if arch_info and arch_info.default_config:
             return arch_info.default_config
@@ -682,12 +686,64 @@ def save_sample_predictions(model, val_loader, device, epoch, model_dir=None):
             
             # Model inference
             outputs = model(images)
-            outputs = torch.sigmoid(outputs)
-            outputs = (outputs > 0.5).float()
+            
+            # Apply appropriate post-processing based on number of output channels
+            num_output_channels = outputs.shape[1]
+            if num_output_channels == 1:
+                # Binary segmentation
+                outputs = torch.sigmoid(outputs)
+                outputs = (outputs > 0.5).float()
+                logger.info(f"[PREDICTIONS] Applied binary segmentation post-processing (sigmoid + threshold)")
+                use_colormap = False
+            else:
+                # Multi-class semantic segmentation
+                outputs = torch.softmax(outputs, dim=1)
+                outputs = torch.argmax(outputs, dim=1, keepdim=True).float()
+                logger.info(f"[PREDICTIONS] Applied multi-class segmentation post-processing (softmax + argmax) for {num_output_channels} classes")
+                use_colormap = True
             
             # Create figure with proper settings
             fig, axes = plt.subplots(3, 4, figsize=(15, 10))
             plt.suptitle(f'Sample Predictions - Epoch {epoch+1} (Full Images)', fontsize=16)
+            
+            # Create custom colormap for semantic segmentation
+            if use_colormap:
+                import matplotlib.colors as mcolors
+                # Create a custom colormap with distinct colors for each class
+                colors = [
+                    '#000000',  # 0 - black (background)
+                    '#FF0000',  # 1 - red
+                    '#00FF00',  # 2 - green
+                    '#0000FF',  # 3 - blue
+                    '#FFFF00',  # 4 - yellow
+                    '#FF00FF',  # 5 - magenta
+                    '#00FFFF',  # 6 - cyan
+                    '#FFA500',  # 7 - orange
+                    '#800080',  # 8 - purple
+                    '#FFC0CB',  # 9 - pink
+                    '#ADFF2F',  # 10 - green yellow
+                    '#1E90FF',  # 11 - dodger blue
+                    '#FF1493',  # 12 - deep pink
+                    '#00FA9A',  # 13 - medium spring green
+                    '#FF4500',  # 14 - red orange
+                    '#483D8B',  # 15 - dark slate blue
+                    '#FFD700',  # 16 - gold
+                    '#DC143C',  # 17 - crimson
+                    '#7CFC00',  # 18 - lawn green
+                    '#BA55D3',  # 19 - medium orchid
+                    '#8A2BE2',  # 20 - blue violet
+                    '#FF69B4',  # 21 - hot pink
+                    '#FF8C00',  # 22 - dark orange
+                    '#B8860B',  # 23 - dark goldenrod
+                    '#4682B4',  # 24 - steel blue
+                    '#00CED1',  # 25 - dark turquoise
+                    '#FF6347'   # 26 - tomato red
+                ]
+                # Pad with additional colors if needed
+                while len(colors) < num_output_channels:
+                    colors.append('#FFFFFF')  # white for overflow
+                
+                cmap = mcolors.ListedColormap(colors[:num_output_channels])
             
             num_samples = min(4, images.shape[0])
             for i in range(num_samples):
@@ -696,14 +752,38 @@ def save_sample_predictions(model, val_loader, device, epoch, model_dir=None):
                 axes[0, i].set_title(f'Input #{i+1}')
                 axes[0, i].axis('off')
                 
-                # Ground truth
-                axes[1, i].imshow(labels[i, 0].cpu().numpy(), cmap='gray')
-                axes[1, i].set_title(f'Ground Truth #{i+1}')
+                # Ground truth - use appropriate visualization
+                if use_colormap:
+                    # For multi-class segmentation, use custom color mapping
+                    gt_data = labels[i, 0].cpu().numpy() if labels.shape[1] == 1 else labels[i].cpu().numpy()
+                    # If gt_data is one-hot encoded, convert to class indices
+                    if len(gt_data.shape) == 3:
+                        gt_data = np.argmax(gt_data, axis=0)
+                    elif len(gt_data.shape) == 2 and gt_data.shape[0] > 1:
+                        gt_data = np.argmax(gt_data, axis=0)
+                    
+                    unique_classes = np.unique(gt_data)
+                    logger.info(f"[PREDICTIONS] Ground truth classes for sample {i+1}: {unique_classes}")
+                    axes[1, i].imshow(gt_data, cmap=cmap, vmin=0, vmax=num_output_channels-1)
+                    axes[1, i].set_title(f'Ground Truth #{i+1} ({len(unique_classes)} classes)')
+                else:
+                    # For binary segmentation, use grayscale
+                    axes[1, i].imshow(labels[i, 0].cpu().numpy(), cmap='gray')
+                    axes[1, i].set_title(f'Ground Truth #{i+1}')
                 axes[1, i].axis('off')
                 
-                # Prediction
-                axes[2, i].imshow(outputs[i, 0].cpu().numpy(), cmap='gray')
-                axes[2, i].set_title(f'Prediction #{i+1}')
+                # Prediction - use appropriate visualization
+                if use_colormap:
+                    # For multi-class segmentation, use custom color mapping
+                    pred_data = outputs[i, 0].cpu().numpy()
+                    unique_pred_classes = np.unique(pred_data)
+                    logger.info(f"[PREDICTIONS] Predicted classes for sample {i+1}: {unique_pred_classes}")
+                    axes[2, i].imshow(pred_data, cmap=cmap, vmin=0, vmax=num_output_channels-1)
+                    axes[2, i].set_title(f'Prediction #{i+1} ({len(unique_pred_classes)} classes)')
+                else:
+                    # For binary segmentation, use grayscale
+                    axes[2, i].imshow(outputs[i, 0].cpu().numpy(), cmap='gray')
+                    axes[2, i].set_title(f'Prediction #{i+1}')
                 axes[2, i].axis('off')
             
             # Hide unused subplots if we have fewer than 4 samples
@@ -983,8 +1063,13 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
     if forced_type:
         mapping = {
             'arcade_binary': 'binary_segmentation',
+            'arcade_binary_segmentation': 'binary_segmentation',
             'arcade_semantic': 'semantic_segmentation',
-            'arcade_stenosis': 'stenosis_detection'
+            'arcade_semantic_segmentation': 'semantic_segmentation',
+            'arcade_stenosis': 'stenosis_detection',
+            'arcade_stenosis_detection': 'stenosis_detection',
+            'arcade_classification': 'artery_classification',
+            'arcade_artery_classification': 'artery_classification'
         }
         task = mapping.get(forced_type, 'binary_segmentation')
     else:
@@ -993,19 +1078,48 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
             task = 'semantic_segmentation'
         elif 'stenosis' in mt:
             task = 'stenosis_detection'
+        elif 'artery' in mt or 'classification' in mt:
+            task = 'artery_classification'
         else:
             task = 'binary_segmentation'
     logger.info(f"[ARCADE] Using task: {task}")
     
-    # Common transforms
+    # Common transforms - use crop_size from transform_params to match training expectations
     res = getattr(args, 'resolution', '512')
-    size = 512 if res=='original' else int(res)
+    crop_size = transform_params.get('crop_size', 128)
+    
+    # For ARCADE datasets, use the crop_size as the target resolution to match MONAI training expectations
+    # This ensures spatial consistency between training (where model sees crop_size x crop_size) and validation
+    size = crop_size  # Use crop_size instead of resolution for spatial consistency
+    
+    logger.info(f"[ARCADE] Using resolution {size}x{size} to match training crop size")
+    
     if task in ['binary_segmentation','semantic_segmentation']:
         img_tr = tv_transforms.Compose([tv_transforms.Resize((size,size)), tv_transforms.ToTensor(), tv_transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])])
         if task=='binary_segmentation':
             mask_tr = tv_transforms.Compose([tv_transforms.Resize((size,size)), tv_transforms.ToTensor()])
         else:
-            mask_tr = tv_transforms.Compose([tv_transforms.Lambda(lambda x: torch.from_numpy(x).permute(2,0,1).float())])
+            # For semantic segmentation, add proper resizing to ensure spatial consistency
+            def resize_semantic_mask(x):
+                """Resize semantic mask tensor to match image dimensions"""
+                # x is numpy array of shape (H, W, C)
+                import torch.nn.functional as F
+                import torch
+                
+                # Convert to tensor and permute to (C, H, W)
+                tensor = torch.from_numpy(x).permute(2, 0, 1).float()
+                
+                # Resize to target size using nearest neighbor to preserve class labels
+                resized = F.interpolate(tensor.unsqueeze(0), size=(size, size), mode='nearest')
+                
+                # Remove batch dimension and return
+                return resized.squeeze(0)
+            
+            mask_tr = tv_transforms.Compose([tv_transforms.Lambda(resize_semantic_mask)])
+    elif task == 'artery_classification':
+        # For artery classification: input is binary mask, output is 0/1 label
+        mask_tr = tv_transforms.Compose([tv_transforms.Resize((size,size)), tv_transforms.ToTensor()])
+        img_tr = None  # No image transforms needed for mask input
     else:
         img_tr = tv_transforms.Compose([tv_transforms.Resize((size,size)), tv_transforms.ToTensor(), tv_transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])])
         mask_tr = None
@@ -1107,6 +1221,46 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
                     logger.info(f"[ARCADE]   Sample train mask shape: {sample[1].shape if hasattr(sample[1], 'shape') else 'N/A'}")
                 except Exception as e:
                     logger.warning(f"[ARCADE]   Could not get semantic sample info: {e}")
+                    
+        elif task == 'artery_classification':
+            logger.info("[ARCADE] Instantiating ARCADEArteryClassification for train...")
+            train_ds = ARCADEArteryClassification(
+                root=data_path,
+                image_set='train',
+                side=getattr(args,'artery_side',None),
+                download=False,
+                transform=mask_tr  # Binary mask transform
+            )
+            logger.info(f"[ARCADE] ARTERY CLASSIFICATION Train dataset created, length: {len(train_ds)}")
+            
+            logger.info("[ARCADE] Instantiating ARCADEArteryClassification for val...")
+            val_ds = ARCADEArteryClassification(
+                root=data_path,
+                image_set='val',
+                side=getattr(args,'artery_side',None),
+                download=False,
+                transform=mask_tr  # Binary mask transform
+            )
+            logger.info(f"[ARCADE] ARTERY CLASSIFICATION Val dataset created, length: {len(val_ds)}")
+            
+            # Enhanced logging for artery classification
+            logger.info(f"[ARCADE] ARTERY CLASSIFICATION Dataset Information:")
+            logger.info(f"[ARCADE]   Root path: {data_path}")
+            logger.info(f"[ARCADE]   Train samples: {len(train_ds)}, Val samples: {len(val_ds)}")
+            logger.info(f"[ARCADE]   Total samples: {len(train_ds) + len(val_ds)}")
+            logger.info(f"[ARCADE]   Image resolution: {size}x{size}")
+            logger.info(f"[ARCADE]   Task type: Artery Classification (binary mask → left/right)")
+            logger.info(f"[ARCADE]   Input: Binary mask (0/255)")
+            logger.info(f"[ARCADE]   Output: 0=right artery, 1=left artery")
+            
+            # Log sample info
+            if len(train_ds) > 0:
+                try:
+                    sample = train_ds[0]
+                    logger.info(f"[ARCADE]   Sample train mask shape: {sample[0].shape if hasattr(sample[0], 'shape') else 'N/A'}")
+                    logger.info(f"[ARCADE]   Sample train label: {sample[1]} ({'right' if sample[1] == 0 else 'left'})")
+                except Exception as e:
+                    logger.warning(f"[ARCADE]   Could not get artery classification sample info: {e}")
                     
         else:  # stenosis_detection
             logger.info("[ARCADE] Instantiating ARCADEStenosisDetection for train...")
@@ -1210,6 +1364,17 @@ def parse_args():
     parser.add_argument('--random-intensity', action='store_true', help='Enable random intensity scaling')
     parser.add_argument('--crop-size', type=int, default=128, help='Size of random crop')
     parser.add_argument('--num-workers', type=int, default=2, help='Number of data loading workers (reduced for Docker)')
+    
+    # Learning rate scheduler parameters
+    parser.add_argument('--lr-scheduler', type=str, default='none', 
+                       choices=['none', 'plateau', 'step', 'exponential', 'cosine', 'adaptive'],
+                       help='Learning rate scheduler type')
+    parser.add_argument('--lr-patience', type=int, default=5, help='Patience for plateau scheduler')
+    parser.add_argument('--lr-factor', type=float, default=0.5, help='Factor to reduce learning rate')
+    parser.add_argument('--lr-step-size', type=int, default=10, help='Step size for step scheduler')
+    parser.add_argument('--lr-gamma', type=float, default=0.1, help='Gamma for step/exponential scheduler')
+    parser.add_argument('--min-lr', type=float, default=1e-7, help='Minimum learning rate threshold')
+    
     # Prediction parameters
     parser.add_argument('--model-path', type=str, help='Path to trained model weights')
     parser.add_argument('--input-path', type=str, help='Path to input image or directory')
@@ -1246,6 +1411,219 @@ def parse_args():
         print("\nERROR: You must specify --mode=train or --mode=predict.")
         sys.exit(2)
     return args
+
+def detect_num_classes_from_masks(dataset_loaders, dataset_type="auto", max_samples=50):
+    """
+    Dynamically detect the number of classes from mask data for semantic segmentation
+    
+    Args:
+        dataset_loaders: Either tuple of (train_loader, val_loader) or (train_ds, val_ds)
+        dataset_type: Type of dataset ("auto", "arcade_semantic", "binary", etc.)
+        max_samples: Maximum number of samples to check
+    
+    Returns:
+        dict with detected class information: {
+            'num_classes': int,
+            'class_type': str ('binary', 'multi_class', 'semantic'),
+            'unique_values': list,
+            'max_channels': int (for one-hot encoded masks)
+        }
+    """
+    logger.info(f"[CLASS DETECTION] Detecting number of classes from mask data...")
+    
+    try:
+        # Handle different dataset loader types
+        if hasattr(dataset_loaders[0], '__iter__') and hasattr(dataset_loaders[0], 'dataset'):
+            # DataLoader objects (ARCADE)
+            train_loader, val_loader = dataset_loaders
+            train_dataset = train_loader.dataset
+        else:
+            # Dataset objects (MONAI)
+            train_dataset, val_dataset = dataset_loaders
+        
+        # Special handling for ARCADE Artery Classification
+        if hasattr(train_dataset, '__class__') and 'ARCADEArteryClassification' in str(train_dataset.__class__):
+            logger.info(f"[CLASS DETECTION] ARCADEArteryClassification dataset detected")
+            logger.info(f"[CLASS DETECTION] This is a classification task: binary mask → left/right artery")
+            logger.info(f"[CLASS DETECTION] Output should be 2 classes (0=right, 1=left)")
+            return {
+                'num_classes': 2,  # Classification task: 2 output classes
+                'class_type': 'classification',
+                'unique_values': [0, 1],
+                'max_channels': 1,
+                'task_type': 'artery_classification'
+            }
+        
+        # Collect unique values and shapes from masks
+        all_unique_values = set()
+        mask_shapes = []
+        mask_channels = []
+        samples_checked = 0
+        
+        logger.info(f"[CLASS DETECTION] Checking up to {max_samples} samples from training dataset...")
+        
+        # Check training dataset samples
+        for i in range(min(len(train_dataset), max_samples)):
+            try:
+                if hasattr(train_dataset, '__getitem__'):
+                    image, mask = train_dataset[i]
+                else:
+                    # For some dataset implementations
+                    sample = train_dataset[i]
+                    if isinstance(sample, dict):
+                        image = sample.get('image', sample.get('img'))
+                        mask = sample.get('label', sample.get('mask'))
+                    else:
+                        image, mask = sample
+                
+                # Convert to numpy for analysis
+                if hasattr(mask, 'numpy'):
+                    mask_array = mask.numpy()
+                elif hasattr(mask, 'cpu'):
+                    mask_array = mask.cpu().numpy()
+                else:
+                    mask_array = np.array(mask)
+                
+                # Record shape and channels
+                mask_shapes.append(mask_array.shape)
+                
+                # Determine number of channels based on shape
+                if len(mask_array.shape) == 4:
+                    # Batch dimension included (B, C, H, W) or (B, H, W, C)
+                    if mask_array.shape[1] < mask_array.shape[3]:  # Likely (B, C, H, W)
+                        mask_channels.append(mask_array.shape[1])
+                    else:  # Likely (B, H, W, C)
+                        mask_channels.append(mask_array.shape[3])
+                elif len(mask_array.shape) == 3:
+                    # Either (C, H, W) or (H, W, C)
+                    if mask_array.shape[0] < min(mask_array.shape[1], mask_array.shape[2]):
+                        # Likely (C, H, W) format
+                        mask_channels.append(mask_array.shape[0])
+                        mask_array = mask_array.transpose(1, 2, 0)  # Convert to (H, W, C)
+                    else:
+                        # Likely (H, W, C) format
+                        mask_channels.append(mask_array.shape[2])
+                elif len(mask_array.shape) == 2:
+                    # Single channel (H, W)
+                    mask_channels.append(1)
+                else:
+                    # Unknown format, default to 1 channel
+                    mask_channels.append(1)
+                
+                # Debug logging for channel detection
+                logger.info(f"[CLASS DETECTION] Sample {i}: shape={mask_array.shape}, detected_channels={mask_channels[-1]}")
+                
+                # For multi-channel masks, check each channel
+                if len(mask_array.shape) == 3 and mask_array.shape[2] > 1:
+                    # Multi-channel format (H, W, C) - check each channel
+                    logger.info(f"[CLASS DETECTION] Processing multi-channel mask with {mask_array.shape[2]} channels")
+                    for c in range(mask_array.shape[2]):
+                        channel_data = mask_array[:, :, c]
+                        if np.any(channel_data > 0):
+                            all_unique_values.update(np.unique(channel_data))
+                else:
+                    # Single channel or already processed
+                    if len(mask_array.shape) > 2:
+                        mask_array = mask_array.squeeze()
+                    all_unique_values.update(np.unique(mask_array))
+                
+                samples_checked += 1
+                
+                # Early termination for clear cases
+                if samples_checked >= 10 and len(all_unique_values) > 0:
+                    break
+                    
+            except Exception as e:
+                logger.warning(f"[CLASS DETECTION] Error processing sample {i}: {e}")
+                continue
+        
+        # Analyze collected data
+        unique_values = sorted(list(all_unique_values))
+        max_channels = max(mask_channels) if mask_channels else 1
+        
+        logger.info(f"[CLASS DETECTION] Analyzed {samples_checked} samples")
+        logger.info(f"[CLASS DETECTION] Unique mask values: {unique_values}")
+        logger.info(f"[CLASS DETECTION] Max channels found: {max_channels}")
+        logger.info(f"[CLASS DETECTION] Typical mask shape: {mask_shapes[0] if mask_shapes else 'Unknown'}")
+        
+        # Determine class type and count
+        class_info = _analyze_class_distribution(unique_values, max_channels, dataset_type)
+        
+        logger.info(f"[CLASS DETECTION] Detection result: {class_info}")
+        return class_info
+        
+    except Exception as e:
+        logger.error(f"[CLASS DETECTION] Failed to detect classes: {e}")
+        # Return safe defaults
+        return {
+            'num_classes': 1,
+            'class_type': 'binary',
+            'unique_values': [0, 1],
+            'max_channels': 1
+        }
+
+def _analyze_class_distribution(unique_values, max_channels, dataset_type):
+    """Analyze unique values and channels to determine class configuration"""
+    
+    num_unique = len(unique_values)
+    
+    # Handle one-hot encoded semantic segmentation (ARCADE style)
+    if max_channels > 2:
+        logger.info(f"[CLASS DETECTION] One-hot encoded semantic segmentation detected with {max_channels} channels")
+        return {
+            'num_classes': max_channels,
+            'class_type': 'semantic_onehot',
+            'unique_values': unique_values,
+            'max_channels': max_channels
+        }
+    
+    # Handle binary segmentation
+    elif num_unique == 2 and set(unique_values) <= {0, 1, 255}:
+        logger.info(f"[CLASS DETECTION] Binary segmentation detected")
+        return {
+            'num_classes': 1,
+            'class_type': 'binary',
+            'unique_values': unique_values,
+            'max_channels': 1
+        }
+    
+    # Handle grayscale binary masks that will be auto-thresholded during training
+    elif num_unique > 2:
+        min_val = min(unique_values)
+        max_val = max(unique_values)
+        
+        # Check if this looks like grayscale binary masks that need thresholding
+        if (min_val == 0 and max_val == 255 and num_unique >= 50) or \
+           (min_val >= 0 and max_val <= 1.0 and num_unique >= 10):
+            # This is a grayscale mask that will be auto-thresholded to binary during training
+            logger.info(f"[CLASS DETECTION] Grayscale binary mask detected ({num_unique} values) - will be auto-thresholded to binary")
+            logger.info(f"[CLASS DETECTION] Range: [{min_val}, {max_val}] → will become [0, 1] during training")
+            return {
+                'num_classes': 1,
+                'class_type': 'binary',
+                'unique_values': [0, 1],  # What it will become after thresholding
+                'max_channels': 1
+            }
+        else:
+            # True multi-class semantic segmentation
+            num_classes = num_unique if 0 in unique_values else num_unique + 1
+            logger.info(f"[CLASS DETECTION] Multi-class semantic segmentation detected with {num_classes} classes")
+            return {
+                'num_classes': num_classes,
+                'class_type': 'semantic_single',
+                'unique_values': unique_values,
+                'max_channels': 1
+            }
+    
+    # Default to binary
+    else:
+        logger.info(f"[CLASS DETECTION] Defaulting to binary segmentation")
+        return {
+            'num_classes': 1,
+            'class_type': 'binary',
+            'unique_values': unique_values,
+            'max_channels': 1
+        }
 
 def train_model(args):
     # Set up logging first thing
@@ -1309,6 +1687,18 @@ def train_model(args):
         from ml_manager.utils.mlflow_utils import setup_mlflow
         setup_mlflow()
         logger.info("[MLFLOW] MLflow experiment setup completed")
+        
+        # Verify MLflow connection by listing experiments
+        try:
+            experiments = mlflow.search_experiments()
+            logger.info(f"[MLFLOW] Connection verified - found {len(experiments)} experiments")
+            current_experiment = mlflow.get_experiment_by_name(mlflow.get_experiment(mlflow.active_run().info.experiment_id if mlflow.active_run() else "0").name)
+            if current_experiment:
+                logger.info(f"[MLFLOW] Using experiment: {current_experiment.name}")
+                logger.info(f"[MLFLOW] Artifact location: {current_experiment.artifact_location}")
+        except Exception as verify_error:
+            logger.warning(f"[MLFLOW] Connection verification failed: {verify_error}")
+            
     except Exception as e:
         logger.warning(f"[MLFLOW] Failed to setup MLflow experiment: {e}")
     
@@ -1623,11 +2013,50 @@ def train_model(args):
         except Exception as e:
             logger.warning(f"[DATASET] Could not create sample input/mask visualization: {e}")
         
-        # --- USTAWIENIE in_channels na podstawie batcha ---
-        # Sprawdź liczbę kanałów wejściowych na podstawie batcha
+        # --- DYNAMIC CLASS AND CHANNEL DETECTION ---
+        # Detect input channels from batch data
         input_channels = images.shape[1] if images is not None else 1
+        logger.info(f"[MODEL CONFIG] Detected input channels: {input_channels}")
+        
+        # Detect output classes from mask data
+        class_info = None
+        if 'train_loader' in locals() and 'val_loader' in locals():
+            # ARCADE dataset loaders
+            logger.info("[MODEL CONFIG] Detecting classes from ARCADE dataset...")
+            class_info = detect_num_classes_from_masks((train_loader, val_loader), dataset_type="arcade")
+        elif 'train_ds' in locals() and 'val_ds' in locals():
+            # MONAI datasets
+            logger.info("[MODEL CONFIG] Detecting classes from MONAI dataset...")
+            class_info = detect_num_classes_from_masks((train_ds, val_ds), dataset_type="monai")
+        else:
+            logger.warning("[MODEL CONFIG] No dataset available for class detection, using defaults")
+        
+        # Configure model based on detected parameters
         model_config = get_default_model_config(args.model_type)
-        model_config["in_channels"] = input_channels  # Wymuś zgodność kanałów
+        model_config["in_channels"] = input_channels  # Set input channels
+        
+        # Set output channels based on class detection
+        if class_info:
+            output_channels = class_info['num_classes']
+            logger.info(f"[MODEL CONFIG] Detected {output_channels} output classes ({class_info['class_type']})")
+            logger.info(f"[MODEL CONFIG] Class values found: {class_info['unique_values']}")
+            logger.info(f"[MODEL CONFIG] Max channels in masks: {class_info['max_channels']}")
+            
+            # For one-hot encoded semantic segmentation, use the channel count
+            if class_info['class_type'] == 'semantic_onehot':
+                model_config["out_channels"] = class_info['max_channels']
+                logger.info(f"[MODEL CONFIG] Using {class_info['max_channels']} output channels for one-hot semantic segmentation")
+            else:
+                model_config["out_channels"] = output_channels
+                logger.info(f"[MODEL CONFIG] Using {output_channels} output channels for {class_info['class_type']} segmentation")
+        else:
+            # Fallback to default
+            default_out_channels = 1
+            model_config["out_channels"] = default_out_channels
+            logger.warning(f"[MODEL CONFIG] Using default {default_out_channels} output channels")
+        
+        # Create model with dynamically configured parameters
+        logger.info(f"[MODEL CONFIG] Final model configuration: {model_config}")
         model, arch_info = create_model_from_registry(
             args.model_type, 
             device,
@@ -1641,7 +2070,9 @@ def train_model(args):
                 model_type=args.model_type,
                 architecture_info=arch_info
             )
-            callback.update_training_config({
+            
+            # Prepare training config with class detection info
+            training_config = {
                 'batch_size': args.batch_size,
                 'epochs': args.epochs,
                 'learning_rate': args.learning_rate,
@@ -1653,7 +2084,19 @@ def train_model(args):
                 'random_rotate': getattr(args, 'random_rotate', False),
                 'random_scale': getattr(args, 'random_scale', False),
                 'random_intensity': getattr(args, 'random_intensity', False)
-            })
+            }
+            
+            # Add class detection information to training config
+            if class_info:
+                training_config.update({
+                    'detected_num_classes': class_info['num_classes'],
+                    'detected_class_type': class_info['class_type'],
+                    'detected_unique_values': class_info['unique_values'],
+                    'detected_max_channels': class_info['max_channels']
+                })
+                logger.info(f"[MODEL CONFIG] Added class detection info to training config")
+            
+            callback.update_training_config(training_config)
             callback.update_architecture_info(model, model_config)
 
         # Model directory was already created during logging setup
@@ -1664,10 +2107,51 @@ def train_model(args):
         config_file = save_config(args, model_dir=model_dir)
         mlflow.log_artifact(config_file)
 
-        loss_function = MonaiDiceLoss(sigmoid=True)
+        # --- VALIDATE MODEL CONFIGURATION WITH DETECTED CLASSES ---
+        # Get model output channels to validate against detected classes
+        model_output_channels = None
+        if hasattr(model, 'outc') and hasattr(model.outc, 'conv'):
+            model_output_channels = model.outc.conv.out_channels
+        elif hasattr(model, 'out_conv'):
+            model_output_channels = model.out_conv.out_channels
+        elif hasattr(model, 'segmentation_head'):
+            model_output_channels = model.segmentation_head.out_channels
+        
+        if model_output_channels and class_info:
+            logger.info(f"[MODEL VALIDATION] Model output channels: {model_output_channels}")
+            logger.info(f"[MODEL VALIDATION] Detected classes: {class_info['num_classes']} ({class_info['class_type']})")
+            
+            # Validate channel match
+            expected_channels = class_info['max_channels'] if class_info['class_type'] == 'semantic_onehot' else class_info['num_classes']
+            if model_output_channels == expected_channels:
+                logger.info(f"[MODEL VALIDATION] ✅ Model output channels match detected classes")
+            else:
+                logger.warning(f"[MODEL VALIDATION] ⚠️  Model output channels ({model_output_channels}) don't match expected ({expected_channels})")
+                logger.warning(f"[MODEL VALIDATION] This may cause training issues - check model configuration")
+
+        # Configure loss function based on detected class information
+        if class_info and class_info.get('task_type') == 'artery_classification':
+            # Classification task (ARCADEArteryClassification)
+            logger.info(f"[LOSS CONFIG] Using classification loss for artery classification (2 classes)")
+            loss_function = torch.nn.CrossEntropyLoss()
+        elif class_info and class_info['class_type'] == 'semantic_onehot' and class_info['max_channels'] > 1:
+            # Multi-class semantic segmentation with one-hot encoding
+            logger.info(f"[LOSS CONFIG] Using multi-class loss for {class_info['max_channels']} classes")
+            loss_function = MonaiDiceLoss(sigmoid=False, softmax=True)  # Use softmax for multi-class
+        else:
+            # Binary segmentation (default)
+            logger.info(f"[LOSS CONFIG] Using binary segmentation loss")
+            loss_function = MonaiDiceLoss(sigmoid=True)
         
         # Create optimizer based on args.optimizer choice
         optimizer = create_optimizer(model, args)
+        
+        # Initialize dynamic learning rate scheduler
+        lr_scheduler = DynamicLearningRateScheduler(
+            initial_lr=args.learning_rate,
+            model_id=args.model_id if hasattr(args, 'model_id') and args.model_id else None
+        )
+        logger.info(f"[LR_SCHEDULER] Dynamic learning rate scheduler initialized with LR: {args.learning_rate}")
         
         dice_metric = DiceMetric(include_background=True, reduction="mean")
         scaler = torch.cuda.amp.GradScaler()
@@ -2112,8 +2596,17 @@ def train_model(args):
                     batch_val_loss = loss_function(val_outputs, val_labels).item()
                     val_loss += batch_val_loss
                     
-                    val_outputs = torch.sigmoid(val_outputs)
-                    val_outputs = (val_outputs > 0.5).float()
+                    # Apply appropriate post-processing based on number of output channels
+                    num_output_channels = val_outputs.shape[1]
+                    if num_output_channels == 1:
+                        # Binary segmentation
+                        val_outputs = torch.sigmoid(val_outputs)
+                        val_outputs = (val_outputs > 0.5).float()
+                    else:
+                        # Multi-class semantic segmentation
+                        val_outputs = torch.softmax(val_outputs, dim=1)
+                        val_outputs = torch.argmax(val_outputs, dim=1, keepdim=True).float()
+                    
                     dice_metric(y_pred=val_outputs, y=val_labels)
                     if val_idx % 5 == 0:
                         val_progress_pct = (val_idx / len(val_loader)) * 100
@@ -2262,6 +2755,35 @@ def train_model(args):
                     training_curves_file = save_training_curves(epoch, metrics, logger, model_dir=model_dir)
                     if training_curves_file:
                         mlflow.log_artifact(training_curves_file)
+            
+            # Dynamic Learning Rate Adjustment
+            if 'lr_scheduler' in locals() and lr_scheduler:
+                try:
+                    # Provide current metrics to the scheduler
+                    lr_adjustment = lr_scheduler.check_and_adjust(
+                        epoch=epoch + 1,  # 1-based epoch numbering
+                        metrics={
+                            'val_dice': val_dice,
+                            'val_loss': val_loss,
+                            'train_dice': train_dice,
+                            'train_loss': epoch_loss
+                        }
+                    )
+                    
+                    if lr_adjustment['adjusted']:
+                        # Apply the new learning rate to the optimizer
+                        for param_group in optimizer.param_groups:
+                            param_group['lr'] = lr_adjustment['new_lr']
+                        
+                        logger.info(f"[LR_SCHEDULER] Learning rate adjusted from {lr_adjustment['old_lr']:.6f} to {lr_adjustment['new_lr']:.6f}")
+                        logger.info(f"[LR_SCHEDULER] Reason: {lr_adjustment['reason']}")
+                        
+                        # Log the adjustment to MLflow
+                        mlflow.log_metric('lr_adjustment_epoch', epoch + 1, step=epoch)
+                        mlflow.log_metric('lr_adjustment_reason', hash(lr_adjustment['reason']), step=epoch)
+                    
+                except Exception as lr_error:
+                    logger.warning(f"[LR_SCHEDULER] Error in learning rate adjustment: {lr_error}")
             
             # Track learning rate
             current_lr = optimizer.param_groups[0]['lr']
@@ -2449,12 +2971,12 @@ def train_model(args):
                 # Log PyTorch model using MLflow's model logging - with safe signature handling
                 try:
                     if sample_batch is not None and "image" in sample_batch and sample_images is not None:
-                        input_example = sample_images[:1].cpu().numpy()
+                        input_example = sample_images[:1].detach().cpu().numpy()
                         try:
                             # Try to create signature with model inference
                             signature = mlflow.models.infer_signature(
                                 input_example,
-                                torch.sigmoid(model(sample_images[:1].to(device))).cpu().numpy()
+                                torch.sigmoid(model(sample_images[:1].to(device))).detach().cpu().numpy()
                             )
                             mlflow.pytorch.log_model(
                                 model,
@@ -2494,12 +3016,12 @@ def train_model(args):
             # Fallback to original final model logging - with safe sample batch handling
             try:
                 if sample_batch is not None and "image" in sample_batch and sample_images is not None:
-                    input_example = sample_images[:1].cpu().numpy()
+                    input_example = sample_images[:1].detach().cpu().numpy()
                     try:
                         # Try with signature first
                         signature = mlflow.models.infer_signature(
                             input_example,
-                            torch.sigmoid(model(sample_images[:1].to(device))).cpu().numpy()
+                            torch.sigmoid(model(sample_images[:1].to(device))).detach().cpu().numpy()
                         )
                         mlflow.pytorch.log_model(
                             model,
@@ -2754,6 +3276,20 @@ def train_model(args):
                         logger.info(f"     • {artifact}")
                     if len(artifact_files) > 5:
                         logger.info(f"     • ... and {len(artifact_files) - 5} more")
+                    
+                    # Enhanced MLflow artifact logging with retry mechanism
+                    try:
+                        from ml.utils.mlflow_artifact_logger import force_log_all_artifacts
+                        logged_artifacts = force_log_all_artifacts(model_dir, args.mlflow_run_id)
+                        if logged_artifacts:
+                            logger.info(f"   ✅ MLflow: {len(logged_artifacts)} artifacts logged successfully")
+                            logger.info(f"   📊 Artifacts available in MLflow UI at experiment artifacts section")
+                        else:
+                            logger.warning(f"   ⚠️  No artifacts were logged to MLflow")
+                    except Exception as mlflow_error:
+                        logger.error(f"   ❌ MLflow artifact logging failed: {mlflow_error}")
+                        logger.info(f"   💡 Check MLflow connection and experiment configuration")
+                        # Continue execution even if MLflow logging fails
         
         # Performance Recommendations
         logger.info(f"💡 PERFORMANCE INSIGHTS:")
@@ -2777,7 +3313,7 @@ def train_model(args):
         logger.info(f"   • Review training curves and sample predictions")
         logger.info(f"   • Test model on independent test set")
         logger.info(f"   • Consider model deployment if performance is satisfactory")
-        if hasattr(args, 'model_id') and args.model_id:
+        if hasattr(args, 'model_id') and args.model_id is not None:
             logger.info(f"   • Check MLflow for detailed metrics and artifacts")
         
         logger.info("=" * 80)
@@ -2923,8 +3459,19 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
             
             # Generate prediction
             output = model(img)
-            output = torch.sigmoid(output)
-            pred = (output > 0.5).float()
+            
+            # Apply appropriate post-processing based on number of output channels
+            num_output_channels = output.shape[1]
+            if num_output_channels == 1:
+                # Binary segmentation
+                output = torch.sigmoid(output)
+                pred = (output > 0.5).float()
+                logger.info(f"Applied binary segmentation post-processing (sigmoid + threshold)")
+            else:
+                # Multi-class semantic segmentation
+                output = torch.softmax(output, dim=1)
+                pred = torch.argmax(output, dim=1, keepdim=True).float()
+                logger.info(f"Applied multi-class segmentation post-processing (softmax + argmax) for {num_output_channels} classes")
             
             # Save prediction - ensure correct tensor dimensions
             pred_np = pred.squeeze().cpu().numpy()
@@ -3103,6 +3650,3 @@ if __name__ == "__main__":
         logger.exception("Training failed with exception")
         print(f"[Train.py] Exception: {e}")
         raise
-
-# Architecture Management Functions
-

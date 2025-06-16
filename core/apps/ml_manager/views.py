@@ -997,7 +997,14 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 f'--resolution={form_data["resolution"]}',
                 f'--device={form_data["device"]}',
                 f'--crop-size={form_data["crop_size"]}',
-                f'--num-workers={form_data["num_workers"]}'
+                f'--num-workers={form_data["num_workers"]}',
+                # Learning rate scheduler parameters
+                f'--lr-scheduler={form_data.get("lr_scheduler", "none")}',
+                f'--lr-patience={form_data.get("lr_patience", 5)}',
+                f'--lr-factor={form_data.get("lr_factor", 0.5)}',
+                f'--lr-step-size={form_data.get("lr_step_size", 10)}',
+                f'--lr-gamma={form_data.get("lr_gamma", 0.1)}',
+                f'--min-lr={form_data.get("min_lr", 1e-7)}'
             ]
             if form_data.get('use_random_flip'): command.append('--random-flip')
             if form_data.get('use_random_rotate'): command.append('--random-rotate')
@@ -1070,6 +1077,13 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                         'use_random_intensity': model.training_data_info.get('use_random_intensity', True),
                         'crop_size': model.training_data_info.get('crop_size', 128),
                         'num_workers': model.training_data_info.get('num_workers', 4),
+                        # Learning Rate Scheduler Configuration
+                        'lr_scheduler': model.training_data_info.get('lr_scheduler', 'plateau'),
+                        'lr_patience': model.training_data_info.get('lr_patience', 5),
+                        'lr_factor': model.training_data_info.get('lr_factor', 0.5),
+                        'lr_step_size': model.training_data_info.get('lr_step_size', 10),
+                        'lr_gamma': model.training_data_info.get('lr_gamma', 0.1),
+                        'min_lr': model.training_data_info.get('min_lr', 1e-7),
                     })
             except MLModel.DoesNotExist:
                 pass  # Continue with default initial values
@@ -1479,6 +1493,13 @@ class SaveAsTemplateView(LoginRequiredMixin, FormView):
                 'use_random_intensity': training_info.get('use_random_intensity', True),
                 'crop_size': training_info.get('crop_size', 128),
                 'num_workers': training_info.get('num_workers', 4),
+                # Learning Rate Scheduler Configuration
+                'lr_scheduler': training_info.get('lr_scheduler', 'plateau'),
+                'lr_patience': training_info.get('lr_patience', 5),
+                'lr_factor': training_info.get('lr_factor', 0.5),
+                'lr_step_size': training_info.get('lr_step_size', 10),
+                'lr_gamma': training_info.get('lr_gamma', 0.1),
+                'min_lr': training_info.get('min_lr', 1e-7),
             })
         
         return initial
@@ -1723,9 +1744,27 @@ def get_training_progress(request, model_id):
     try:
         model = get_object_or_404(MLModel, id=model_id)
         
+        # Check for status changes by comparing with session data
+        session_key = f'model_{model_id}_last_status'
+        last_known_status = request.session.get(session_key)
+        current_status = model.status
+        status_changed = last_known_status != current_status
+        
+        # Store current status for next comparison
+        request.session[session_key] = current_status
+        
+        # Enhanced status transition detection
+        status_transition = None
+        if status_changed and last_known_status:
+            status_transition = f"{last_known_status} → {current_status}"
+            logging.info(f"Status transition detected for model {model_id}: {status_transition}")
+        
         return JsonResponse({
             'status': 'success',
-            'model_status': model.status,  # Add model status
+            'model_status': current_status,
+            'previous_status': last_known_status,
+            'status_changed': status_changed,
+            'status_transition': status_transition,
             'progress': {
                 'current_epoch': model.current_epoch or 0,
                 'total_epochs': model.total_epochs or 0,
@@ -1741,7 +1780,7 @@ def get_training_progress(request, model_id):
                 'val_dice': model.val_dice,
                 'best_val_dice': model.best_val_dice or 0.0,
             },
-            'status_changed': False  # Could be enhanced to detect status changes
+            'timestamp': model.updated_at.isoformat() if hasattr(model, 'updated_at') else None
         })
         
     except Exception as e:
@@ -2116,35 +2155,35 @@ def apply_semantic_colormap(mask_array, encoding=None, colors=None):
         }
     
     if colors is None:
-        # Default ARCADE colors
+        # Enhanced ARCADE colors - more distinct colors for better visualization
         colors = np.array([
-            [0, 0, 0],        # background
+            [0, 0, 0],        # background - black
             [255, 0, 0],      # segment 1 - red
             [0, 255, 0],      # segment 2 - green
             [0, 0, 255],      # segment 3 - blue
             [255, 255, 0],    # segment 4 - yellow
-            [0, 255, 255],    # segment 5 - cyan
-            [255, 0, 255],    # segment 6 - magenta
-            [192, 192, 192],  # segment 7 - light gray
-            [128, 128, 128],  # segment 8 - gray
-            [128, 0, 0],      # segment 9 - dark red
-            [128, 128, 0],    # segment 9a - olive
-            [0, 128, 0],      # segment 10 - dark green
-            [0, 0, 128],      # segment 10a - dark blue
-            [0, 128, 128],    # segment 11 - teal
-            [128, 0, 128],    # segment 12 - purple
-            [255, 165, 0],    # segment 12a - orange
-            [255, 105, 180],  # segment 13 - hot pink
-            [255, 69, 0],     # segment 14 - red orange
-            [60, 179, 113],   # segment 14a - medium sea green
-            [255, 215, 0],    # segment 15 - gold
+            [255, 0, 255],    # segment 5 - magenta
+            [0, 255, 255],    # segment 6 - cyan
+            [255, 165, 0],    # segment 7 - orange
+            [128, 0, 128],    # segment 8 - purple
+            [255, 192, 203],  # segment 9 - pink
+            [173, 255, 47],   # segment 9a - green yellow
+            [30, 144, 255],   # segment 10 - dodger blue
+            [255, 20, 147],   # segment 10a - deep pink
+            [0, 250, 154],    # segment 11 - medium spring green
+            [255, 69, 0],     # segment 12 - red orange
+            [72, 61, 139],    # segment 12a - dark slate blue
+            [255, 215, 0],    # segment 13 - gold
+            [220, 20, 60],    # segment 14 - crimson
+            [124, 252, 0],    # segment 14a - lawn green
+            [186, 85, 211],   # segment 15 - medium orchid
             [138, 43, 226],   # segment 16 - blue violet
             [255, 105, 180],  # segment 16a - hot pink
-            [255, 20, 147],   # segment 16b - deep pink
+            [255, 140, 0],    # segment 16b - dark orange
             [184, 134, 11],   # segment 16c - dark goldenrod
-            [255, 140, 0],    # segment 12b - dark orange
+            [70, 130, 180],   # segment 12b - steel blue
             [0, 206, 209],    # segment 14b - dark turquoise
-            [70, 130, 180]    # stenosis - steel blue
+            [255, 99, 71]     # stenosis - tomato red
         ])
     
     # If mask is 2D, convert to color
@@ -2154,12 +2193,17 @@ def apply_semantic_colormap(mask_array, encoding=None, colors=None):
         
         # Map each unique value to its color
         unique_values = np.unique(mask_array)
+        logger = logging.getLogger(__name__)
+        logger.info(f"Applying semantic colormap to mask with unique values: {unique_values}")
+        
         for val in unique_values:
             if val < len(colors):
                 color_mask[mask_array == val] = colors[val]
+                logger.info(f"Mapped class {val} to color {colors[val]}")
             else:
                 # Default to white for unknown values
                 color_mask[mask_array == val] = [255, 255, 255]
+                logger.warning(f"Unknown class {val}, using white color")
         
         return color_mask
     
@@ -2222,7 +2266,6 @@ def detect_dataset_type(data_path):
                 pass
         
         return 'coco_style', dataset_info
-    
     # Check for standard coronary structure
     imgs_dir = os.path.join(data_path, 'imgs')
     masks_dir = os.path.join(data_path, 'masks')
@@ -2515,6 +2558,7 @@ def dataset_preview_view(request):
                                     
                                     for i in range(max_samples):
                                         try:
+                                            logger.info(f"[ARCADE] Starting sample {i} processing...")
                                             sample_id = str(uuid.uuid4())
                                             
                                             # Get data from ARCADE dataset
@@ -2699,7 +2743,7 @@ def dataset_preview_view(request):
                                                             x, y, w, h = ann['bbox']
                                                             bbox_areas.append(w * h)
                                                             num_boxes += 1
-                                                
+                                                            
                                                 # Create detailed analysis
                                                 if num_boxes > 0:
                                                     avg_area = np.mean(bbox_areas) if bbox_areas else 0
@@ -2732,10 +2776,10 @@ def dataset_preview_view(request):
                                                     img_array = img.permute(1, 2, 0).numpy() if img.dim() == 3 else img.numpy()
                                                     if img_array.max() <= 1.0:
                                                         img_array = (img_array * 255).astype(np.uint8)
-                                                    if len(img_array.shape) == 2:
-                                                        img_pil = Image.fromarray(img_array, mode='L').convert('RGB')
-                                                    else:
+                                                    if len(img_array.shape) == 3:
                                                         img_pil = Image.fromarray(img_array)
+                                                    else:
+                                                        img_pil = Image.fromarray(img_array, mode='L').convert('RGB')
                                                 else:
                                                     img_pil = img.convert('RGB') if hasattr(img, 'convert') else img
                                                 
@@ -2779,10 +2823,10 @@ def dataset_preview_view(request):
                                                             mask_array = (mask_array * 255).astype(np.uint8)
                                                             logger.info(f"Scaled binary mask to 0-255 range")
                                                         elif mask_array.max() > 1.0:
-                                                            # Values are already in 0-255 range
+                                                            # Already in 0-255 range
                                                             mask_array = mask_array.astype(np.uint8)
                                                         else:
-                                                            # Values are 0-1 but integer type - scale them
+                                                            # Integer 0-1 values, scale them
                                                             mask_array = (mask_array * 255).astype(np.uint8)
                                                         
                                                         # For binary tasks, ensure full contrast (0 or 255)
@@ -3051,7 +3095,6 @@ def dataset_preview_view(request):
                                                         if use_semantic:
                                                             # Convert one-hot to single channel for color mapping
                                                             if len(mask_array.shape) == 3 and mask_array.shape[2] > 1:
-                                                                # One-hot format (H, W, C) -> single channel (H, W)
                                                                 mask_array = np.argmax(mask_array, axis=2)
                                                             
                                                             # Apply semantic color mapping
@@ -3096,7 +3139,7 @@ def dataset_preview_view(request):
                                                                 mask_array = (mask_array * 255).astype(np.uint8)
                                                                 mask_array = np.where(mask_array > 0, 255, 0).astype(np.uint8)
                                                                 logger.info(f"Scaled binary mask from float to 0-255 with full contrast")
-                                                            else:
+                                                            elif mask_array.max() > 1.0:
                                                                 mask_array = mask_array.astype(np.uint8)
                                                                 # Apply full contrast for any non-zero values
                                                                 mask_array = np.where(mask_array > 0, 255, 0).astype(np.uint8)
@@ -3220,7 +3263,7 @@ def dataset_preview_view(request):
                                                     'image_max': float(img_array.max()),
                                                     'mask_min': float(mask_array_analysis.min()) if use_semantic else float(mask_array.min()),
                                                     'mask_max': float(mask_array_analysis.max()) if use_semantic else float(mask_array.max()),
-                                                    'mask_coverage': f'{coverage_percent:.1f}%',
+                                                    'mask_coverage': coverage_percent,
                                                     'analysis': analysis_text,
                                                     'mask_type': 'Semantic (Multi-colored)' if use_semantic else 'Binary (Grayscale)'
                                                 })
@@ -3287,7 +3330,7 @@ def dataset_preview_view(request):
                                 
                                 context['dataset_format'] = 'COCO (Basic)'
                                 context['annotation_files'] = annotation_files
-                                
+                        
                         else:
                             error_message = f"COCO-style directories not found. Looking for: {images_dir}, {annotations_dir}"
                     
@@ -3356,6 +3399,7 @@ def dataset_preview_view(request):
                                     })
                                 except Exception as e:
                                     logger.error(f"Error processing COCO sample {i}: {e}")
+
                                     continue
                             
                             context['dataset_format'] = 'COCO'

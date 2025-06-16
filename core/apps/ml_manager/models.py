@@ -244,6 +244,27 @@ class TrainingTemplate(models.Model):
         help_text="Optimizer to use for training"
     )
     
+    # Learning Rate Scheduler Configuration
+    LR_SCHEDULER_CHOICES = [
+        ('none', 'None'),
+        ('plateau', 'ReduceLROnPlateau'),
+        ('step', 'StepLR'),
+        ('exponential', 'ExponentialLR'),
+        ('cosine', 'CosineAnnealingLR'),
+        ('adaptive', 'Custom Adaptive'),
+    ]
+    lr_scheduler = models.CharField(
+        max_length=20,
+        choices=LR_SCHEDULER_CHOICES,
+        default='none',
+        help_text="Learning rate scheduler type"
+    )
+    lr_patience = models.IntegerField(default=5, help_text="Patience for plateau scheduler")
+    lr_factor = models.FloatField(default=0.5, help_text="Factor to reduce learning rate")
+    lr_step_size = models.IntegerField(default=10, help_text="Step size for step scheduler")
+    lr_gamma = models.FloatField(default=0.1, help_text="Gamma for step/exponential scheduler")
+    min_lr = models.FloatField(default=1e-7, help_text="Minimum learning rate")
+    
     # Additional metadata
     is_default = models.BooleanField(default=False, help_text="Default template for new trainings")
     created_by = models.CharField(max_length=100, blank=True, help_text="Template creator")
@@ -282,6 +303,12 @@ class TrainingTemplate(models.Model):
             'noise_std': self.noise_std,
             'num_workers': self.num_workers,
             'optimizer': self.optimizer,
+            'lr_scheduler': self.lr_scheduler,
+            'lr_patience': self.lr_patience,
+            'lr_factor': self.lr_factor,
+            'lr_step_size': self.lr_step_size,
+            'lr_gamma': self.lr_gamma,
+            'min_lr': self.min_lr,
         }
     
     def save(self, *args, **kwargs):

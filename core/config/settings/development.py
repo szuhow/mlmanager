@@ -102,8 +102,8 @@ MLFLOW_TRACKING_URI = os.environ.get('MLFLOW_TRACKING_URI', 'http://localhost:50
 MLFLOW_EXPERIMENT_NAME = os.environ.get('MLFLOW_EXPERIMENT_NAME', 'coronary-experiments-dev')
 MLFLOW_UI_URL = os.environ.get('MLFLOW_UI_URL', 'http://localhost:5000')
 
-# Temporarily disable MLflow auto-connection during Django startup
-MLFLOW_ENABLED = False
+# Enable MLflow connection for artifact recording
+MLFLOW_ENABLED = True
 
 # Artifact storage for development
 BASE_MLRUNS_DIR = BASE_DIR / 'data' / 'mlflow'

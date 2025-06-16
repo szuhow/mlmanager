@@ -139,6 +139,88 @@
                             </div>
                         </div>
 
+                        <!-- Learning Rate Scheduler -->
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h5 class="text-primary">
+                                    <i class="fas fa-chart-line me-1"></i>Learning Rate Scheduler
+                                </h5>
+                                <p class="text-muted small mb-2">Configure how the learning rate changes during training</p>
+                                <hr>
+                            </div>
+                        </div>
+                        
+                        <!-- Scheduler Configuration Card -->
+                        <div class="card mb-4 border-info">
+                            <div class="card-body">
+                                <div class="row mb-3">
+                                    <div class="col-md-4">
+                                        <label for="{{ form.lr_scheduler.id_for_label }}" class="form-label fw-bold">
+                                            <i class="fas fa-cogs me-1"></i>{{ form.lr_scheduler.label }}
+                                            {% if form.lr_scheduler.help_text %}
+                                                <small class="text-muted d-block fw-normal">{{ form.lr_scheduler.help_text }}</small>
+                                            {% endif %}
+                                        </label>
+                                        {{ form.lr_scheduler.errors }}
+                                        {{ form.lr_scheduler }}
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="{{ form.lr_patience.id_for_label }}" class="form-label">
+                                            <i class="fas fa-clock me-1"></i>{{ form.lr_patience.label }}
+                                            {% if form.lr_patience.help_text %}
+                                                <small class="text-muted d-block">{{ form.lr_patience.help_text }}</small>
+                                            {% endif %}
+                                        </label>
+                                        {{ form.lr_patience.errors }}
+                                        {{ form.lr_patience }}
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="{{ form.lr_factor.id_for_label }}" class="form-label">
+                                            <i class="fas fa-percentage me-1"></i>{{ form.lr_factor.label }}
+                                            {% if form.lr_factor.help_text %}
+                                                <small class="text-muted d-block">{{ form.lr_factor.help_text }}</small>
+                                            {% endif %}
+                                        </label>
+                                        {{ form.lr_factor.errors }}
+                                        {{ form.lr_factor }}
+                                    </div>
+                                </div>
+                                
+                                <div class="row mb-3">
+                                    <div class="col-md-4">
+                                        <label for="{{ form.lr_step_size.id_for_label }}" class="form-label">
+                                            <i class="fas fa-step-forward me-1"></i>{{ form.lr_step_size.label }}
+                                            {% if form.lr_step_size.help_text %}
+                                                <small class="text-muted d-block">{{ form.lr_step_size.help_text }}</small>
+                                            {% endif %}
+                                        </label>
+                                        {{ form.lr_step_size.errors }}
+                                        {{ form.lr_step_size }}
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="{{ form.lr_gamma.id_for_label }}" class="form-label">
+                                            <i class="fas fa-calculator me-1"></i>{{ form.lr_gamma.label }}
+                                            {% if form.lr_gamma.help_text %}
+                                                <small class="text-muted d-block">{{ form.lr_gamma.help_text }}</small>
+                                            {% endif %}
+                                        </label>
+                                        {{ form.lr_gamma.errors }}
+                                        {{ form.lr_gamma }}
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="{{ form.min_lr.id_for_label }}" class="form-label">
+                                            <i class="fas fa-arrow-down me-1"></i>{{ form.min_lr.label }}
+                                            {% if form.min_lr.help_text %}
+                                                <small class="text-muted d-block">{{ form.min_lr.help_text }}</small>
+                                            {% endif %}
+                                        </label>
+                                        {{ form.min_lr.errors }}
+                                        {{ form.min_lr }}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Data Augmentation -->
                         <div class="row mb-4">
                             <div class="col-12">

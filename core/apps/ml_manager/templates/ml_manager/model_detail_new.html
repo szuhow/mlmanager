@@ -133,7 +133,7 @@
 
 {% block content %}
 {% csrf_token %}
-<div class="container-fluid" data-model-id="{{ model.pk }}" data-model-status="{{ model.status }}">
+<div class="container-fluid" data-model-id="{{ model.pk }}" data-model-status="{{ model.status }}" data-model-created-at="{{ model.created_at|date:'c' }}">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1>{{ model.name }}</h1>
         <div>
@@ -321,9 +321,11 @@
                                     <div class="card-body p-2">
                                         <img src="{% url 'ml_manager:training-preview-image' model.id image.filename %}" 
                                              alt="Prediction Epoch {{ image.epoch }}"
-                                             class="img-fluid rounded"
+                                             class="img-fluid rounded training-sample-image"
                                              style="max-height: 150px; width: 100%; object-fit: contain; cursor: pointer;"
-                                             onclick="openImageModal('{% url 'ml_manager:training-preview-image' model.id image.filename %}', 'Epoch {{ image.epoch }}')">
+                                             onclick="openTrainingImageModal({{ image.epoch }})"
+                                             data-epoch="{{ image.epoch }}"
+                                             data-image-url="{% url 'ml_manager:training-preview-image' model.id image.filename %}">
                                     </div>
                                 </div>
                             </div>
@@ -348,9 +350,11 @@
                                         <div class="card-body p-2">
                                             <img src="{% url 'ml_manager:training-preview-image' model.id image.filename %}" 
                                                  alt="Prediction Epoch {{ image.epoch }}"
-                                                 class="img-fluid rounded"
+                                                 class="img-fluid rounded training-sample-image"
                                                  style="max-height: 150px; width: 100%; object-fit: contain; cursor: pointer;"
-                                                 onclick="openImageModal('{% url 'ml_manager:training-preview-image' model.id image.filename %}', 'Epoch {{ image.epoch }}')">
+                                                 onclick="openTrainingImageModal({{ image.epoch }})"
+                                                 data-epoch="{{ image.epoch }}"
+                                                 data-image-url="{% url 'ml_manager:training-preview-image' model.id image.filename %}">
                                         </div>
                                     </div>
                                 </div>
@@ -1036,17 +1040,106 @@ function stopLiveLogFetching() {
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="imageModalLabel">Training Preview</h5>
+        <div class="d-flex align-items-center">
+          <button id="prevImageBtn" class="btn btn-outline-primary btn-sm me-2" onclick="navigateTrainingImage(-1)">
+            <i class="fas fa-chevron-left"></i> Previous
+          </button>
+          <button id="nextImageBtn" class="btn btn-outline-primary btn-sm me-2" onclick="navigateTrainingImage(1)">
+            Next <i class="fas fa-chevron-right"></i>
+          </button>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body text-center">
         <img id="modalImage" src="" alt="" class="img-fluid" style="max-height: 70vh;">
+      </div>
+      <div class="modal-footer justify-content-center">
+        <span id="epochNavigationInfo" class="badge bg-primary"></span>
       </div>
     </div>
   </div>
 </div>
 
 <script>
-// Training preview functions
+// Training image navigation for modal
+let trainingImages = [];
+let currentImageIndex = 0;
+
+// Initialize training images data
+function initializeTrainingImages() {
+    trainingImages = [];
+    const imageElements = document.querySelectorAll('.training-sample-image[data-epoch]');
+    
+    imageElements.forEach((img, index) => {
+        trainingImages.push({
+            epoch: parseInt(img.dataset.epoch),
+            url: img.dataset.imageUrl,
+            title: img.alt,
+            index: index
+        });
+    });
+    
+    // Sort by epoch
+    trainingImages.sort((a, b) => a.epoch - b.epoch);
+    console.log('Initialized training images:', trainingImages);
+}
+
+// Open training image modal with navigation
+function openTrainingImageModal(epochNumber) {
+    initializeTrainingImages();
+    
+    // Find the index of the selected epoch
+    const imageIndex = trainingImages.findIndex(img => img.epoch === epochNumber);
+    if (imageIndex === -1) {
+        console.error('Image not found for epoch:', epochNumber);
+        return;
+    }
+    
+    currentImageIndex = imageIndex;
+    showImageInModal();
+    
+    const modal = document.getElementById('imageModal');
+    const modalInstance = new bootstrap.Modal(modal);
+    modalInstance.show();
+}
+
+// Navigate between training images
+function navigateTrainingImage(direction) {
+    const newIndex = currentImageIndex + direction;
+    
+    if (newIndex >= 0 && newIndex < trainingImages.length) {
+        currentImageIndex = newIndex;
+        showImageInModal();
+    }
+}
+
+// Update modal content with current image
+function showImageInModal() {
+    if (trainingImages.length === 0) return;
+    
+    const currentImage = trainingImages[currentImageIndex];
+    const modalImage = document.getElementById('modalImage');
+    const modalTitle = document.getElementById('imageModalLabel');
+    const epochInfo = document.getElementById('epochNavigationInfo');
+    const prevBtn = document.getElementById('prevImageBtn');
+    const nextBtn = document.getElementById('nextImageBtn');
+    
+    // Update image and title
+    modalImage.src = currentImage.url;
+    modalImage.alt = currentImage.title;
+    modalTitle.textContent = `Training Sample - Epoch ${currentImage.epoch}`;
+    
+    // Update epoch info badge
+    epochInfo.textContent = `Epoch ${currentImage.epoch} (${currentImageIndex + 1}/${trainingImages.length})`;
+    
+    // Update navigation buttons
+    prevBtn.disabled = currentImageIndex === 0;
+    nextBtn.disabled = currentImageIndex === trainingImages.length - 1;
+    
+    console.log('Showing image:', currentImage);
+}
+
+// Legacy function for backward compatibility (if needed elsewhere)
 function openImageModal(imageUrl, title) {
     const modal = document.getElementById('imageModal');
     const modalImage = document.getElementById('modalImage');
@@ -1072,6 +1165,20 @@ function toggleMoreImages() {
         toggleText.textContent = 'Show All {{ training_preview.images|length }} Images';
     }
 }
+
+// Keyboard navigation support
+document.addEventListener('keydown', function(e) {
+    const modal = document.getElementById('imageModal');
+    if (modal.classList.contains('show')) {
+        if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            navigateTrainingImage(-1);
+        } else if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            navigateTrainingImage(1);
+        }
+    }
+});
 </script>
 
 {% endblock %}

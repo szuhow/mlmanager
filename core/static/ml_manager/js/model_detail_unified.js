@@ -26,16 +26,73 @@ class ModelDetailManager {
     }
     
     init() {
-        // Check if model is training
+        // Check if model is training or recently started
         const modelStatus = document.querySelector('[data-model-status]');
-        this.isTraining = modelStatus && modelStatus.dataset.modelStatus === 'training';
+        const statusValue = modelStatus?.dataset.modelStatus;
+        
+        // Start updates for training, pending, or loading states (covers recently started training)
+        this.isTraining = statusValue && ['training', 'pending', 'loading'].includes(statusValue);
         
         if (this.isTraining) {
+            console.log(`ModelDetailManager: Starting updates for model status: ${statusValue}`);
             this.startUpdates();
             this.showLiveIndicator();
+        } else {
+            console.log(`ModelDetailManager: Model status is ${statusValue}, not starting auto-updates`);
+            
+            // Smart detection: Check if this might be a recently created model that will start training soon
+            const modelElement = document.querySelector('[data-model-id]');
+            const modelCreatedAt = modelElement?.dataset.modelCreatedAt;
+            
+            if (modelCreatedAt) {
+                const createdTime = new Date(modelCreatedAt);
+                const now = new Date();
+                const minutesSinceCreation = (now - createdTime) / (1000 * 60);
+                
+                // If model was created within the last 5 minutes, poll for status changes
+                if (minutesSinceCreation < 5) {
+                    console.log(`ModelDetailManager: Model created ${minutesSinceCreation.toFixed(1)} minutes ago, watching for training start`);
+                    this.startTrainingWatch();
+                }
+            }
         }
         
         this.setupEventListeners();
+    }
+    
+    startTrainingWatch() {
+        // Watch for training to start for up to 2 minutes
+        let watchAttempts = 0;
+        const maxAttempts = 24; // 24 * 5 seconds = 2 minutes
+        
+        const watchInterval = setInterval(() => {
+            watchAttempts++;
+            
+            fetch(`/ml/model/${this.modelId}/progress/`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success' && data.model_status) {
+                        const currentStatus = data.model_status;
+                        
+                        if (['training', 'loading'].includes(currentStatus)) {
+                            console.log(`ModelDetailManager: Training started! Status: ${currentStatus}`);
+                            clearInterval(watchInterval);
+                            this.isTraining = true;
+                            this.startUpdates();
+                            this.showLiveIndicator();
+                        } else if (watchAttempts >= maxAttempts) {
+                            console.log('ModelDetailManager: Training watch timeout, stopping');
+                            clearInterval(watchInterval);
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Training watch error:', error);
+                    if (watchAttempts >= maxAttempts) {
+                        clearInterval(watchInterval);
+                    }
+                });
+        }, 5000); // Check every 5 seconds
     }
     
     setupEventListeners() {
@@ -125,6 +182,18 @@ class ModelDetailManager {
     }
     
     handleSuccessfulUpdate(data) {
+        // Check for status changes - stop updating if training is no longer active
+        const currentModelStatus = data.model_status;
+        if (currentModelStatus && !['training', 'pending', 'loading'].includes(currentModelStatus)) {
+            console.log(`ModelDetailManager: Training completed with status: ${currentModelStatus}, stopping updates`);
+            this.stopUpdates();
+            // Reload page after a short delay to show final state
+            setTimeout(() => {
+                location.reload();
+            }, 2000);
+            return;
+        }
+        
         // Update progress bars
         this.updateProgressBars(data.progress);
         
@@ -142,7 +211,7 @@ class ModelDetailManager {
             this.refreshTrainingPreview(data.progress.current_epoch);
         }
         
-        // Handle training completion
+        // Handle training completion (legacy check)
         if (data.status_changed) {
             setTimeout(() => {
                 this.refreshTrainingPreview();
@@ -178,10 +247,11 @@ class ModelDetailManager {
     updateMetrics(metrics, progress) {
         if (!metrics) return;
         
-        const updateMetric = (id, value) => {
+        const updateMetric = (id, value, isInteger = false) => {
             const element = document.getElementById(id);
             if (element && value !== null && value !== undefined) {
-                const formattedValue = typeof value === 'number' ? value.toFixed(4) : value;
+                const formattedValue = isInteger ? value.toString() : 
+                                     (typeof value === 'number' ? value.toFixed(4) : value);
                 
                 // Only update if value has changed to prevent unnecessary flashing
                 if (element.textContent !== formattedValue) {
@@ -197,7 +267,7 @@ class ModelDetailManager {
         };
         
         if (progress) {
-            updateMetric('current-epoch', progress.current_epoch);
+            updateMetric('current-epoch', progress.current_epoch, true); // Integer formatting
         }
         updateMetric('train-loss', metrics.train_loss);
         updateMetric('train-dice', metrics.train_dice);

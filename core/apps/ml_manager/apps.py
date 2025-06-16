@@ -17,6 +17,17 @@ class MlManagerConfig(AppConfig):
         logger = logging.getLogger(__name__)
         logger.info("🚀 ML Manager app ready() called")
         
+        # Initialize MLflow connection
+        try:
+            from .utils.mlflow_utils import initialize_mlflow_connection
+            success = initialize_mlflow_connection()
+            if success:
+                logger.info("[ML_MANAGER] MLflow connection initialized successfully")
+            else:
+                logger.warning("[ML_MANAGER] MLflow connection initialization skipped or failed")
+        except Exception as e:
+            logger.error(f"[ML_MANAGER] Error initializing MLflow: {e}")
+        
         # Check environment
         run_main = os.environ.get('RUN_MAIN')
         django_settings = os.environ.get('DJANGO_SETTINGS_MODULE', '')

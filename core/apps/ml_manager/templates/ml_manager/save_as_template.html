@@ -111,6 +111,53 @@
                                 </div>
                             </div>
 
+                            <!-- Learning Rate Scheduler Configuration -->
+                            <div class="col-md-6 mb-4">
+                                <h6 class="text-primary border-bottom pb-2">Learning Rate Scheduler</h6>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Scheduler Type</label>
+                                            {{ form.lr_scheduler }}
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Min Learning Rate</label>
+                                            {{ form.min_lr }}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Patience (epochs)</label>
+                                            {{ form.lr_patience }}
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Reduction Factor</label>
+                                            {{ form.lr_factor }}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Step Size (epochs)</label>
+                                            {{ form.lr_step_size }}
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Gamma (decay factor)</label>
+                                            {{ form.lr_gamma }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
                             <!-- Augmentation Settings -->
                             <div class="col-md-6 mb-4">
                                 <h6 class="text-primary border-bottom pb-2">Data Augmentation</h6>

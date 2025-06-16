@@ -55,7 +55,23 @@
                                     <small class="text-muted">
                                         Model: {{ template.model_type }}<br>
                                         Epochs: {{ template.epochs }}, Batch: {{ template.batch_size }}<br>
-                                        LR: {{ template.learning_rate }}, Optimizer: {{ template.optimizer|upper }}
+                                        LR: {{ template.learning_rate }}, Optimizer: {{ template.optimizer|upper }}<br>
+                                        Scheduler: 
+                                        {% if template.lr_scheduler == 'none' %}
+                                            <span class="badge bg-secondary">None</span>
+                                        {% elif template.lr_scheduler == 'plateau' %}
+                                            <span class="badge bg-warning">Plateau</span>
+                                        {% elif template.lr_scheduler == 'step' %}
+                                            <span class="badge bg-success">Step</span>
+                                        {% elif template.lr_scheduler == 'exponential' %}
+                                            <span class="badge bg-danger">Exponential</span>
+                                        {% elif template.lr_scheduler == 'cosine' %}
+                                            <span class="badge bg-info">Cosine</span>
+                                        {% elif template.lr_scheduler == 'adaptive' %}
+                                            <span class="badge bg-primary">Adaptive</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">{{ template.lr_scheduler|title }}</span>
+                                        {% endif %}
                                     </small>
                                 </td>
                                 <td>

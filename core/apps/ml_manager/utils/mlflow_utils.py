@@ -1,5 +1,9 @@
 import mlflow
 import os
+import logging
+
+# Create logger for this module
+logger = logging.getLogger(__name__)
 
 # Try to import Django settings, fall back to environment variables
 try:
@@ -24,6 +28,12 @@ except ImportError:
 
 def setup_mlflow():
     """Setup MLflow tracking"""
+    # Respect MLFLOW_ENABLED setting to skip setup if disabled
+    if DJANGO_AVAILABLE:
+        from django.conf import settings
+        if not getattr(settings, 'MLFLOW_ENABLED', True):
+            logger.info("[MLFLOW] MLflow disabled via settings; skipping setup.")
+            return
     try:
         tracking_uri = get_mlflow_tracking_uri()
         mlflow.set_tracking_uri(tracking_uri)
@@ -302,3 +312,86 @@ def get_mlflow_ui_url(run_id=None, experiment_name=None):
 def generate_mlflow_ui_url(run_id=None, experiment_name=None):
     """Alias for get_mlflow_ui_url for backward compatibility"""
     return get_mlflow_ui_url(run_id=run_id, experiment_name=experiment_name)
+
+def initialize_mlflow_connection():
+    """Initialize MLflow connection for Django app startup"""
+    if DJANGO_AVAILABLE:
+        try:
+            from django.conf import settings
+            if not getattr(settings, 'MLFLOW_ENABLED', True):
+                logger.info("[MLFLOW] MLflow disabled via settings")
+                return False
+            
+            # Set tracking URI
+            tracking_uri = get_mlflow_tracking_uri()
+            mlflow.set_tracking_uri(tracking_uri)
+            logger.info(f"[MLFLOW] Connected to tracking URI: {tracking_uri}")
+            
+            # Ensure experiment exists
+            experiment_name = get_mlflow_experiment_name()
+            experiment = mlflow.get_experiment_by_name(experiment_name)
+            if experiment is None:
+                artifact_location = getattr(settings, 'MLFLOW_ARTIFACT_ROOT', './data/mlflow')
+                experiment_id = mlflow.create_experiment(
+                    experiment_name,
+                    artifact_location=str(artifact_location)
+                )
+                logger.info(f"[MLFLOW] Created experiment '{experiment_name}' with ID {experiment_id}")
+            else:
+                mlflow.set_experiment(experiment_name)
+                logger.info(f"[MLFLOW] Using existing experiment '{experiment_name}'")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"[MLFLOW] Failed to initialize MLflow connection: {e}")
+            return False
+    return False
+
+def log_training_artifacts_to_mlflow(artifacts_dir, run_id=None):
+    """
+    Ensure all training artifacts are logged to MLflow properly
+    
+    Args:
+        artifacts_dir: Directory containing training artifacts
+        run_id: MLflow run ID (optional, uses active run if None)
+    """
+    if not os.path.exists(artifacts_dir):
+        logger.warning(f"[MLFLOW] Artifacts directory does not exist: {artifacts_dir}")
+        return []
+    
+    logged_artifacts = []
+    
+    try:
+        # Use existing run or start new one
+        if run_id:
+            current_run = mlflow.active_run()
+            if not current_run or current_run.info.run_id != run_id:
+                mlflow.start_run(run_id=run_id)
+        
+        # Log all artifacts in the directory
+        for root, dirs, files in os.walk(artifacts_dir):
+            for file in files:
+                if file.endswith(('.png', '.jpg', '.jpeg', '.json', '.txt', '.html', '.pth', '.pkl')):
+                    file_path = os.path.join(root, file)
+                    
+                    # Calculate relative path for artifact organization
+                    rel_path = os.path.relpath(root, artifacts_dir)
+                    if rel_path == '.':
+                        artifact_path = None
+                    else:
+                        artifact_path = rel_path
+                    
+                    try:
+                        mlflow.log_artifact(file_path, artifact_path=artifact_path)
+                        logged_artifacts.append(file_path)
+                        logger.info(f"[MLFLOW] Logged artifact: {file_path}")
+                    except Exception as e:
+                        logger.error(f"[MLFLOW] Failed to log artifact {file_path}: {e}")
+        
+        logger.info(f"[MLFLOW] Successfully logged {len(logged_artifacts)} artifacts")
+        return logged_artifacts
+        
+    except Exception as e:
+        logger.error(f"[MLFLOW] Error logging artifacts: {e}")
+        return []

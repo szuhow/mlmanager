@@ -40,7 +40,7 @@ class TrainingTemplateForm(forms.ModelForm):
         fields = [
             'name', 'description', 'model_type', 'batch_size', 'epochs', 
             'learning_rate', 'validation_split', 'resolution', 'device',
-            'optimizer',
+            'optimizer', 'lr_scheduler', 'lr_patience', 'lr_factor', 'lr_step_size', 'lr_gamma', 'min_lr',
             'use_random_flip', 'flip_probability', 'use_random_rotate', 'rotation_range',
             'use_random_scale', 'scale_range_min', 'scale_range_max', 
             'use_random_intensity', 'intensity_range', 'use_random_crop', 'crop_size',
@@ -136,8 +136,8 @@ class TrainingForm(forms.Form):
     description = forms.CharField(widget=forms.Textarea, required=False, help_text="Description of the training run")
     model_type = forms.ChoiceField(choices=[], help_text="Model architecture to use")  # Will be set dynamically in __init__
     data_path = forms.CharField(
-        initial="/app/data/datasets/arcade_challenge_datasets", 
-        help_text="Path to dataset directory. Use '/app/data/datasets/arcade_challenge_datasets' for ARCADE or '/app/data/datasets' for coronary"
+        initial="/app/data/datasets/", 
+        help_text="Path to dataset directory. Use '/app/data/datasets/' for ARCADE or '/app/data/datasets/basic' for basic"
     )
     
     # Dataset type selection
@@ -188,6 +188,61 @@ class TrainingForm(forms.Form):
         initial='adam',
         required=True,
         help_text="Optimizer algorithm to use for training"
+    )
+    
+    # Learning Rate Scheduler options
+    LR_SCHEDULER_CHOICES = [
+        ('none', 'No Scheduler'),
+        ('plateau', 'ReduceLROnPlateau'),
+        ('step', 'StepLR'),
+        ('exponential', 'ExponentialLR'),
+        ('cosine', 'CosineAnnealingLR'),
+        ('adaptive', 'Adaptive (Custom)'),
+    ]
+    
+    lr_scheduler = forms.ChoiceField(
+        choices=LR_SCHEDULER_CHOICES,
+        initial='plateau',
+        required=True,
+        help_text="Learning rate scheduling strategy"
+    )
+    
+    # Scheduler-specific parameters
+    lr_patience = forms.IntegerField(
+        min_value=1, 
+        initial=5, 
+        required=False,
+        help_text="Epochs to wait before reducing LR (for plateau scheduler)"
+    )
+    
+    lr_factor = forms.FloatField(
+        min_value=0.01, 
+        max_value=0.99, 
+        initial=0.5, 
+        required=False,
+        help_text="Factor to reduce LR by (for plateau scheduler)"
+    )
+    
+    lr_step_size = forms.IntegerField(
+        min_value=1, 
+        initial=10, 
+        required=False,
+        help_text="Epochs between LR reductions (for step scheduler)"
+    )
+    
+    lr_gamma = forms.FloatField(
+        min_value=0.01, 
+        max_value=0.99, 
+        initial=0.1, 
+        required=False,
+        help_text="Multiplicative factor for LR decay"
+    )
+    
+    min_lr = forms.FloatField(
+        min_value=1e-8, 
+        initial=1e-7, 
+        required=False,
+        help_text="Minimum learning rate threshold"
     )
     
     # Enhanced Augmentation options with richer controls

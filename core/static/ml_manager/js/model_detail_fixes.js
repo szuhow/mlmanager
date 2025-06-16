@@ -284,10 +284,10 @@ function updateProgress(data) {
         progressBar.setAttribute('aria-valuenow', progress.current_epoch);
     }
     
-    // Update individual metric elements
+    // Update individual metric elements - format integers properly
     const metricUpdates = {
-        'current-epoch': progress.current_epoch,
-        'total-epochs': progress.total_epochs,
+        'current-epoch': progress.current_epoch ? progress.current_epoch.toString() : 'N/A',
+        'total-epochs': progress.total_epochs ? progress.total_epochs.toString() : 'N/A',
         'train-loss': progress.train_loss ? progress.train_loss.toFixed(4) : 'N/A',
         'val-loss': progress.val_loss ? progress.val_loss.toFixed(4) : 'N/A',
         'train-dice': progress.train_dice ? progress.train_dice.toFixed(4) : 'N/A',

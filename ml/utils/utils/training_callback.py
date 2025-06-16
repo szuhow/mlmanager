@@ -81,7 +81,7 @@ class TrainingCallback:
     def on_epoch_start(self, epoch, total_epochs):
         """Called at the start of each epoch"""
         self.model.refresh_from_db()  # Refresh to get latest stop_requested value
-        self.model.current_epoch = epoch
+        self.model.current_epoch = epoch + 1  # Convert 0-based to 1-based for UI
         self.model.total_epochs = total_epochs
         self.model.save()
         
@@ -224,7 +224,7 @@ class TrainingCallback:
     def on_batch_start(self, batch_idx, total_batches):
         """Called at the start of each batch"""
         self.model.refresh_from_db()
-        self.model.current_batch = batch_idx
+        self.model.current_batch = batch_idx + 1  # Convert 0-based to 1-based for UI
         self.model.total_batches_per_epoch = total_batches
         self.model.save()
         
@@ -235,7 +235,7 @@ class TrainingCallback:
     
     def on_batch_end(self, batch_idx, batch_logs=None):
         """Called at the end of each batch with optional metrics"""
-        self.model.current_batch = batch_idx + 1  # +1 because batch completed
+        self.model.current_batch = batch_idx + 1  # Already 1-based since batch completed
         if batch_logs:
             # Update running training metrics if provided
             self.model.train_loss = batch_logs.get('train_loss', self.model.train_loss)

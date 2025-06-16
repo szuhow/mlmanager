@@ -32,7 +32,7 @@
                             <h6><i class="fas fa-redo me-1"></i> Rerunning Training</h6>
                             <p class="mb-2">Configuration pre-populated from model: <strong>{{ rerun_model.name }}</strong></p>
                             <small class="text-muted">
-                                Original training: {{ rerun_model.epochs }} epochs, 
+                                Original training: {{ rerun_model.total_epochs }} epochs, 
                                 Status: <span class="badge bg-{{ rerun_model.status|yesno:'success,danger' }}">{{ rerun_model.status|title }}</span>
                             </small>
                         </div>
@@ -290,6 +290,207 @@
                                                     </select>
                                                 {% endif %}
                                             {% endfor %}
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Learning Rate Scheduler Section -->
+                                    <div class="row mb-4">
+                                        <div class="col-12">
+                                            <h5 class="text-primary">
+                                                <i class="fas fa-chart-line me-1"></i>Learning Rate Scheduler
+                                                <span class="badge bg-info ms-2" id="scheduler-status">Adaptive Training</span>
+                                            </h5>
+                                            <p class="text-muted small mb-2">Configure how the learning rate changes during training to improve convergence</p>
+                                            <hr>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Scheduler Configuration Card -->
+                                    <div class="card mb-4 border-info">
+                                        <div class="card-body">
+                                            <!-- Scheduler Type Selection -->
+                                            <div class="row mb-3">
+                                                <div class="col-md-6">
+                                                    <!-- LR Scheduler Type Field -->
+                                                    {% for scheduler_field in form %}
+                                                        {% if scheduler_field.name == 'lr_scheduler' %}
+                                                            <label for="{{ scheduler_field.id_for_label }}" class="form-label fw-bold">
+                                                                <i class="fas fa-cogs me-1"></i>{{ scheduler_field.label }}
+                                                                {% if scheduler_field.help_text %}
+                                                                    <small class="text-muted d-block fw-normal">{{ scheduler_field.help_text }}</small>
+                                                                {% endif %}
+                                                            </label>
+                                                            {{ scheduler_field.errors }}
+                                                            <select name="{{ scheduler_field.html_name }}"
+                                                                    class="form-control"
+                                                                    id="{{ scheduler_field.id_for_label }}"
+                                                                    onchange="updateSchedulerFields(this.value)">
+                                                                {% for choice_value, choice_label in scheduler_field.field.choices %}
+                                                                    <option value="{{ choice_value }}" 
+                                                                            {% if choice_value == scheduler_field.value|default:scheduler_field.field.initial %}selected{% endif %}>
+                                                                        {{ choice_label }}
+                                                                    </option>
+                                                                {% endfor %}
+                                                            </select>
+                                                        {% endif %}
+                                                    {% endfor %}
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <div id="scheduler-description" class="border rounded p-3 bg-light">
+                                                        <h6 class="text-primary mb-2"><i class="fas fa-info-circle me-1"></i>Scheduler Info</h6>
+                                                        <p class="small mb-0" id="scheduler-info-text">Select a scheduler to see its description</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            <!-- Scheduler Parameters (organized by type) -->
+                                            <div id="scheduler-params">
+                                                <!-- Common Parameters Row -->
+                                                <div class="row mb-3" id="common-params">
+                                                    <div class="col-md-6">
+                                                        <!-- Min LR Field -->
+                                                        {% for min_lr_field in form %}
+                                                            {% if min_lr_field.name == 'min_lr' %}
+                                                                <label for="{{ min_lr_field.id_for_label }}" class="form-label">
+                                                                    <i class="fas fa-arrow-down me-1"></i>{{ min_lr_field.label }}
+                                                                    {% if min_lr_field.help_text %}
+                                                                        <small class="text-muted d-block">{{ min_lr_field.help_text }}</small>
+                                                                    {% endif %}
+                                                                </label>
+                                                                {{ min_lr_field.errors }}
+                                                                <input type="number" 
+                                                                       name="{{ min_lr_field.html_name }}"
+                                                                       class="form-control"
+                                                                       id="{{ min_lr_field.id_for_label }}"
+                                                                       value="{{ min_lr_field.value|default:min_lr_field.field.initial }}"
+                                                                       min="{{ min_lr_field.field.min_value }}"
+                                                                       step="any">
+                                                            {% endif %}
+                                                        {% endfor %}
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Plateau Scheduler Parameters -->
+                                                <div class="scheduler-group" id="plateau-params" style="display: none;">
+                                                    <div class="border-start border-3 border-warning ps-3 mb-3">
+                                                        <h6 class="text-warning mb-2"><i class="fas fa-chart-area me-1"></i>Plateau Scheduler Settings</h6>
+                                                        <div class="row">
+                                                            <div class="col-md-6">
+                                                                <!-- LR Patience Field -->
+                                                                {% for patience_field in form %}
+                                                                    {% if patience_field.name == 'lr_patience' %}
+                                                                        <label for="{{ patience_field.id_for_label }}" class="form-label">
+                                                                            <i class="fas fa-clock me-1"></i>{{ patience_field.label }}
+                                                                            {% if patience_field.help_text %}
+                                                                                <small class="text-muted d-block">{{ patience_field.help_text }}</small>
+                                                                            {% endif %}
+                                                                        </label>
+                                                                        {{ patience_field.errors }}
+                                                                        <input type="number" 
+                                                                               name="{{ patience_field.html_name }}"
+                                                                               class="form-control"
+                                                                               id="{{ patience_field.id_for_label }}"
+                                                                               value="{{ patience_field.value|default:patience_field.field.initial }}"
+                                                                               min="{{ patience_field.field.min_value }}"
+                                                                               step="1">
+                                                                    {% endif %}
+                                                                {% endfor %}
+                                                            </div>
+                                                            <div class="col-md-6">
+                                                                <!-- LR Factor Field -->
+                                                                {% for factor_field in form %}
+                                                                    {% if factor_field.name == 'lr_factor' %}
+                                                                        <label for="{{ factor_field.id_for_label }}" class="form-label">
+                                                                            <i class="fas fa-percentage me-1"></i>{{ factor_field.label }}
+                                                                            {% if factor_field.help_text %}
+                                                                                <small class="text-muted d-block">{{ factor_field.help_text }}</small>
+                                                                            {% endif %}
+                                                                        </label>
+                                                                        {{ factor_field.errors }}
+                                                                        <input type="number" 
+                                                                               name="{{ factor_field.html_name }}"
+                                                                               class="form-control"
+                                                                               id="{{ factor_field.id_for_label }}"
+                                                                               value="{{ factor_field.value|default:factor_field.field.initial }}"
+                                                                               min="{{ factor_field.field.min_value }}"
+                                                                               max="{{ factor_field.field.max_value }}"
+                                                                               step="any">
+                                                                    {% endif %}
+                                                                {% endfor %}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Step Scheduler Parameters -->
+                                                <div class="scheduler-group" id="step-params" style="display: none;">
+                                                    <div class="border-start border-3 border-success ps-3 mb-3">
+                                                        <h6 class="text-success mb-2"><i class="fas fa-stairs me-1"></i>Step Scheduler Settings</h6>
+                                                        <div class="row">
+                                                            <div class="col-md-6">
+                                                                <!-- LR Step Size Field -->
+                                                                {% for step_field in form %}
+                                                                    {% if step_field.name == 'lr_step_size' %}
+                                                                        <label for="{{ step_field.id_for_label }}" class="form-label">
+                                                                            <i class="fas fa-step-forward me-1"></i>{{ step_field.label }}
+                                                                            {% if step_field.help_text %}
+                                                                                <small class="text-muted d-block">{{ step_field.help_text }}</small>
+                                                                            {% endif %}
+                                                                        </label>
+                                                                        {{ step_field.errors }}
+                                                                        <input type="number" 
+                                                                               name="{{ step_field.html_name }}"
+                                                                               class="form-control"
+                                                                               id="{{ step_field.id_for_label }}"
+                                                                               value="{{ step_field.value|default:step_field.field.initial }}"
+                                                                               min="{{ step_field.field.min_value }}"
+                                                                               step="1">
+                                                                    {% endif %}
+                                                                {% endfor %}
+                                                            </div>
+                                                            <div class="col-md-6">
+                                                                <!-- LR Gamma Field -->
+                                                                {% for gamma_field in form %}
+                                                                    {% if gamma_field.name == 'lr_gamma' %}
+                                                                        <label for="{{ gamma_field.id_for_label }}" class="form-label">
+                                                                            <i class="fas fa-calculator me-1"></i>{{ gamma_field.label }}
+                                                                            {% if gamma_field.help_text %}
+                                                                                <small class="text-muted d-block">{{ gamma_field.help_text }}</small>
+                                                                            {% endif %}
+                                                                        </label>
+                                                                        {{ gamma_field.errors }}
+                                                                        <input type="number" 
+                                                                               name="{{ gamma_field.html_name }}"
+                                                                               class="form-control"
+                                                                               id="{{ gamma_field.id_for_label }}"
+                                                                               value="{{ gamma_field.value|default:gamma_field.field.initial }}"
+                                                                               min="{{ gamma_field.field.min_value }}"
+                                                                               max="{{ gamma_field.field.max_value }}"
+                                                                               step="any">
+                                                                    {% endif %}
+                                                                {% endfor %}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Exponential Scheduler Parameters -->
+                                                <div class="scheduler-group" id="exponential-params" style="display: none;">
+                                                    <div class="border-start border-3 border-danger ps-3 mb-3">
+                                                        <h6 class="text-danger mb-2"><i class="fas fa-chart-line me-1"></i>Exponential Scheduler Settings</h6>
+                                                        <div class="row">
+                                                            <div class="col-md-6">
+                                                                <!-- LR Gamma Field (reused) -->
+                                                                <label class="form-label">
+                                                                    <i class="fas fa-calculator me-1"></i>Decay Factor (Gamma)
+                                                                    <small class="text-muted d-block">Multiplicative factor for exponential decay</small>
+                                                                </label>
+                                                                <p class="text-muted small">Uses the same gamma parameter as Step scheduler</p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                     
@@ -596,6 +797,12 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                         }
                         
+                        // Update scheduler fields after loading template
+                        const schedulerSelect = document.querySelector('[name="lr_scheduler"]');
+                        if (schedulerSelect) {
+                            updateSchedulerFields(schedulerSelect.value);
+                        }
+                        
                         // Show success message
                         const alertDiv = document.createElement('div');
                         alertDiv.className = 'alert alert-success alert-dismissible fade show';
@@ -638,6 +845,12 @@ document.addEventListener('DOMContentLoaded', function() {
         // Auto-load the template
         loadTemplateBtn.click();
     }
+    
+    // Initialize scheduler fields on page load
+    const schedulerSelect = document.querySelector('[name="lr_scheduler"]');
+    if (schedulerSelect) {
+        updateSchedulerFields(schedulerSelect.value);
+    }
 });
 
 // Function to set data path from dropdown
@@ -645,6 +858,79 @@ function setDataPath(path) {
     const dataPathField = document.querySelector('[name="data_path"]');
     if (dataPathField) {
         dataPathField.value = path;
+    }
+}
+
+// Function to update scheduler fields based on selected type
+function updateSchedulerFields(schedulerType) {
+    // Hide all scheduler parameter groups
+    const groups = document.querySelectorAll('.scheduler-group');
+    groups.forEach(group => {
+        group.style.display = 'none';
+    });
+    
+    // Scheduler descriptions
+    const descriptions = {
+        'none': {
+            text: 'No learning rate scheduling. The learning rate remains constant throughout training.',
+            status: 'Fixed LR',
+            color: 'secondary'
+        },
+        'plateau': {
+            text: 'Reduces learning rate when validation loss stops improving. Monitors plateau and reduces LR by a factor after patience epochs.',
+            status: 'Adaptive',
+            color: 'warning'
+        },
+        'step': {
+            text: 'Reduces learning rate at fixed epoch intervals. LR is multiplied by gamma every step_size epochs.',
+            status: 'Step-wise',
+            color: 'success'
+        },
+        'exponential': {
+            text: 'Exponentially decays the learning rate each epoch. LR is multiplied by gamma every epoch.',
+            status: 'Exponential',
+            color: 'danger'
+        },
+        'cosine': {
+            text: 'Cosine annealing scheduler that varies learning rate following a cosine function. Provides smooth decay.',
+            status: 'Cosine',
+            color: 'info'
+        },
+        'adaptive': {
+            text: 'Custom adaptive scheduler that automatically adjusts learning rate based on training dynamics.',
+            status: 'Custom',
+            color: 'primary'
+        }
+    };
+    
+    // Update description and status
+    const infoText = document.getElementById('scheduler-info-text');
+    const statusBadge = document.getElementById('scheduler-status');
+    
+    if (descriptions[schedulerType]) {
+        infoText.textContent = descriptions[schedulerType].text;
+        statusBadge.textContent = descriptions[schedulerType].status;
+        statusBadge.className = `badge bg-${descriptions[schedulerType].color} ms-2`;
+    }
+    
+    // Show relevant parameter groups
+    switch (schedulerType) {
+        case 'plateau':
+            document.getElementById('plateau-params').style.display = 'block';
+            break;
+        case 'step':
+            document.getElementById('step-params').style.display = 'block';
+            break;
+        case 'exponential':
+            document.getElementById('exponential-params').style.display = 'block';
+            break;
+        case 'cosine':
+            // Cosine scheduler typically doesn't need additional parameters beyond min_lr
+            break;
+        case 'adaptive':
+            // Custom adaptive might use various parameters
+            document.getElementById('plateau-params').style.display = 'block';
+            break;
     }
 }
 </script>

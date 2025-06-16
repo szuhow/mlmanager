@@ -42,8 +42,18 @@ def inference(model, image):
     with torch.no_grad():
         output = model(input_tensor)
 
-    # Przetwórz wyniki
-    output = torch.sigmoid(output)  # Apply sigmoid if binary segmentation
+    # Apply appropriate post-processing based on number of output channels
+    num_output_channels = output.shape[1]
+    if num_output_channels == 1:
+        # Binary segmentation
+        output = torch.sigmoid(output)  # Apply sigmoid for binary segmentation
+        print(f"Applied binary segmentation post-processing (sigmoid)")
+    else:
+        # Multi-class semantic segmentation
+        output = torch.softmax(output, dim=1)  # Apply softmax for multi-class
+        output = torch.argmax(output, dim=1, keepdim=True).float()  # Get class predictions
+        print(f"Applied multi-class segmentation post-processing (softmax + argmax) for {num_output_channels} classes")
+    
     output_image = output.squeeze().cpu().numpy()  # Convert back to numpy for visualization
     output_image = (output_image - output_image.min()) / (output_image.max() - output_image.min()) * 255
     output_image = output_image.astype('uint8')
