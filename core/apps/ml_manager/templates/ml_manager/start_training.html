@@ -268,6 +268,34 @@
                                             {% endfor %}
                                         </div>
                                         <div class="col-md-4">
+                                            <!-- Optimizer Field -->
+                                            {% for opt_field in form %}
+                                                {% if opt_field.name == 'optimizer' %}
+                                                    <label for="{{ opt_field.id_for_label }}" class="form-label">
+                                                        {{ opt_field.label }}
+                                                        {% if opt_field.help_text %}
+                                                            <small class="text-muted">{{ opt_field.help_text }}</small>
+                                                        {% endif %}
+                                                    </label>
+                                                    {{ opt_field.errors }}
+                                                    <select name="{{ opt_field.html_name }}"
+                                                            class="form-control"
+                                                            id="{{ opt_field.id_for_label }}">
+                                                        {% for choice_value, choice_label in opt_field.field.choices %}
+                                                            <option value="{{ choice_value }}" 
+                                                                    {% if choice_value == opt_field.value|default:opt_field.field.initial %}selected{% endif %}>
+                                                                {{ choice_label }}
+                                                            </option>
+                                                        {% endfor %}
+                                                    </select>
+                                                {% endif %}
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Validation Split Row -->
+                                    <div class="row mb-3">
+                                        <div class="col-md-4">
                                             <!-- Validation Split Field -->
                                             {% for val_field in form %}
                                                 {% if val_field.name == 'validation_split' %}

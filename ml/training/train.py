@@ -529,13 +529,14 @@ def get_monai_transforms(params, for_training=True):
         
         crop_size = params.get('crop_size', 128)
         # Use RandCropByPosNegLabeld for better segmentation cropping
+        # Set num_samples=1 to maintain batch size consistency
         transforms.append(RandCropByPosNegLabeld(
             keys=["image", "label"], 
             label_key="label",
             spatial_size=[crop_size, crop_size],
             pos=1,
             neg=1,
-            num_samples=4,
+            num_samples=1,  # Changed from 4 to 1 to maintain batch size
             image_key="image",
             image_threshold=0
         ))
@@ -647,7 +648,7 @@ def save_sample_predictions(model, val_loader, device, epoch, model_dir=None):
     logger.info(f"[PREDICTIONS] Starting to save sample predictions for epoch {epoch+1}")
     
     if model_dir:
-        # Ensure model directories exist when we actually need them
+        # Ensure model directories exist
         ensure_model_directories(model_dir)
         
     model.eval()
@@ -835,6 +836,32 @@ def get_monai_datasets(data_path, val_split=0.2, transform_params=None):
     n_val = int(len(data_dicts) * val_split)
     train_files, val_files = data_dicts[n_val:], data_dicts[:n_val]
     
+    # Enhanced dataset logging
+    logger.info(f"[DATASET] Dataset directory: {data_path}")
+    logger.info(f"[DATASET] Images directory: {images_dir}")
+    logger.info(f"[DATASET] Labels directory: {labels_dir}")
+    logger.info(f"[DATASET] Total files found: {len(image_files)} images, {len(label_files)} labels")
+    logger.info(f"[DATASET] Validation split: {val_split} ({n_val} samples for validation)")
+    logger.info(f"[DATASET] Training samples: {len(train_files)}, Validation samples: {len(val_files)}")
+    
+    # Log sample file paths for verification
+    if train_files:
+        logger.info(f"[DATASET] Sample training files:")
+        for i, sample in enumerate(train_files[:3]):  # Show first 3 training samples
+            logger.info(f"[DATASET]   Train #{i+1}: Image: {os.path.basename(sample['image'])}, Label: {os.path.basename(sample['label'])}")
+    
+    if val_files:
+        logger.info(f"[DATASET] Sample validation files:")
+        for i, sample in enumerate(val_files[:3]):  # Show first 3 validation samples
+            logger.info(f"[DATASET]   Val #{i+1}: Image: {os.path.basename(sample['image'])}, Label: {os.path.basename(sample['label'])}")
+    
+    # Log file extension info
+    if image_files:
+        image_exts = set(os.path.splitext(f)[1].lower() for f in image_files)
+        label_exts = set(os.path.splitext(f)[1].lower() for f in label_files)
+        logger.info(f"[DATASET] Image file extensions: {sorted(image_exts)}")
+        logger.info(f"[DATASET] Label file extensions: {sorted(label_exts)}")
+    
     # Create separate transforms for training and validation
     train_transforms = get_monai_transforms(transform_params, for_training=True)
     val_transforms = get_monai_transforms(transform_params, for_training=False)
@@ -1000,6 +1027,20 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
             )
             logger.info(f"[ARCADE] Train dataset created, length: {len(train_ds)}")
             
+            # Enhanced ARCADE dataset logging
+            logger.info(f"[ARCADE] BINARY SEGMENTATION Dataset Information:")
+            logger.info(f"[ARCADE]   Root path: {data_path}")
+            logger.info(f"[ARCADE]   Train samples: {len(train_ds)}")
+            
+            # Log sample paths and file info
+            if len(train_ds) > 0:
+                try:
+                    sample = train_ds[0]
+                    logger.info(f"[ARCADE]   Sample train data shape: {sample[0].shape if hasattr(sample[0], 'shape') else 'N/A'}")
+                    logger.info(f"[ARCADE]   Sample train mask shape: {sample[1].shape if hasattr(sample[1], 'shape') else 'N/A'}")
+                except Exception as e:
+                    logger.warning(f"[ARCADE]   Could not get sample info: {e}")
+            
             logger.info("[ARCADE] Instantiating ARCADEBinarySegmentation for val...")
             val_ds = ARCADEBinarySegmentation(
                 root=data_path,
@@ -1010,8 +1051,25 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
                 target_transform=mask_tr
             )
             logger.info(f"[ARCADE] Val dataset created, length: {len(val_ds)}")
+            logger.info(f"[ARCADE]   Val samples: {len(val_ds)}")
+            
+            # Log sample validation paths and file info
+            if len(val_ds) > 0:
+                try:
+                    sample = val_ds[0]
+                    logger.info(f"[ARCADE]   Sample val data shape: {sample[0].shape if hasattr(sample[0], 'shape') else 'N/A'}")
+                    logger.info(f"[ARCADE]   Sample val mask shape: {sample[1].shape if hasattr(sample[1], 'shape') else 'N/A'}")
+                except Exception as e:
+                    logger.warning(f"[ARCADE]   Could not get val sample info: {e}")
+            
+            # Log total dataset info
+            total_samples = len(train_ds) + len(val_ds)
+            logger.info(f"[ARCADE] Total dataset size: {total_samples} ({len(train_ds)} train + {len(val_ds)} val)")
+            logger.info(f"[ARCADE] Image resolution: {size}x{size}")
+            logger.info(f"[ARCADE] Transforms applied: Resize, ToTensor, Normalize")
             
         elif task=='semantic_segmentation':
+            logger.info("[ARCADE] Instantiating ARCADESemanticSegmentation for train...")
             train_ds = ARCADESemanticSegmentation(
                 root=data_path,
                 image_set='train',
@@ -1020,6 +1078,9 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
                 transform=img_tr,
                 target_transform=mask_tr
             )
+            logger.info(f"[ARCADE] SEMANTIC SEGMENTATION Train dataset created, length: {len(train_ds)}")
+            
+            logger.info("[ARCADE] Instantiating ARCADESemanticSegmentation for val...")
             val_ds = ARCADESemanticSegmentation(
                 root=data_path,
                 image_set='val',
@@ -1028,7 +1089,27 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
                 transform=img_tr,
                 target_transform=mask_tr
             )
-        else:
+            logger.info(f"[ARCADE] SEMANTIC SEGMENTATION Val dataset created, length: {len(val_ds)}")
+            
+            # Enhanced logging for semantic segmentation
+            logger.info(f"[ARCADE] SEMANTIC SEGMENTATION Dataset Information:")
+            logger.info(f"[ARCADE]   Root path: {data_path}")
+            logger.info(f"[ARCADE]   Train samples: {len(train_ds)}, Val samples: {len(val_ds)}")
+            logger.info(f"[ARCADE]   Total samples: {len(train_ds) + len(val_ds)}")
+            logger.info(f"[ARCADE]   Image resolution: {size}x{size}")
+            logger.info(f"[ARCADE]   Task type: Semantic Segmentation (multi-class)")
+            
+            # Log sample info
+            if len(train_ds) > 0:
+                try:
+                    sample = train_ds[0]
+                    logger.info(f"[ARCADE]   Sample train data shape: {sample[0].shape if hasattr(sample[0], 'shape') else 'N/A'}")
+                    logger.info(f"[ARCADE]   Sample train mask shape: {sample[1].shape if hasattr(sample[1], 'shape') else 'N/A'}")
+                except Exception as e:
+                    logger.warning(f"[ARCADE]   Could not get semantic sample info: {e}")
+                    
+        else:  # stenosis_detection
+            logger.info("[ARCADE] Instantiating ARCADEStenosisDetection for train...")
             train_ds = ARCADEStenosisDetection(
                 root=data_path,
                 image_set='train',
@@ -1036,6 +1117,9 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
                 download=False,
                 transform=img_tr
             )
+            logger.info(f"[ARCADE] STENOSIS DETECTION Train dataset created, length: {len(train_ds)}")
+            
+            logger.info("[ARCADE] Instantiating ARCADEStenosisDetection for val...")
             val_ds = ARCADEStenosisDetection(
                 root=data_path,
                 image_set='val',
@@ -1043,6 +1127,24 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
                 download=False,
                 transform=img_tr
             )
+            logger.info(f"[ARCADE] STENOSIS DETECTION Val dataset created, length: {len(val_ds)}")
+            
+            # Enhanced logging for stenosis detection
+            logger.info(f"[ARCADE] STENOSIS DETECTION Dataset Information:")
+            logger.info(f"[ARCADE]   Root path: {data_path}")
+            logger.info(f"[ARCADE]   Train samples: {len(train_ds)}, Val samples: {len(val_ds)}")
+            logger.info(f"[ARCADE]   Total samples: {len(train_ds) + len(val_ds)}")
+            logger.info(f"[ARCADE]   Image resolution: {size}x{size}")
+            logger.info(f"[ARCADE]   Task type: Stenosis Detection (classification)")
+            
+            # Log sample info for stenosis detection
+            if len(train_ds) > 0:
+                try:
+                    sample = train_ds[0]
+                    logger.info(f"[ARCADE]   Sample train data shape: {sample[0].shape if hasattr(sample[0], 'shape') else 'N/A'}")
+                    logger.info(f"[ARCADE]   Sample train label type: {type(sample[1])}")
+                except Exception as e:
+                    logger.warning(f"[ARCADE]   Could not get stenosis sample info: {e}")
     except Exception as e:
         logger.error(f"[ARCADE] Failed to create dataset: {e}")
         logger.error(f"[ARCADE] Exception type: {type(e)}")
@@ -1056,6 +1158,30 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
     logger.info(f"[ARCADE] Loaders: {task} train={len(train_ds)}, val={len(val_ds)}")
     return train_loader, val_loader
 
+def create_optimizer(model, args):
+    """Create optimizer based on args.optimizer choice"""
+    optimizer_name = getattr(args, 'optimizer', 'adam').lower()
+    learning_rate = args.learning_rate
+    
+    logger.info(f"[OPTIMIZER] Creating {optimizer_name.upper()} optimizer with lr={learning_rate}")
+    
+    if optimizer_name == 'adam':
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    elif optimizer_name == 'sgd':
+        # SGD with momentum for better convergence
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-4)
+    elif optimizer_name == 'rmsprop':
+        optimizer = optim.RMSprop(model.parameters(), lr=learning_rate, alpha=0.99, eps=1e-8)
+    elif optimizer_name == 'adamw':
+        # AdamW with weight decay for better regularization
+        optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-2)
+    else:
+        logger.warning(f"[OPTIMIZER] Unknown optimizer '{optimizer_name}', falling back to Adam")
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    
+    logger.info(f"[OPTIMIZER] Created {type(optimizer).__name__} with parameters: {optimizer.defaults}")
+    return optimizer
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Train or run inference with MONAI U-Net model for coronary segmentation')
     parser.add_argument('--save-training-template', action='store_true', help='Save a training config template and exit')
@@ -1067,6 +1193,9 @@ def parse_args():
     parser.add_argument('--batch-size', type=int, default=32, help='Batch size for training')
     parser.add_argument('--epochs', type=int, default=100, help='Number of epochs to train')
     parser.add_argument('--learning-rate', type=float, default=0.001, help='Learning rate')
+    parser.add_argument('--optimizer', type=str, default='adam', 
+                       choices=['adam', 'sgd', 'rmsprop', 'adamw'], 
+                       help='Optimizer to use for training')
     parser.add_argument('--data-path', type=str, help='Path to dataset')
     parser.add_argument('--dataset-type', type=str, default='auto', 
                        choices=['auto', 'coronary', 'arcade_binary', 'arcade_semantic', 'arcade_stenosis', 'arcade_classification'],
@@ -1096,6 +1225,7 @@ def parse_args():
             "batch_size": 32,
             "epochs": 100,
             "learning_rate": 0.001,
+            "optimizer": "adam",
             "data_path": "<path>",
             "validation_split": 0.2,
             "mlflow_run_id": "<run_id>",
@@ -1330,15 +1460,93 @@ def train_model(args):
             callback.on_dataset_loaded()
             logger.info("Status updated to 'training' - starting model training")
             
-            # Update training data info with dataset statistics
-            callback.update_model_metadata(training_data_info={
+            # Update training data info with detailed dataset statistics  
+            detailed_training_info = {
                 'data_path': args.data_path,
                 'total_samples': train_samples + val_samples,
                 'training_samples': train_samples,
                 'validation_samples': val_samples,
                 'validation_split': args.validation_split,
-                'transform_params': transform_params
-            })
+                'transform_params': transform_params,
+                'batch_size': args.batch_size,
+                'resolution': getattr(args, 'resolution', '256'),
+                'crop_size': getattr(args, 'crop_size', 128),
+                'dataset_type': getattr(args, 'dataset_type', 'auto'),
+                'num_workers': getattr(args, 'num_workers', 4)
+            }
+            
+            # Add dataset-specific paths and file information
+            try:
+                # Debug logging to track available variables
+                available_vars = [k for k in locals().keys() if any(x in k for x in ['ds', 'loader', 'dataset'])]
+                logger.info(f"[DATASET] Available variables for metadata: {available_vars}")
+                
+                # Check if we have MONAI datasets (train_ds, val_ds exist)
+                if 'train_ds' in locals() and 'val_ds' in locals():
+                    logger.info("[DATASET] Processing MONAI dataset metadata...")
+                    if hasattr(train_ds, 'data') and train_ds.data:
+                        # For MONAI datasets, extract sample paths
+                        train_sample_paths = []
+                        val_sample_paths = []
+                        
+                        # Get sample paths from training dataset
+                        for i, sample in enumerate(train_ds.data[:5]):  # First 5 samples
+                            if isinstance(sample, dict) and 'image' in sample:
+                                train_sample_paths.append({
+                                    'image': os.path.basename(sample['image']) if isinstance(sample['image'], str) else f"sample_{i}",
+                                    'label': os.path.basename(sample['label']) if isinstance(sample, dict) and 'label' in sample and isinstance(sample['label'], str) else f"label_{i}"
+                                })
+                        
+                        # Get sample paths from validation dataset  
+                        if hasattr(val_ds, 'data') and val_ds.data:
+                            for i, sample in enumerate(val_ds.data[:5]):  # First 5 samples
+                                if isinstance(sample, dict) and 'image' in sample:
+                                    val_sample_paths.append({
+                                        'image': os.path.basename(sample['image']) if isinstance(sample['image'], str) else f"sample_{i}",
+                                        'label': os.path.basename(sample['label']) if isinstance(sample, dict) and 'label' in sample and isinstance(sample['label'], str) else f"label_{i}"
+                                    })
+                        
+                        detailed_training_info.update({
+                            'sample_train_files': train_sample_paths,
+                            'sample_val_files': val_sample_paths,
+                            'train_file_count': len(train_ds.data) if hasattr(train_ds, 'data') else len(train_ds),
+                            'val_file_count': len(val_ds.data) if hasattr(val_ds, 'data') else len(val_ds),
+                            'dataset_framework': 'MONAI'
+                        })
+                        
+                        logger.info(f"[DATASET] MONAI sample training files: {train_sample_paths[:3]}")
+                        logger.info(f"[DATASET] MONAI sample validation files: {val_sample_paths[:3]}")
+                        
+                # Check if we have ARCADE loaders (train_loader, val_loader exist)  
+                elif 'train_loader' in locals() and 'val_loader' in locals():
+                    logger.info("[DATASET] Processing ARCADE dataset metadata...")
+                    # For ARCADE datasets, get info from DataLoader
+                    train_dataset = getattr(train_loader, 'dataset', None)
+                    val_dataset = getattr(val_loader, 'dataset', None)
+                    
+                    if train_dataset and val_dataset:
+                        detailed_training_info.update({
+                            'dataset_framework': 'ARCADE',
+                            'dataset_class': str(type(train_dataset).__name__),
+                            'arcade_root': getattr(train_dataset, 'root', 'Unknown'),
+                            'arcade_image_set_train': getattr(train_dataset, 'image_set', 'Unknown'),
+                            'arcade_image_set_val': getattr(val_dataset, 'image_set', 'Unknown'),
+                            'train_file_count': len(train_dataset) if train_dataset else 0,
+                            'val_file_count': len(val_dataset) if val_dataset else 0
+                        })
+                        
+                        logger.info(f"[DATASET] ARCADE dataset detected: {type(train_dataset).__name__}")
+                        logger.info(f"[DATASET] ARCADE root: {getattr(train_dataset, 'root', 'Unknown')}")
+                        logger.info(f"[DATASET] ARCADE train count: {len(train_dataset) if train_dataset else 0}")
+                        logger.info(f"[DATASET] ARCADE val count: {len(val_dataset) if val_dataset else 0}")
+                else:
+                    logger.info("[DATASET] Neither MONAI datasets nor ARCADE loaders found for detailed logging")
+                    
+            except Exception as e:
+                logger.warning(f"[DATASET] Could not extract detailed file information: {e}")
+                logger.warning(f"[DATASET] Available variables: {[k for k in locals().keys() if 'ds' in k or 'loader' in k]}")
+                
+            callback.update_model_metadata(training_data_info=detailed_training_info)
         
         # Get sample batch for model signature - with safe handling
         sample_batch = None
@@ -1371,6 +1579,32 @@ def train_model(args):
         try:
             import matplotlib.pyplot as plt
             if images is not None and labels is not None:
+                # Log data ranges for debugging normalization issues
+                img_min, img_max = images.min().item(), images.max().item()
+                label_min, label_max = labels.min().item(), labels.max().item()
+                logger.info(f"[DATASET] Sample batch data ranges:")
+                logger.info(f"[DATASET]   Images: min={img_min:.4f}, max={img_max:.4f} (dtype: {images.dtype})")
+                logger.info(f"[DATASET]   Labels: min={label_min:.4f}, max={label_max:.4f} (dtype: {labels.dtype})")
+                
+                # Determine and log data range types
+                if img_max <= 1.0 and img_min >= 0.0:
+                    logger.info(f"[DATASET]   Images appear to be normalized to [0-1] range")
+                elif img_max <= 255 and img_min >= 0:
+                    logger.info(f"[DATASET]   Images appear to be in [0-255] range")
+                else:
+                    logger.info(f"[DATASET]   Images in custom range [{img_min:.2f}-{img_max:.2f}]")
+                
+                if label_max <= 1.0 and label_min >= 0.0:
+                    logger.info(f"[DATASET]   Binary masks in [0-1] range (normalized)")
+                elif label_max <= 255 and label_min >= 0:
+                    logger.info(f"[DATASET]   Binary masks in [0-255] range (needs normalization)")
+                else:
+                    logger.info(f"[DATASET]   Binary masks in custom range [{label_min:.2f}-{label_max:.2f}]")
+                
+                # Check for unique values in masks to confirm binary nature
+                unique_labels = torch.unique(labels)
+                logger.info(f"[DATASET]   Unique mask values: {unique_labels.cpu().numpy()}")
+                
                 fig, axes = plt.subplots(2, min(4, images.shape[0]), figsize=(12, 6))
                 for i in range(min(4, images.shape[0])):
                     axes[0, i].imshow(images[i, 0].cpu().numpy(), cmap='gray')
@@ -1411,6 +1645,7 @@ def train_model(args):
                 'batch_size': args.batch_size,
                 'epochs': args.epochs,
                 'learning_rate': args.learning_rate,
+                'optimizer': getattr(args, 'optimizer', 'adam'),
                 'crop_size': args.crop_size,
                 'validation_split': args.validation_split,
                 'num_workers': getattr(args, 'num_workers', 2),
@@ -1430,7 +1665,10 @@ def train_model(args):
         mlflow.log_artifact(config_file)
 
         loss_function = MonaiDiceLoss(sigmoid=True)
-        optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+        
+        # Create optimizer based on args.optimizer choice
+        optimizer = create_optimizer(model, args)
+        
         dice_metric = DiceMetric(include_background=True, reduction="mean")
         scaler = torch.cuda.amp.GradScaler()
         
@@ -1439,14 +1677,14 @@ def train_model(args):
         
         epoch_history = []  # Track metrics for each epoch
         
+        # Set total number of batches per epoch for progress tracking
+        if callback:
+            callback.set_epoch_batches(len(train_loader))
+            
         for epoch in range(args.epochs):
-            epoch_start_time = time.time()  # Track epoch timing
-            
-            # Log epoch start with detailed information
+            epoch_start_time = time.time()
             logger.info(f"[EPOCH] Starting epoch {epoch+1}/{args.epochs}")
-            logger.info(f"[EPOCH] Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
             
-            # Log model architecture details on first epoch
             if epoch == 0:
                 logger.info("[MODEL] Model Architecture Summary:")
                 total_params = sum(p.numel() for p in model.parameters())
@@ -1463,10 +1701,10 @@ def train_model(args):
                     logger.info(f"[CONFIG] Dataset: Train samples: {train_samples}, Val samples: {val_samples}")
                 else:
                     logger.info("[CONFIG] Dataset: Could not determine sample counts.")
-                logger.info(f"[CONFIG] Optimizer: Adam, Loss: DiceLoss, Device: {device}")
+                logger.info(f"[CONFIG] Optimizer: {type(optimizer).__name__}, Loss: DiceLoss, Device: {device}")
             
             # Check for stop_requested flag using callback system
-            if callback and not callback.on_epoch_start(epoch + 1, args.epochs):
+            if callback and not callback.on_epoch_start(epoch, args.epochs):
                 logger.info("Stop requested via callback. Exiting training loop.")
                 break
             elif hasattr(args, 'model_id') and args.model_id is not None and callback is None:
@@ -1490,6 +1728,11 @@ def train_model(args):
             train_dice = 0
             
             for batch_idx, batch_data in enumerate(train_loader):
+                # Call batch start callback
+                if callback and not callback.on_batch_start(batch_idx, len(train_loader)):
+                    logger.info("Stop requested during batch. Exiting training loop.")
+                    break
+                    
                 if isinstance(batch_data, dict):
                     inputs, labels = batch_data["image"].to(device), batch_data["label"].to(device)
                 elif isinstance(batch_data, (list, tuple)) and len(batch_data) == 2:
@@ -1499,11 +1742,153 @@ def train_model(args):
                 # Debug tensor shapes on first batch
                 if epoch == 0 and batch_idx == 0:
                     logger.info(f"Training batch shapes - Inputs: {inputs.shape}, Labels: {labels.shape}")
+                    
+                    # Enhanced range logging for first training batch
+                    input_min, input_max = inputs.min().item(), inputs.max().item()
+                    input_mean, input_std = inputs.mean().item(), inputs.std().item()
+                    label_min, label_max = labels.min().item(), labels.max().item()
+                    label_mean, label_std = labels.mean().item(), labels.std().item()
+                    
+                    logger.info(f"[TRAIN BATCH] 📊 COMPREHENSIVE DATA ANALYSIS:")
+                    logger.info(f"[TRAIN BATCH]   🖼️  INPUT IMAGES:")
+                    logger.info(f"[TRAIN BATCH]     Range: [{input_min:.4f}, {input_max:.4f}] (dtype: {inputs.dtype})")
+                    logger.info(f"[TRAIN BATCH]     Stats: mean={input_mean:.4f}, std={input_std:.4f}")
+                    
+                    # Determine and log data range types for training images
+                    if input_max <= 1.0 and input_min >= 0.0:
+                        if input_mean < 0.1:
+                            logger.info(f"[TRAIN BATCH]     ✅ Normalized [0-1] range (likely medical images with dark background)")
+                        else:
+                            logger.info(f"[TRAIN BATCH]     ✅ Normalized [0-1] range (standard normalization)")
+                    elif input_max <= 255 and input_min >= 0:
+                        if input_max == 255:
+                            logger.info(f"[TRAIN BATCH]     ⚠️  [0-255] range detected (8-bit images, consider normalization)")
+                        else:
+                            logger.info(f"[TRAIN BATCH]     ⚠️  [0-{input_max:.0f}] range (partial 8-bit scale)")
+                    elif input_max > 1000:
+                        logger.info(f"[TRAIN BATCH]     🔍 High-value range [{input_min:.0f}-{input_max:.0f}] (DICOM/medical data?)")
+                    else:
+                        logger.info(f"[TRAIN BATCH]     ❓ Custom range [{input_min:.2f}-{input_max:.2f}]")
+                    
+                    logger.info(f"[TRAIN BATCH]   🎭 MASK LABELS:")
+                    logger.info(f"[TRAIN BATCH]     Range: [{label_min:.4f}, {label_max:.4f}] (dtype: {labels.dtype})")
+                    logger.info(f"[TRAIN BATCH]     Stats: mean={label_mean:.4f}, std={label_std:.4f}")
+                    
+                    # Determine and log data range types for training masks
+                    if label_max <= 1.0 and label_min >= 0.0:
+                        logger.info(f"[TRAIN BATCH]     ✅ Binary normalized [0-1] range")
+                    elif label_max <= 255 and label_min >= 0:
+                        logger.info(f"[TRAIN BATCH]     ⚠️  [0-255] range (needs binary normalization)")
+                    else:
+                        logger.info(f"[TRAIN BATCH]     ❓ Custom range [{label_min:.2f}-{label_max:.2f}]")
+                    
+                    # Check for unique values in training masks with intelligent binary detection
+                    unique_train_labels = torch.unique(labels)
+                    unique_values_array = unique_train_labels.cpu().numpy()
+                    logger.info(f"[TRAIN BATCH]     Raw unique values: {unique_values_array}")
+                    
+                    # Intelligent binary segmentation detection
+                    if len(unique_train_labels) == 2:
+                        # Check if it's standard binary (0,1) or 8-bit binary (0,255)
+                        min_val, max_val = unique_values_array.min(), unique_values_array.max()
+                        if (min_val == 0 and max_val == 1):
+                            logger.info(f"[TRAIN BATCH]     ✅ Binary segmentation confirmed (0,1 format)")
+                            positive_ratio = (labels == 1).float().mean().item()
+                        elif (min_val == 0 and max_val == 255):
+                            logger.info(f"[TRAIN BATCH]     ✅ Binary segmentation confirmed (0,255 format - will be normalized)")
+                            positive_ratio = (labels == 255).float().mean().item()
+                        else:
+                            logger.info(f"[TRAIN BATCH]     ✅ Binary segmentation confirmed (custom {min_val},{max_val} format)")
+                            positive_ratio = (labels == max_val).float().mean().item()
+                        logger.info(f"[TRAIN BATCH]     📈 Class distribution: {positive_ratio:.2%} positive, {1-positive_ratio:.2%} background")
+                    elif len(unique_train_labels) == 1:
+                        single_val = unique_values_array[0]
+                        if single_val == 0:
+                            logger.info(f"[TRAIN BATCH]     ⚠️  Single class detected (all background) - check data!")
+                        elif single_val == 1 or single_val == 255:
+                            logger.info(f"[TRAIN BATCH]     ⚠️  Single class detected (all foreground) - check data!")
+                        else:
+                            logger.info(f"[TRAIN BATCH]     ⚠️  Single class detected (all {single_val}) - check data!")
+                    else:
+                        # Check if it's grayscale values that need thresholding
+                        if len(unique_train_labels) > 2:
+                            # Check if it's normalized grayscale (many values between 0-1) or 8-bit grayscale (0-255)
+                            if label_max <= 1.0 and label_min >= 0 and len(unique_train_labels) >= 50:
+                                # Many values in [0-1] range = normalized grayscale masks
+                                logger.info(f"[TRAIN BATCH]     📝 Normalized grayscale mask detected ({len(unique_train_labels)} values)")
+                                logger.info(f"[TRAIN BATCH]     💡 Recommend thresholding: values > 0.5 → 1, else → 0")
+                                # Show sample distribution for debugging
+                                sample_values = sorted(unique_values_array)
+                                logger.info(f"[TRAIN BATCH]     🔍 Sample values: {sample_values[:5]}...{sample_values[-5:]}")
+                            elif label_max <= 255 and label_min >= 0:
+                                # Values in [0-255] range = 8-bit grayscale masks
+                                logger.info(f"[TRAIN BATCH]     📝 8-bit grayscale mask detected ({len(unique_train_labels)} values)")
+                                logger.info(f"[TRAIN BATCH]     💡 Recommend thresholding: values > 127 → 1, else → 0")
+                                if len(unique_train_labels) <= 10:
+                                    logger.info(f"[TRAIN BATCH]     🔍 All values: {sorted(unique_values_array)}")
+                            else:
+                                logger.info(f"[TRAIN BATCH]     ⚠️  Multi-class ({len(unique_train_labels)} classes) - not binary segmentation")
+                        else:
+                            logger.info(f"[TRAIN BATCH]     ⚠️  Multi-class ({len(unique_train_labels)} classes) - not binary segmentation")
+                    
+                    # Additional data quality checks
+                    nan_inputs = torch.isnan(inputs).sum().item()
+                    inf_inputs = torch.isinf(inputs).sum().item()
+                    nan_labels = torch.isnan(labels).sum().item()
+                    inf_labels = torch.isinf(labels).sum().item()
+                    
+                    if nan_inputs > 0 or inf_inputs > 0:
+                        logger.warning(f"[TRAIN BATCH]     ❌ Data quality issues - NaN: {nan_inputs}, Inf: {inf_inputs} in inputs")
+                    if nan_labels > 0 or inf_labels > 0:
+                        logger.warning(f"[TRAIN BATCH]     ❌ Data quality issues - NaN: {nan_labels}, Inf: {inf_labels} in labels")
+                    if nan_inputs == 0 and inf_inputs == 0 and nan_labels == 0 and inf_labels == 0:
+                        logger.info(f"[TRAIN BATCH]     ✅ Data quality check passed (no NaN/Inf values)")
                 
-                # Ensure labels are float and binary (0 or 1)
+                # Ensure labels are float and binary (0 or 1) with automatic normalization
                 labels = labels.float()
+                
+                # Auto-normalize and threshold masks if they're not binary
+                if labels.max() > 1:
+                    if labels.max() <= 255 and labels.min() >= 0:
+                        logger.info(f"[TRAIN BATCH] 🔧 Auto-normalizing masks from [0-255] to [0-1] range")
+                        labels = labels / 255.0
+                        # Ensure binary values after normalization
+                        labels = (labels > 0.5).float()
+                        logger.info(f"[TRAIN BATCH] ✅ Masks normalized to range [{labels.min().item():.1f}-{labels.max().item():.1f}]")
+                    else:
+                        logger.warning(f"[TRAIN BATCH] ❌ Labels out of expected range! min: {labels.min().item()}, max: {labels.max().item()}")
+                        # Try to normalize anyway for custom ranges
+                        labels_max = labels.max()
+                        if labels_max > 0:
+                            labels = labels / labels_max
+                            labels = (labels > 0.5).float()
+                            logger.info(f"[TRAIN BATCH] 🔧 Normalized custom range to binary [0-1]")
+                elif labels.max() <= 1 and labels.min() >= 0:
+                    # Check if it's grayscale masks that need thresholding (many values between 0-1)
+                    unique_for_threshold = torch.unique(labels)
+                    if len(unique_for_threshold) > 10:  # More than 10 unique values = grayscale
+                        logger.info(f"[TRAIN BATCH] 🔧 Auto-thresholding grayscale masks ({len(unique_for_threshold)} values → binary)")
+                        labels = (labels > 0.5).float()
+                        final_unique = torch.unique(labels)
+                        logger.info(f"[TRAIN BATCH] ✅ Thresholded to {len(final_unique)} values: {final_unique.cpu().numpy()}")
+                
                 if labels.max() > 1 or labels.min() < 0:
-                    logger.warning(f"Labels out of [0,1] range! min: {labels.min().item()}, max: {labels.max().item()}")
+                    logger.warning(f"[TRAIN BATCH] ❌ Labels still out of [0,1] range after normalization! min: {labels.min().item()}, max: {labels.max().item()}")
+                
+                # Verify normalization worked correctly for first batch
+                if epoch == 0 and batch_idx == 0:
+                    # Re-check unique values after normalization
+                    normalized_unique_labels = torch.unique(labels)
+                    logger.info(f"[TRAIN BATCH] 🔍 POST-NORMALIZATION VERIFICATION:")
+                    logger.info(f"[TRAIN BATCH]     Final unique values: {normalized_unique_labels.cpu().numpy()}")
+                    logger.info(f"[TRAIN BATCH]     Final range: [{labels.min().item():.4f}, {labels.max().item():.4f}]")
+                    
+                    if len(normalized_unique_labels) == 2 and labels.min() >= 0 and labels.max() <= 1:
+                        logger.info(f"[TRAIN BATCH]     ✅ Successfully normalized to binary [0-1] format")
+                        positive_ratio_final = (labels == 1).float().mean().item()
+                        logger.info(f"[TRAIN BATCH]     📈 Final class distribution: {positive_ratio_final:.2%} positive, {1-positive_ratio_final:.2%} background")
+                    else:
+                        logger.warning(f"[TRAIN BATCH]     ⚠️  Normalization may have failed - {len(normalized_unique_labels)} unique values")
                 # Use DiceLoss with sigmoid=False, since model outputs are raw logits
                 loss_function = MonaiDiceLoss(sigmoid=True)
                 with torch.cuda.amp.autocast():
@@ -1530,11 +1915,25 @@ def train_model(args):
                     dice_metric.reset()
                     train_dice += batch_dice
                 
+                # Call batch end callback with current metrics
+                if callback:
+                    batch_logs = {
+                        'train_loss': loss.item(),
+                        'train_dice': batch_dice,
+                        'batch_progress': (batch_idx + 1) / len(train_loader)
+                    }
+                    callback.on_batch_end(batch_idx, batch_logs)
+                
                 if batch_idx % 10 == 0:  # More frequent logging for GUI
                     progress_pct = (batch_idx / len(train_loader)) * 100
                     logger.info(f"[TRAIN] Epoch {epoch+1}/{args.epochs} - "
                               f"Batch {batch_idx}/{len(train_loader)} ({progress_pct:.1f}%) - "
                               f"Loss: {loss.item():.4f}, Dice: {batch_dice:.4f}")
+                              
+            # Check if training was stopped during batch processing
+            if callback and callback.model.stop_requested:
+                logger.info("Training stopped during batch processing.")
+                break
             
             epoch_loss /= len(train_loader)
             train_dice /= len(train_loader)
@@ -1545,7 +1944,7 @@ def train_model(args):
             val_loss = 0
             val_dice = 0
             
-            # --- Wizualizacja batcha walidacyjnego i sprawdzenie zakresu masek ---
+            # --- Enhanced validation data analysis ---
             try:
                 val_batch = next(iter(val_loader))
                 if isinstance(val_batch, dict):
@@ -1555,9 +1954,114 @@ def train_model(args):
                     val_images, val_labels = val_batch
                 else:
                     val_images, val_labels = None, None
+                    
+                # Only log validation data analysis on first epoch
+                if epoch == 0 and val_images is not None and val_labels is not None:
+                    logger.info(f"[VAL DATA] Validation batch: images shape: {val_images.shape}, masks shape: {val_labels.shape}")
+                    
+                    # Enhanced validation data range logging
+                    val_img_min, val_img_max = val_images.min().item(), val_images.max().item()
+                    val_img_mean, val_img_std = val_images.mean().item(), val_images.std().item()
+                    val_label_min, val_label_max = val_labels.min().item(), val_labels.max().item()
+                    val_label_mean, val_label_std = val_labels.mean().item(), val_labels.std().item()
+                    
+                    logger.info(f"[VAL DATA] 📊 VALIDATION DATA ANALYSIS:")
+                    logger.info(f"[VAL DATA]   🖼️  VALIDATION IMAGES:")
+                    logger.info(f"[VAL DATA]     Range: [{val_img_min:.4f}, {val_img_max:.4f}] (dtype: {val_images.dtype})")
+                    logger.info(f"[VAL DATA]     Stats: mean={val_img_mean:.4f}, std={val_img_std:.4f}")
+                    
+                    # Determine and log data range types for validation images
+                    if val_img_max <= 1.0 and val_img_min >= 0.0:
+                        if val_img_mean < 0.1:
+                            logger.info(f"[VAL DATA]     ✅ Normalized [0-1] range (likely medical images with dark background)")
+                        else:
+                            logger.info(f"[VAL DATA]     ✅ Normalized [0-1] range (standard normalization)")
+                    elif val_img_max <= 255 and val_img_min >= 0:
+                        if val_img_max == 255:
+                            logger.info(f"[VAL DATA]     ⚠️  [0-255] range detected (8-bit images, consider normalization)")
+                        else:
+                            logger.info(f"[VAL DATA]     ⚠️  [0-{val_img_max:.0f}] range (partial 8-bit scale)")
+                    elif val_img_max > 1000:
+                        logger.info(f"[VAL DATA]     🔍 High-value range [{val_img_min:.0f}-{val_img_max:.0f}] (DICOM/medical data?)")
+                    else:
+                        logger.info(f"[VAL DATA]     ❓ Custom range [{val_img_min:.2f}-{val_img_max:.2f}]")
+                    
+                    logger.info(f"[VAL DATA]   🎭 VALIDATION MASKS:")
+                    logger.info(f"[VAL DATA]     Range: [{val_label_min:.4f}, {val_label_max:.4f}] (dtype: {val_labels.dtype})")
+                    logger.info(f"[VAL DATA]     Stats: mean={val_label_mean:.4f}, std={val_label_std:.4f}")
+                    
+                    # Determine and log data range types for validation masks
+                    if val_label_max <= 1.0 and val_label_min >= 0.0:
+                        logger.info(f"[VAL DATA]     ✅ Binary normalized [0-1] range")
+                    elif val_label_max <= 255 and val_label_min >= 0:
+                        logger.info(f"[VAL DATA]     ⚠️  [0-255] range (needs binary normalization)")
+                    else:
+                        logger.info(f"[VAL DATA]     ❓ Custom range [{val_label_min:.2f}-{val_label_max:.2f}]")
+                    
+                    # Check for unique values in validation masks with intelligent binary detection
+                    unique_val_labels = torch.unique(val_labels)
+                    unique_val_values_array = unique_val_labels.cpu().numpy()
+                    logger.info(f"[VAL DATA]     Raw unique values: {unique_val_values_array}")
+                    
+                    # Intelligent binary segmentation detection for validation
+                    if len(unique_val_labels) == 2:
+                        # Check if it's standard binary (0,1) or 8-bit binary (0,255)
+                        min_val, max_val = unique_val_values_array.min(), unique_val_values_array.max()
+                        if (min_val == 0 and max_val == 1):
+                            logger.info(f"[VAL DATA]     ✅ Binary segmentation confirmed (0,1 format)")
+                            val_positive_ratio = (val_labels == 1).float().mean().item()
+                        elif (min_val == 0 and max_val == 255):
+                            logger.info(f"[VAL DATA]     ✅ Binary segmentation confirmed (0,255 format - will be normalized)")
+                            val_positive_ratio = (val_labels == 255).float().mean().item()
+                        else:
+                            logger.info(f"[VAL DATA]     ✅ Binary segmentation confirmed (custom {min_val},{max_val} format)")
+                            val_positive_ratio = (val_labels == max_val).float().mean().item()
+                        logger.info(f"[VAL DATA]     📈 Class distribution: {val_positive_ratio:.2%} positive, {1-val_positive_ratio:.2%} background")
+                    elif len(unique_val_labels) == 1:
+                        single_val = unique_val_values_array[0]
+                        if single_val == 0:
+                            logger.info(f"[VAL DATA]     ⚠️  Single class detected (all background) - check data!")
+                        elif single_val == 1 or single_val == 255:
+                            logger.info(f"[VAL DATA]     ⚠️  Single class detected (all foreground) - check data!")
+                        else:
+                            logger.info(f"[VAL DATA]     ⚠️  Single class detected (all {single_val}) - check data!")
+                    else:
+                        # Check if it's grayscale values that need thresholding
+                        if len(unique_val_labels) > 2:
+                            # Check if it's normalized grayscale (many values between 0-1) or 8-bit grayscale (0-255)
+                            if val_label_max <= 1.0 and val_label_min >= 0 and len(unique_val_labels) >= 50:
+                                # Many values in [0-1] range = normalized grayscale masks
+                                logger.info(f"[VAL DATA]     📝 Normalized grayscale mask detected ({len(unique_val_labels)} values)")
+                                logger.info(f"[VAL DATA]     💡 Recommend thresholding: values > 0.5 → 1, else → 0")
+                                # Show sample distribution for debugging
+                                sample_values = sorted(unique_val_values_array)
+                                logger.info(f"[VAL DATA]     🔍 Sample values: {sample_values[:5]}...{sample_values[-5:]}")
+                            elif val_label_max <= 255 and val_label_min >= 0:
+                                # Values in [0-255] range = 8-bit grayscale masks
+                                logger.info(f"[VAL DATA]     📝 8-bit grayscale mask detected ({len(unique_val_labels)} values)")
+                                logger.info(f"[VAL DATA]     💡 Recommend thresholding: values > 127 → 1, else → 0")
+                                if len(unique_val_labels) <= 10:
+                                    logger.info(f"[VAL DATA]     🔍 All values: {sorted(unique_val_values_array)}")
+                            else:
+                                logger.info(f"[VAL DATA]     ⚠️  Multi-class ({len(unique_val_labels)} classes) - not binary segmentation")
+                        else:
+                            logger.info(f"[VAL DATA]     ⚠️  Multi-class ({len(unique_val_labels)} classes) - not binary segmentation")
+                    
+                    # Additional validation data quality checks
+                    val_nan_inputs = torch.isnan(val_images).sum().item()
+                    val_inf_inputs = torch.isinf(val_images).sum().item()
+                    val_nan_labels = torch.isnan(val_labels).sum().item()
+                    val_inf_labels = torch.isinf(val_labels).sum().item()
+                    
+                    if val_nan_inputs > 0 or val_inf_inputs > 0:
+                        logger.warning(f"[VAL DATA]     ❌ Data quality issues - NaN: {val_nan_inputs}, Inf: {val_inf_inputs} in inputs")
+                    if val_nan_labels > 0 or val_inf_labels > 0:
+                        logger.warning(f"[VAL DATA]     ❌ Data quality issues - NaN: {val_nan_labels}, Inf: {val_inf_labels} in labels")
+                    if val_nan_inputs == 0 and val_inf_inputs == 0 and val_nan_labels == 0 and val_inf_labels == 0:
+                        logger.info(f"[VAL DATA]     ✅ Data quality check passed (no NaN/Inf values)")
+                
+                # Always generate visualization (moved after conditional logging)
                 if val_images is not None and val_labels is not None:
-                    logger.info(f"[VAL DATA] Walidacyjny batch: obrazy shape: {val_images.shape}, maski shape: {val_labels.shape}")
-                    logger.info(f"[VAL DATA] Zakres masek: min={val_labels.min().item()}, max={val_labels.max().item()}")
                     import matplotlib.pyplot as plt
                     fig, axes = plt.subplots(2, min(4, val_images.shape[0]), figsize=(12, 6))
                     for i in range(min(4, val_images.shape[0])):
@@ -1585,6 +2089,25 @@ def train_model(args):
                         val_inputs, val_labels = val_data[0].to(device), val_data[1].to(device)
                     else:
                         raise TypeError(f"Unsupported val_data type: {type(val_data)}")
+                    
+                    # Apply same normalization and thresholding to validation labels as training
+                    val_labels = val_labels.float()
+                    if val_labels.max() > 1:
+                        if val_labels.max() <= 255 and val_labels.min() >= 0:
+                            val_labels = val_labels / 255.0
+                            val_labels = (val_labels > 0.5).float()
+                        else:
+                            # Normalize custom ranges
+                            labels_max = val_labels.max()
+                            if labels_max > 0:
+                                val_labels = val_labels / labels_max
+                                val_labels = (val_labels > 0.5).float()
+                    elif val_labels.max() <= 1 and val_labels.min() >= 0:
+                        # Check if it's grayscale masks that need thresholding
+                        unique_for_threshold = torch.unique(val_labels)
+                        if len(unique_for_threshold) > 10:  # More than 10 unique values = grayscale
+                            val_labels = (val_labels > 0.5).float()
+                    
                     val_outputs = model(val_inputs)
                     batch_val_loss = loss_function(val_outputs, val_labels).item()
                     val_loss += batch_val_loss
@@ -1621,6 +2144,10 @@ def train_model(args):
             
             mlflow.log_metrics(metrics, step=epoch)
             epoch_history.append(metrics)  # Save metrics for this epoch
+            
+            # Call epoch end callback with metrics
+            if callback:
+                callback.on_epoch_end(epoch, metrics)
             
             # Enhanced MLflow artifact logging using the new artifact manager
             try:
@@ -2154,6 +2681,108 @@ def train_model(args):
         
         if callback:
             callback.on_training_end({"best_val_dice": best_val_dice})
+        
+        # === COMPREHENSIVE TRAINING SUMMARY WITH DATA RANGE ANALYSIS ===
+        logger.info("=" * 80)
+        logger.info("🏁 TRAINING COMPLETED - COMPREHENSIVE SUMMARY REPORT")
+        logger.info("=" * 80)
+        
+        # Training Performance Summary
+        logger.info(f"📊 TRAINING PERFORMANCE:")
+        logger.info(f"   📈 Best Validation Dice Score: {best_val_dice:.4f}")
+        logger.info(f"   🔄 Total Epochs Completed: {len(epoch_history)}")
+        logger.info(f"   ⏱️  Training Duration: {time.time() - training_start_time:.1f} seconds" if 'training_start_time' in locals() else "   ⏱️  Training Duration: Not tracked")
+        logger.info(f"   🖥️  Device Used: {device}")
+        
+        # Dataset Summary  
+        logger.info(f"📁 DATASET SUMMARY:")
+        if 'train_ds' in locals() and 'val_ds' in locals():
+            logger.info(f"   🏋️  Training Samples: {len(train_ds)}")
+            logger.info(f"   ✅ Validation Samples: {len(val_ds)}")
+            logger.info(f"   📦 Total Dataset Size: {len(train_ds) + len(val_ds)}")
+        elif 'train_samples' in locals() and 'val_samples' in locals():
+            logger.info(f"   🏋️  Training Samples: {train_samples}")
+            logger.info(f"   ✅ Validation Samples: {val_samples}")  
+            logger.info(f"   📦 Total Dataset Size: {train_samples + val_samples}")
+        else:
+            logger.info(f"   ❓ Dataset size information not available")
+        
+        # Batch Processing Summary
+        logger.info(f"   🔢 Batches per Epoch: {len(train_loader)} train, {len(val_loader)} validation")
+        logger.info(f"   📏 Batch Size: {args.batch_size}")
+        logger.info(f"   👷 Workers: {getattr(args, 'num_workers', 'Unknown')}")
+        
+        # Model Architecture Summary
+        if 'total_params' in locals():
+            logger.info(f"🏗️  MODEL ARCHITECTURE:")
+            logger.info(f"   🔧 Parameters: {total_params:,} total ({trainable_params:,} trainable)")
+            logger.info(f"   💾 Model Size: {total_params * 4 / (1024**2):.2f} MB")
+        
+        # Training Configuration Summary
+        logger.info(f"⚙️  TRAINING CONFIGURATION:")
+        logger.info(f"   📚 Learning Rate: {args.learning_rate}")
+        logger.info(f"   🎯 Loss Function: DiceLoss with Sigmoid")
+        logger.info(f"   🔄 Optimizer: {getattr(args, 'optimizer', 'adam').upper()}")
+        logger.info(f"   📐 Resolution: {getattr(args, 'resolution', '256')}px")
+        logger.info(f"   ✂️  Crop Size: {getattr(args, 'crop_size', '128')}px")
+        
+        # Data Range Analysis Summary (if data was analyzed)
+        logger.info(f"🔍 DATA CHARACTERISTICS SUMMARY:")
+        logger.info(f"   💽 Dataset Type: {getattr(args, 'dataset_type', 'auto-detected')}")
+        logger.info(f"   📊 Data Path: {args.data_path}")
+        
+        # MLflow Integration Summary
+        if hasattr(args, 'mlflow_run_id') and args.mlflow_run_id:
+            logger.info(f"📈 MLFLOW INTEGRATION:")
+            logger.info(f"   🆔 Run ID: {args.mlflow_run_id}")
+            logger.info(f"   📝 Experiment: {mlflow.get_experiment(mlflow.active_run().info.experiment_id).name if mlflow.active_run() else 'N/A'}")
+        
+        # File Artifacts Summary
+        if 'model_dir' in locals() and model_dir:
+            logger.info(f"📁 GENERATED ARTIFACTS:")
+            logger.info(f"   📂 Model Directory: {model_dir}")
+            if 'best_model_path' in locals():
+                logger.info(f"   🏆 Best Model: {os.path.basename(best_model_path)}")
+            
+            # List key artifact files
+            artifacts_dir = os.path.join(model_dir, 'artifacts')
+            if os.path.exists(artifacts_dir):
+                artifact_files = [f for f in os.listdir(artifacts_dir) if f.endswith(('.png', '.json', '.txt', '.html'))]
+                if artifact_files:
+                    logger.info(f"   📊 Artifacts Generated: {len(artifact_files)} files")
+                    for artifact in sorted(artifact_files)[:5]:  # Show first 5
+                        logger.info(f"     • {artifact}")
+                    if len(artifact_files) > 5:
+                        logger.info(f"     • ... and {len(artifact_files) - 5} more")
+        
+        # Performance Recommendations
+        logger.info(f"💡 PERFORMANCE INSIGHTS:")
+        if best_val_dice < 0.3:
+            logger.info(f"   ⚠️  Low Dice Score detected - Consider:")
+            logger.info(f"     • Increasing training epochs")
+            logger.info(f"     • Adjusting learning rate")
+            logger.info(f"     • Verifying data quality and ranges")
+            logger.info(f"     • Checking mask normalization (0-1 vs 0-255)")
+        elif best_val_dice < 0.7:
+            logger.info(f"   🔄 Moderate performance - Potential improvements:")
+            logger.info(f"     • Fine-tuning hyperparameters")
+            logger.info(f"     • Adding data augmentation")
+            logger.info(f"     • Increasing model complexity")
+        else:
+            logger.info(f"   ✅ Excellent performance achieved!")
+            logger.info(f"   🚀 Model ready for production consideration")
+        
+        # Next Steps
+        logger.info(f"🎯 NEXT STEPS:")
+        logger.info(f"   • Review training curves and sample predictions")
+        logger.info(f"   • Test model on independent test set")
+        logger.info(f"   • Consider model deployment if performance is satisfactory")
+        if hasattr(args, 'model_id') and args.model_id:
+            logger.info(f"   • Check MLflow for detailed metrics and artifacts")
+        
+        logger.info("=" * 80)
+        logger.info("🎉 TRAINING SUMMARY COMPLETE")
+        logger.info("=" * 80)
     except Exception as e:
         logger.error(f"Training failed: {str(e)}", exc_info=True)
         if callback:
@@ -2445,7 +3074,8 @@ def inference_mode(args):
             with open(summary_file, 'w') as f:
                 json.dump(inference_summary, f, indent=2, default=str)
             
-            mlflow.log_artifact(summary_file, artifact_path="inference/summary")
+            if args.mlflow_run_id:
+                mlflow.log_artifact(summary_file, artifact_path="inference/summary")
             
     finally:
         if args.mlflow_run_id:

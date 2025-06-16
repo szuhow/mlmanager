@@ -40,6 +40,7 @@ class TrainingTemplateForm(forms.ModelForm):
         fields = [
             'name', 'description', 'model_type', 'batch_size', 'epochs', 
             'learning_rate', 'validation_split', 'resolution', 'device',
+            'optimizer',
             'use_random_flip', 'flip_probability', 'use_random_rotate', 'rotation_range',
             'use_random_scale', 'scale_range_min', 'scale_range_max', 
             'use_random_intensity', 'intensity_range', 'use_random_crop', 'crop_size',
@@ -61,6 +62,7 @@ class TrainingTemplateForm(forms.ModelForm):
             'validation_split': 'Validation set size (0-1)',
             'resolution': 'Training image resolution. Higher resolutions require more memory.',
             'device': 'Device to use for training. Auto will detect the best available device.',
+            'optimizer': 'Optimizer algorithm to use for training',
             'use_random_flip': 'Apply random horizontal flip augmentation',
             'flip_probability': 'Probability of applying flip (0.0-1.0)',
             'use_random_rotate': 'Apply random rotation augmentation',
@@ -172,6 +174,20 @@ class TrainingForm(forms.Form):
         initial='auto',
         required=True,
         help_text="Device to use for training. Auto will detect the best available device."
+    )
+    
+    # Optimizer selection
+    OPTIMIZER_CHOICES = [
+        ('adam', 'Adam'),
+        ('sgd', 'SGD'),
+        ('rmsprop', 'RMSprop'),
+        ('adamw', 'AdamW'),
+    ]
+    optimizer = forms.ChoiceField(
+        choices=OPTIMIZER_CHOICES,
+        initial='adam',
+        required=True,
+        help_text="Optimizer algorithm to use for training"
     )
     
     # Enhanced Augmentation options with richer controls

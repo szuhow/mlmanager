@@ -453,7 +453,8 @@
 {% endblock %}
 
 {% block extra_js %}
-<script src="{% static 'ml_manager/js/model_progress.js' %}"></script>
+<!-- ModelProgressUpdater not used - using inline auto-refresh instead -->
+{# <script src="{% static 'ml_manager/js/model_progress.js' %}"></script> #}
 <script src="{% static 'ml_manager/js/safari-dropdown-fixes.js' %}"></script>
 <script>
 // Add CSRF token to the page
@@ -523,8 +524,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const parentRow = dropdown.closest('tr');
         
         // Pause live updates for this row to prevent flickering
-        if (parentRow && window.modelProgressUpdater) {
-            window.modelProgressUpdater.pauseUpdateForRow(parentRow);
+        if (parentRow) {
+            parentRow.setAttribute('data-update-paused', 'true');
         }
         
         // Add classes
@@ -553,9 +554,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (parentRow) {
                 parentRow.classList.remove('dropdown-open');
                 // Resume live updates for this row
-                if (window.modelProgressUpdater) {
-                    window.modelProgressUpdater.resumeUpdateForRow(parentRow);
-                }
+                parentRow.removeAttribute('data-update-paused');
             }
         });
     }
@@ -589,8 +588,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize custom dropdowns
     initCustomDropdowns();
     
-    // Make modelProgressUpdater available globally for dropdown integration
-    window.modelProgressUpdater = window.modelProgressUpdater || null;
+    // Auto-refresh system integrated inline - no external ModelProgressUpdater needed
 
     function updateBatchActions() {
         const checkedBoxes = document.querySelectorAll('.model-checkbox:checked');
@@ -710,6 +708,205 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
     });
+
+    // Auto-refresh functionality for training models
+    let autoRefreshInterval;
+    let isAutoRefreshEnabled = false;
+    
+    function startAutoRefresh() {
+        if (autoRefreshInterval) return; // Already running
+        
+        isAutoRefreshEnabled = true;
+        autoRefreshInterval = setInterval(() => {
+            updateTrainingModels();
+        }, 3000); // Update every 3 seconds
+        
+        showRefreshIndicator();
+        console.log('Auto-refresh started for training models');
+    }
+    
+    function stopAutoRefresh() {
+        if (autoRefreshInterval) {
+            clearInterval(autoRefreshInterval);
+            autoRefreshInterval = null;
+        }
+        isAutoRefreshEnabled = false;
+        hideRefreshIndicator();
+        console.log('Auto-refresh stopped');
+    }
+    
+    function updateTrainingModels() {
+        const trainingRows = document.querySelectorAll('tr[data-model-status="training"]');
+        if (trainingRows.length === 0) {
+            stopAutoRefresh();
+            return;
+        }
+        
+        trainingRows.forEach(row => {
+            const modelId = row.dataset.modelId;
+            if (modelId) {
+                updateModelRow(modelId, row);
+            }
+        });
+    }
+    
+    function updateModelRow(modelId, row) {
+        // Skip update if row is paused (dropdown open)
+        if (row && row.getAttribute('data-update-paused') === 'true') {
+            return;
+        }
+        
+        fetch(`/ml/model/${modelId}/progress/`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Skip DOM updates if row is paused
+                    if (row && row.getAttribute('data-update-paused') === 'true') {
+                        return;
+                    }
+                    
+                    // Update status badge
+                    const statusBadge = row.querySelector('.status-badge');
+                    if (statusBadge && data.model_status) {
+                        statusBadge.className = `badge status-badge ${getStatusClass(data.model_status)}`;
+                        statusBadge.textContent = data.model_status.charAt(0).toUpperCase() + data.model_status.slice(1);
+                    }
+                    
+                    // Update progress bar with batch-level granularity
+                    const progressBar = row.querySelector('.progress-bar');
+                    if (progressBar && data.progress) {
+                        // Use batch_progress_percentage if available for more granular updates
+                        const progressPercentage = data.progress.batch_progress_percentage || data.progress.percentage || 0;
+                        progressBar.style.width = `${progressPercentage}%`;
+                        
+                        // Show both epoch and batch info if batch data is available
+                        if (data.progress.current_batch && data.progress.total_batches_per_epoch) {
+                            progressBar.textContent = `${data.progress.current_epoch || 0}/${data.progress.total_epochs || 0} (${data.progress.current_batch}/${data.progress.total_batches_per_epoch})`;
+                        } else {
+                            progressBar.textContent = `${data.progress.current_epoch || 0}/${data.progress.total_epochs || 0}`;
+                        }
+                    }
+                    
+                    // Update metrics
+                    const metricsCell = row.querySelector('.metrics-cell');
+                    if (metricsCell && data.metrics) {
+                        metricsCell.innerHTML = `
+                            <small>
+                                Dice: ${(data.metrics.val_dice || 0).toFixed(3)}<br>
+                                Loss: ${(data.metrics.val_loss || 0).toFixed(3)}
+                            </small>
+                        `;
+                    }
+                    
+                    // Update row data-model-status attribute to reflect current status
+                    if (data.model_status) {
+                        row.dataset.modelStatus = data.model_status;
+                        // Also update the data-model-status attribute for CSS selectors
+                        row.setAttribute('data-model-status', data.model_status);
+                    }
+                    
+                    // If training completed, stop auto-refresh for this model
+                    if (data.model_status === 'completed' || data.model_status === 'failed') {
+                        // Remove from training models count
+                        const remainingTraining = document.querySelectorAll('tr[data-model-status="training"]');
+                        if (remainingTraining.length === 0) {
+                            console.log('No more training models, stopping auto-refresh');
+                            stopAutoRefresh();
+                        }
+                    }
+                }
+            })
+            .catch(error => {
+                console.warn(`Failed to update model ${modelId}:`, error);
+                // If it's a 404, the model might have been deleted
+                if (error.message && error.message.includes('404')) {
+                    console.warn(`Model ${modelId} not found, removing from auto-refresh`);
+                    row.setAttribute('data-model-deleted', 'true');
+                    // Check if any training models remain
+                    const remainingTraining = document.querySelectorAll('tr[data-model-status="training"]:not([data-model-deleted="true"])');
+                    if (remainingTraining.length === 0) {
+                        console.log('No more valid training models, stopping auto-refresh');
+                        stopAutoRefresh();
+                    }
+                }
+            });
+    }
+    
+    function getStatusClass(status) {
+        const statusClasses = {
+            'training': 'bg-warning text-dark',
+            'completed': 'bg-success',
+            'failed': 'bg-danger',
+            'pending': 'bg-secondary'
+        };
+        return statusClasses[status] || 'bg-secondary';
+    }
+    
+    function showRefreshIndicator() {
+        const existing = document.getElementById('auto-refresh-indicator');
+        if (existing) return;
+        
+        const indicator = document.createElement('div');
+        indicator.id = 'auto-refresh-indicator';
+        indicator.className = 'alert alert-info alert-dismissible fade show position-fixed';
+        indicator.style.cssText = 'top: 20px; right: 20px; z-index: 1060; min-width: 300px;';
+        indicator.innerHTML = `
+            <i class="fas fa-sync-alt fa-spin me-2"></i>
+            <strong>Auto-refresh Active</strong>
+            <small class="d-block">Updating training progress every 3 seconds</small>
+            <button type="button" class="btn-close" onclick="stopAutoRefresh()"></button>
+        `;
+        document.body.appendChild(indicator);
+    }
+    
+    function hideRefreshIndicator() {
+        const indicator = document.getElementById('auto-refresh-indicator');
+        if (indicator) {
+            indicator.remove();
+        }
+    }
+    
+    // Check for training models on page load and setup controls
+    const toggleButton = document.getElementById('toggle-updates');
+    const manualRefreshButton = document.getElementById('manual-refresh');
+    
+    // Setup toggle button
+    if (toggleButton) {
+        toggleButton.addEventListener('click', function() {
+            if (isAutoRefreshEnabled) {
+                stopAutoRefresh();
+                this.innerHTML = '<i class="fas fa-play"></i> Start Live Updates';
+                this.className = 'btn btn-outline-success btn-sm me-2';
+            } else {
+                startAutoRefresh();
+                this.innerHTML = '<i class="fas fa-pause"></i> Stop Live Updates';
+                this.className = 'btn btn-outline-danger btn-sm me-2';
+            }
+        });
+    }
+    
+    // Setup manual refresh button
+    if (manualRefreshButton) {
+        manualRefreshButton.addEventListener('click', function() {
+            updateTrainingModels();
+            // Briefly show it's working
+            this.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i>';
+            setTimeout(() => {
+                this.innerHTML = '<i class="fas fa-sync-alt"></i>';
+            }, 1000);
+        });
+    }
+    
+    // Auto-start if training models exist
+    const trainingModels = document.querySelectorAll('tr[data-model-status="training"]');
+    if (trainingModels.length > 0) {
+        console.log(`Found ${trainingModels.length} training models, starting auto-refresh`);
+        startAutoRefresh();
+        if (toggleButton) {
+            toggleButton.innerHTML = '<i class="fas fa-pause"></i> Stop Live Updates';
+            toggleButton.className = 'btn btn-outline-danger btn-sm me-2';
+        }
+    }
 
     // Helper function to update model count in header
     function updateModelCount() {

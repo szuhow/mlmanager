@@ -10,35 +10,35 @@ import logging
 from typing import Dict, Optional
 import os
 
+# Setup logger first
+logger = logging.getLogger(__name__)
+
 # Try to import psutil - if not available, disable system monitoring
 try:
     import psutil
     PSUTIL_AVAILABLE = True
+    logger.debug("psutil available for system monitoring")
 except ImportError:
     PSUTIL_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("psutil not available - system monitoring disabled. Install with: pip install psutil")
+    logger.info("psutil not available - system monitoring disabled. Install with: pip install psutil")
 
+# GPU monitoring libraries - graceful fallbacks with minimal warnings
 try:
     import GPUtil
     GPU_AVAILABLE = True
+    logger.debug("GPUtil available for GPU monitoring")
 except ImportError:
     GPU_AVAILABLE = False
-    if PSUTIL_AVAILABLE:  # Only warn if psutil is available
-        logger = logging.getLogger(__name__)
-        logger.warning("GPUtil not available - GPU monitoring via GPUtil disabled")
+    logger.debug("GPUtil not available - GPU monitoring via GPUtil disabled")
 
 try:
     import pynvml
-    NVML_AVAILABLE = True
     pynvml.nvmlInit()
-except (ImportError, Exception):
+    NVML_AVAILABLE = True
+    logger.debug("pynvml available for advanced GPU monitoring")
+except (ImportError, Exception) as e:
     NVML_AVAILABLE = False
-    if PSUTIL_AVAILABLE:  # Only warn if psutil is available
-        logger = logging.getLogger(__name__)
-        logger.warning("pynvml not available - advanced GPU monitoring disabled")
-
-logger = logging.getLogger(__name__)
+    logger.debug(f"pynvml not available - advanced GPU monitoring disabled: {e}")
 
 class SystemMonitor:
     """System resource monitor for MLflow logging during training"""

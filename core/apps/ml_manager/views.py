@@ -966,6 +966,7 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                     'dataset_type': form_data.get('dataset_type', 'auto'),
                     'batch_size': form_data['batch_size'],
                     'learning_rate': form_data['learning_rate'],
+                    'optimizer': form_data.get('optimizer', 'adam'),
                     'validation_split': form_data['validation_split'],
                     'resolution': form_data['resolution'],
                     'device': form_data['device'],
@@ -991,6 +992,7 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 f'--batch-size={form_data["batch_size"]}',
                 f'--epochs={form_data["epochs"]}',
                 f'--learning-rate={form_data["learning_rate"]}',
+                f'--optimizer={form_data.get("optimizer", "adam")}',
                 f'--validation-split={form_data["validation_split"]}',
                 f'--resolution={form_data["resolution"]}',
                 f'--device={form_data["device"]}',
@@ -1058,6 +1060,7 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                         'batch_size': model.training_data_info.get('batch_size', 32),
                         'epochs': model.total_epochs or model.training_data_info.get('epochs', 100),
                         'learning_rate': model.training_data_info.get('learning_rate', 0.001),
+                        'optimizer': model.training_data_info.get('optimizer', 'adam'),
                         'validation_split': model.training_data_info.get('validation_split', 0.2),
                         'resolution': model.training_data_info.get('resolution', '256'),
                         'device': model.training_data_info.get('device', 'auto'),
@@ -1722,6 +1725,7 @@ def get_training_progress(request, model_id):
         
         return JsonResponse({
             'status': 'success',
+            'model_status': model.status,  # Add model status
             'progress': {
                 'current_epoch': model.current_epoch or 0,
                 'total_epochs': model.total_epochs or 0,

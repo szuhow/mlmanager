@@ -219,6 +219,55 @@
 
         <!-- Right Column -->
         <div class="col-md-6">
+            <!-- Dataset Information Card -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-database me-2"></i>Dataset Information
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if model.training_data_info %}
+                    <dl class="row">
+                        <dt class="col-sm-4">Dataset Type</dt>
+                        <dd class="col-sm-8">
+                            <span class="badge bg-info">
+                                {{ model.training_data_info.dataset_type|default:"auto"|title }}
+                            </span>
+                        </dd>
+                        
+                        <dt class="col-sm-4">Data Path</dt>
+                        <dd class="col-sm-8">
+                            <code>{{ model.training_data_info.data_path|default:"N/A" }}</code>
+                        </dd>
+                        
+                        <dt class="col-sm-4">Dataset Size</dt>
+                        <dd class="col-sm-8">
+                            {% if model.training_data_info.total_samples %}
+                                <strong>{{ model.training_data_info.total_samples }}</strong> samples
+                                {% if model.training_data_info.training_samples %}
+                                    <br><small class="text-muted">
+                                        Train: {{ model.training_data_info.training_samples }}, 
+                                        Val: {{ model.training_data_info.validation_samples|default:"Unknown" }}
+                                    </small>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">Unknown</span>
+                            {% endif %}
+                        </dd>
+                        
+                        <dt class="col-sm-4">Image Resolution</dt>
+                        <dd class="col-sm-8">{{ model.training_data_info.resolution|default:"256" }}px</dd>
+                    </dl>
+                    {% else %}
+                    <div class="alert alert-info mb-0">
+                        <i class="fas fa-info-circle me-2"></i>
+                        <small>Dataset information not available for this model.</small>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
             <!-- MLflow Model Registry Information -->
             <div class="card mb-4">
                 <div class="card-header d-flex justify-content-between align-items-center">

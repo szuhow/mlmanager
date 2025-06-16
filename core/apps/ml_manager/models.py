@@ -230,6 +230,20 @@ class TrainingTemplate(models.Model):
     
     num_workers = models.IntegerField(default=4)
     
+    # Optimizer selection
+    OPTIMIZER_CHOICES = [
+        ('adam', 'Adam'),
+        ('sgd', 'SGD'),
+        ('rmsprop', 'RMSprop'),
+        ('adamw', 'AdamW'),
+    ]
+    optimizer = models.CharField(
+        max_length=20,
+        choices=OPTIMIZER_CHOICES,
+        default='adam',
+        help_text="Optimizer to use for training"
+    )
+    
     # Additional metadata
     is_default = models.BooleanField(default=False, help_text="Default template for new trainings")
     created_by = models.CharField(max_length=100, blank=True, help_text="Template creator")
@@ -267,6 +281,7 @@ class TrainingTemplate(models.Model):
             'use_gaussian_noise': self.use_gaussian_noise,
             'noise_std': self.noise_std,
             'num_workers': self.num_workers,
+            'optimizer': self.optimizer,
         }
     
     def save(self, *args, **kwargs):
