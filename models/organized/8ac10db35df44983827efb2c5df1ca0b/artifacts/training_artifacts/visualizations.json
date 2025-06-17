@@ -1,0 +1,17 @@
+{
+  "epoch_1": {
+    "predictions": [
+      "data/models/organized/2025/06/unet-coronary/unet-coronary_20250617_101751_4b60c82d_v1.0.0/predictions/epoch_001/predictions_epoch_001.png"
+    ]
+  },
+  "epoch_2": {
+    "predictions": [
+      "data/models/organized/2025/06/unet-coronary/unet-coronary_20250617_101751_4b60c82d_v1.0.0/predictions/epoch_002/predictions_epoch_002.png"
+    ]
+  },
+  "epoch_3": {
+    "predictions": [
+      "data/models/organized/2025/06/unet-coronary/unet-coronary_20250617_101751_4b60c82d_v1.0.0/predictions/epoch_003/predictions_epoch_003.png"
+    ]
+  }
+}

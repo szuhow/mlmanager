@@ -41,6 +41,8 @@ class TrainingTemplateForm(forms.ModelForm):
             'name', 'description', 'model_type', 'batch_size', 'epochs', 
             'learning_rate', 'validation_split', 'resolution', 'device',
             'optimizer', 'lr_scheduler', 'lr_patience', 'lr_factor', 'lr_step_size', 'lr_gamma', 'min_lr',
+            'use_early_stopping', 'early_stopping_patience', 'early_stopping_min_epochs', 
+            'early_stopping_min_delta', 'early_stopping_metric',
             'use_random_flip', 'flip_probability', 'use_random_rotate', 'rotation_range',
             'use_random_scale', 'scale_range_min', 'scale_range_max', 
             'use_random_intensity', 'intensity_range', 'use_random_crop', 'crop_size',
@@ -243,6 +245,47 @@ class TrainingForm(forms.Form):
         initial=1e-7, 
         required=False,
         help_text="Minimum learning rate threshold"
+    )
+    
+    # Early Stopping Configuration
+    use_early_stopping = forms.BooleanField(
+        initial=False, 
+        required=False, 
+        help_text="Enable early stopping to prevent overfitting"
+    )
+    
+    early_stopping_patience = forms.IntegerField(
+        min_value=1, 
+        initial=10, 
+        required=False,
+        help_text="Number of epochs to wait for improvement before stopping"
+    )
+    
+    early_stopping_min_epochs = forms.IntegerField(
+        min_value=1, 
+        initial=20, 
+        required=False,
+        help_text="Minimum number of epochs before early stopping can occur"
+    )
+    
+    early_stopping_min_delta = forms.FloatField(
+        min_value=0.0, 
+        initial=1e-4, 
+        required=False,
+        help_text="Minimum improvement required to reset patience counter"
+    )
+    
+    EARLY_STOPPING_METRIC_CHOICES = [
+        ('val_dice', 'Validation Dice Score'),
+        ('val_loss', 'Validation Loss'),
+        ('val_accuracy', 'Validation Accuracy'),
+    ]
+    
+    early_stopping_metric = forms.ChoiceField(
+        choices=EARLY_STOPPING_METRIC_CHOICES,
+        initial='val_dice',
+        required=False,
+        help_text="Metric to monitor for early stopping decisions"
     )
     
     # Enhanced Augmentation options with richer controls

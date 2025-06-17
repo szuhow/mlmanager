@@ -1,0 +1,11 @@
+{
+  "epoch": 1,
+  "validation_dice": 0.09910733997821808,
+  "validation_loss": 0.9169480374881199,
+  "train_dice": 0.08584557671565562,
+  "train_loss": 0.9226180594414473,
+  "learning_rate": 0.001,
+  "improvement": 0.0,
+  "model_path": "data/models/organized/2025/06/unet-coronary/unet-coronary_20250617_121922_287737c8_v1.0.0/weights/model.pth",
+  "timestamp": 1750155613.5959263
+}

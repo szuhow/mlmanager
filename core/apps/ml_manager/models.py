@@ -265,6 +265,23 @@ class TrainingTemplate(models.Model):
     lr_gamma = models.FloatField(default=0.1, help_text="Gamma for step/exponential scheduler")
     min_lr = models.FloatField(default=1e-7, help_text="Minimum learning rate")
     
+    # Early Stopping Configuration
+    use_early_stopping = models.BooleanField(default=False, help_text="Enable early stopping during training")
+    early_stopping_patience = models.IntegerField(default=10, help_text="Epochs to wait for improvement before stopping")
+    early_stopping_min_epochs = models.IntegerField(default=20, help_text="Minimum epochs before early stopping can occur")
+    early_stopping_min_delta = models.FloatField(default=1e-4, help_text="Minimum improvement required to reset patience")
+    EARLY_STOPPING_METRIC_CHOICES = [
+        ('val_dice', 'Validation Dice Score'),
+        ('val_loss', 'Validation Loss'),
+        ('val_accuracy', 'Validation Accuracy'),
+    ]
+    early_stopping_metric = models.CharField(
+        max_length=20,
+        choices=EARLY_STOPPING_METRIC_CHOICES,
+        default='val_dice',
+        help_text="Metric to monitor for early stopping"
+    )
+    
     # Additional metadata
     is_default = models.BooleanField(default=False, help_text="Default template for new trainings")
     created_by = models.CharField(max_length=100, blank=True, help_text="Template creator")
@@ -309,6 +326,12 @@ class TrainingTemplate(models.Model):
             'lr_step_size': self.lr_step_size,
             'lr_gamma': self.lr_gamma,
             'min_lr': self.min_lr,
+            # Early stopping fields
+            'use_early_stopping': self.use_early_stopping,
+            'early_stopping_patience': self.early_stopping_patience,
+            'early_stopping_min_epochs': self.early_stopping_min_epochs,
+            'early_stopping_min_delta': self.early_stopping_min_delta,
+            'early_stopping_metric': self.early_stopping_metric,
         }
     
     def save(self, *args, **kwargs):

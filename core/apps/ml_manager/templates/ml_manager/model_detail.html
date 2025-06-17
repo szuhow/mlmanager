@@ -141,7 +141,11 @@
                                     <span class="metric-value" id="train-loss">{{ model.train_loss|floatformat:4 }}</span>
                                 </div>
                                 <div class="metric-item">
+                                    {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+                                    <span class="metric-label">Training Accuracy:</span>
+                                    {% else %}
                                     <span class="metric-label">Training Dice:</span>
+                                    {% endif %}
                                     <span class="metric-value" id="train-dice">{{ model.train_dice|floatformat:4 }}</span>
                                 </div>
                             </div>
@@ -151,11 +155,19 @@
                                     <span class="metric-value" id="val-loss">{{ model.val_loss|floatformat:4 }}</span>
                                 </div>
                                 <div class="metric-item">
+                                    {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+                                    <span class="metric-label">Validation Accuracy:</span>
+                                    {% else %}
                                     <span class="metric-label">Validation Dice:</span>
+                                    {% endif %}
                                     <span class="metric-value" id="val-dice">{{ model.val_dice|floatformat:4 }}</span>
                                 </div>
                                 <div class="metric-item">
+                                    {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+                                    <span class="metric-label">Best Validation Accuracy:</span>
+                                    {% else %}
                                     <span class="metric-label">Best Validation Dice:</span>
+                                    {% endif %}
                                     <span class="metric-value" id="best-val-dice">{{ model.best_val_dice|floatformat:4 }}</span>
                                 </div>
                             </div>
@@ -195,7 +207,11 @@
                     {% if model.best_val_dice %}
                     <div class="training-metrics">
                         <div class="metric-item">
+                            {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+                            <span class="metric-label">Final Validation Accuracy:</span>
+                            {% else %}
                             <span class="metric-label">Final Validation Dice:</span>
+                            {% endif %}
                             <span class="metric-value">{{ model.best_val_dice|floatformat:4 }}</span>
                         </div>
                         {% if model.train_loss %}

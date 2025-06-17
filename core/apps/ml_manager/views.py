@@ -976,6 +976,19 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                     'use_random_intensity': form_data['use_random_intensity'],
                     'crop_size': form_data['crop_size'],
                     'num_workers': form_data['num_workers'],
+                    # Learning rate scheduler parameters
+                    'lr_scheduler': form_data.get('lr_scheduler', 'none'),
+                    'lr_patience': form_data.get('lr_patience', 5),
+                    'lr_factor': form_data.get('lr_factor', 0.5),
+                    'lr_step_size': form_data.get('lr_step_size', 10),
+                    'lr_gamma': form_data.get('lr_gamma', 0.1),
+                    'min_lr': form_data.get('min_lr', 1e-7),
+                    # Early stopping parameters
+                    'use_early_stopping': form_data.get('use_early_stopping', False),
+                    'early_stopping_patience': form_data.get('early_stopping_patience', 10),
+                    'early_stopping_min_epochs': form_data.get('early_stopping_min_epochs', 20),
+                    'early_stopping_min_delta': form_data.get('early_stopping_min_delta', 1e-4),
+                    'early_stopping_metric': form_data.get('early_stopping_metric', 'val_dice'),
                 },
                 model_type=form_data['model_type']
             )
@@ -1004,8 +1017,17 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 f'--lr-factor={form_data.get("lr_factor", 0.5)}',
                 f'--lr-step-size={form_data.get("lr_step_size", 10)}',
                 f'--lr-gamma={form_data.get("lr_gamma", 0.1)}',
-                f'--min-lr={form_data.get("min_lr", 1e-7)}'
+                f'--min-lr={form_data.get("min_lr", 1e-7)}',
+                # Early stopping parameters
+                f'--early-stopping-patience={form_data.get("early_stopping_patience", 10)}',
+                f'--early-stopping-min-epochs={form_data.get("early_stopping_min_epochs", 20)}',
+                f'--early-stopping-min-delta={form_data.get("early_stopping_min_delta", 1e-4)}',
+                f'--early-stopping-metric={form_data.get("early_stopping_metric", "val_dice")}'
             ]
+            
+            # Add early stopping flag if enabled
+            if form_data.get('use_early_stopping'):
+                command.append('--use-early-stopping')
             if form_data.get('use_random_flip'): command.append('--random-flip')
             if form_data.get('use_random_rotate'): command.append('--random-rotate')
             if form_data.get('use_random_scale'): command.append('--random-scale')
@@ -1084,6 +1106,12 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                         'lr_step_size': model.training_data_info.get('lr_step_size', 10),
                         'lr_gamma': model.training_data_info.get('lr_gamma', 0.1),
                         'min_lr': model.training_data_info.get('min_lr', 1e-7),
+                        # Early stopping parameters  
+                        'use_early_stopping': model.training_data_info.get('use_early_stopping', False),
+                        'early_stopping_patience': model.training_data_info.get('early_stopping_patience', 10),
+                        'early_stopping_min_epochs': model.training_data_info.get('early_stopping_min_epochs', 20),
+                        'early_stopping_min_delta': model.training_data_info.get('early_stopping_min_delta', 1e-4),
+                        'early_stopping_metric': model.training_data_info.get('early_stopping_metric', 'val_dice'),
                     })
             except MLModel.DoesNotExist:
                 pass  # Continue with default initial values
@@ -1779,6 +1807,10 @@ def get_training_progress(request, model_id):
                 'train_dice': model.train_dice,
                 'val_dice': model.val_dice,
                 'best_val_dice': model.best_val_dice or 0.0,
+                # Also include accuracy metrics from performance_metrics if available
+                'train_accuracy': model.performance_metrics.get('train_accuracy', 0.0),
+                'val_accuracy': model.performance_metrics.get('val_accuracy', 0.0),
+                'best_val_accuracy': model.performance_metrics.get('best_val_accuracy', 0.0),
             },
             'timestamp': model.updated_at.isoformat() if hasattr(model, 'updated_at') else None
         })

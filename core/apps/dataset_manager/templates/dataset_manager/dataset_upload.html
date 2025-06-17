@@ -1,0 +1,872 @@
+{% extends "dataset_manager/base.html" %}
+
+{% block title %}Upload Dataset{% endblock %}
+{% block page_title %}Dodaj Nowy Dataset{% endblock %}
+{% block page_subtitle %}Prześlij i skonfiguruj nowy dataset{% endblock %}
+
+{% block header_actions %}
+<a href="{% url 'dataset_manager:dataset_list' %}" class="btn btn-outline-secondary">
+    <i class="fas fa-arrow-left me-2"></i>Powrót do listy
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="upload-wizard">
+    <!-- Progress Steps -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="row">
+                <div class="col-12">
+                    <div class="progress-steps d-flex justify-content-between align-items-center">
+                        <div class="step active" data-step="1">
+                            <div class="step-circle">1</div>
+                            <div class="step-label">Upload Plików</div>
+                        </div>
+                        <div class="step-line"></div>
+                        <div class="step" data-step="2">
+                            <div class="step-circle">2</div>
+                            <div class="step-label">Detekcja Formatu</div>
+                        </div>
+                        <div class="step-line"></div>
+                        <div class="step" data-step="3">
+                            <div class="step-circle">3</div>
+                            <div class="step-label">Schemat Adnotacji</div>
+                        </div>
+                        <div class="step-line"></div>
+                        <div class="step" data-step="4">
+                            <div class="step-circle">4</div>
+                            <div class="step-label">Konfiguracja</div>
+                        </div>
+                        <div class="step-line"></div>
+                        <div class="step" data-step="5">
+                            <div class="step-circle">5</div>
+                            <div class="step-label">Finalizacja</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <form id="datasetUploadForm" method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        
+        <!-- Step 1: File Upload -->
+        <div class="step-content" id="step-1">
+            <div class="card card-hover">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-cloud-upload-alt me-2"></i>Upload Plików Dataset
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-lg-8">
+                            <!-- Drag & Drop Area -->
+                            <div class="upload-area" id="uploadArea">
+                                <div class="upload-content text-center">
+                                    <i class="fas fa-cloud-upload-alt fa-4x text-primary mb-3"></i>
+                                    <h4>Przeciągnij pliki tutaj lub kliknij aby wybrać</h4>
+                                    <p class="text-muted mb-3">
+                                        Obsługiwane formaty: ZIP, TAR, RAR, 7Z, lub foldery z obrazami
+                                    </p>
+                                    <input type="file" id="fileInput" name="dataset_file" multiple 
+                                           accept=".zip,.tar,.rar,.7z,.jpg,.jpeg,.png,.bmp,.tiff,.dicom,.dcm,.json,.xml,.txt" 
+                                           style="display: none;">
+                                    <button type="button" class="btn btn-primary btn-lg" onclick="$('#fileInput').click()">
+                                        <i class="fas fa-folder-open me-2"></i>Wybierz Pliki
+                                    </button>
+                                </div>
+                                
+                                <!-- Upload Progress -->
+                                <div class="upload-progress" id="uploadProgress" style="display: none;">
+                                    <div class="progress mb-3">
+                                        <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                             role="progressbar" style="width: 0%"></div>
+                                    </div>
+                                    <div class="upload-status text-center">
+                                        <span id="uploadStatus">Przesyłanie...</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- File List -->
+                            <div class="file-list mt-4" id="fileList" style="display: none;">
+                                <h6>Wybrane pliki:</h6>
+                                <div class="list-group" id="selectedFiles"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-lg-4">
+                            <!-- Upload Tips -->
+                            <div class="card bg-light">
+                                <div class="card-header">
+                                    <h6 class="mb-0">
+                                        <i class="fas fa-lightbulb me-2"></i>Wskazówki
+                                    </h6>
+                                </div>
+                                <div class="card-body">
+                                    <ul class="list-unstyled mb-0">
+                                        <li class="mb-2">
+                                            <i class="fas fa-check text-success me-2"></i>
+                                            Maksymalny rozmiar: 2GB
+                                        </li>
+                                        <li class="mb-2">
+                                            <i class="fas fa-check text-success me-2"></i>
+                                            Automatyczna detekcja formatów
+                                        </li>
+                                        <li class="mb-2">
+                                            <i class="fas fa-check text-success me-2"></i>
+                                            Obsługa COCO, YOLO, Pascal VOC
+                                        </li>
+                                        <li class="mb-2">
+                                            <i class="fas fa-check text-success me-2"></i>
+                                            Walidacja struktury danych
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2: Format Detection -->
+        <div class="step-content" id="step-2" style="display: none;">
+            <div class="card card-hover">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-search me-2"></i>Detekcja Formatu Dataset
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-lg-8">
+                            <!-- Detection Results -->
+                            <div class="detection-results" id="detectionResults">
+                                <div class="text-center py-5">
+                                    <div class="spinner-border text-primary mb-3" role="status"></div>
+                                    <h5>Analizowanie struktury dataset...</h5>
+                                    <p class="text-muted">To może potrwać kilka minut w zależności od rozmiaru plików</p>
+                                </div>
+                            </div>
+                            
+                            <!-- Format Selection -->
+                            <div class="format-selection" id="formatSelection" style="display: none;">
+                                <h6>Wykryty format:</h6>
+                                <div class="row g-3">
+                                    <div class="col-md-6">
+                                        <div class="format-card" data-format="coco">
+                                            <div class="card h-100">
+                                                <div class="card-body text-center">
+                                                    <i class="fas fa-tags fa-2x mb-3 text-primary"></i>
+                                                    <h6>COCO Format</h6>
+                                                    <small class="text-muted">JSON annotations</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="format-card" data-format="yolo">
+                                            <div class="card h-100">
+                                                <div class="card-body text-center">
+                                                    <i class="fas fa-bullseye fa-2x mb-3 text-success"></i>
+                                                    <h6>YOLO Format</h6>
+                                                    <small class="text-muted">TXT annotations</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-lg-4">
+                            <!-- Detection Stats -->
+                            <div class="card bg-light">
+                                <div class="card-header">
+                                    <h6 class="mb-0">
+                                        <i class="fas fa-chart-bar me-2"></i>Statystyki
+                                    </h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="stat-item mb-3">
+                                        <strong>Pliki obrazów:</strong>
+                                        <span id="imageCount" class="badge bg-primary">0</span>
+                                    </div>
+                                    <div class="stat-item mb-3">
+                                        <strong>Pliki adnotacji:</strong>
+                                        <span id="annotationCount" class="badge bg-success">0</span>
+                                    </div>
+                                    <div class="stat-item mb-3">
+                                        <strong>Klasy wykryte:</strong>
+                                        <span id="classCount" class="badge bg-info">0</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <strong>Rozmiar całkowity:</strong>
+                                        <span id="totalSize" class="badge bg-warning">0 MB</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Annotation Schema -->
+        <div class="step-content" id="step-3" style="display: none;">
+            <div class="card card-hover">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-sitemap me-2"></i>Schemat Adnotacji
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-lg-8">
+                            <!-- Schema Selection -->
+                            <div class="mb-4">
+                                <label class="form-label">Wybierz schemat adnotacji:</label>
+                                <select class="form-select" id="annotationSchema" name="annotation_schema">
+                                    <option value="">Wybierz istniejący schemat</option>
+                                    {% for schema in available_schemas %}
+                                    <option value="{{ schema.id }}" data-type="{{ schema.type }}">
+                                        {{ schema.name }} ({{ schema.get_type_display }})
+                                    </option>
+                                    {% endfor %}
+                                    <option value="new">Utwórz nowy schemat</option>
+                                </select>
+                            </div>
+                            
+                            <!-- New Schema Creation -->
+                            <div class="new-schema-form" id="newSchemaForm" style="display: none;">
+                                <div class="card border-primary">
+                                    <div class="card-header bg-primary text-white">
+                                        <h6 class="mb-0">Nowy Schemat Adnotacji</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row">
+                                            <div class="col-md-6">
+                                                <div class="mb-3">
+                                                    <label class="form-label">Nazwa schematu</label>
+                                                    <input type="text" class="form-control" name="schema_name" placeholder="np. Detekcja Objektów">
+                                                </div>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <div class="mb-3">
+                                                    <label class="form-label">Typ adnotacji</label>
+                                                    <select class="form-select" name="schema_type">
+                                                        <option value="classification">Klasyfikacja</option>
+                                                        <option value="detection">Detekcja Objektów</option>
+                                                        <option value="segmentation">Segmentacja</option>
+                                                        <option value="keypoint">Punkty Kluczowe</option>
+                                                        <option value="custom">Niestandardowy</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Class Management -->
+                                        <div class="mb-3">
+                                            <label class="form-label">Klasy/Etykiety</label>
+                                            <div class="class-manager">
+                                                <div class="input-group mb-2">
+                                                    <input type="text" class="form-control" id="newClassName" placeholder="Nazwa klasy">
+                                                    <button type="button" class="btn btn-primary" onclick="addClass()">
+                                                        <i class="fas fa-plus"></i>
+                                                    </button>
+                                                </div>
+                                                <div class="class-list" id="classList"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Schema Preview -->
+                            <div class="schema-preview" id="schemaPreview" style="display: none;">
+                                <h6>Podgląd schematu:</h6>
+                                <div class="card bg-light">
+                                    <div class="card-body">
+                                        <pre id="schemaPreviewContent"></pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-lg-4">
+                            <!-- Detected Classes -->
+                            <div class="card bg-light">
+                                <div class="card-header">
+                                    <h6 class="mb-0">
+                                        <i class="fas fa-list me-2"></i>Wykryte Klasy
+                                    </h6>
+                                </div>
+                                <div class="card-body">
+                                    <div id="detectedClasses">
+                                        <p class="text-muted text-center">Brak wykrytych klas</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 4: Configuration -->
+        <div class="step-content" id="step-4" style="display: none;">
+            <div class="card card-hover">
+                <div class="card-header bg-warning text-dark">
+                    <h5 class="mb-0">
+                        <i class="fas fa-cog me-2"></i>Konfiguracja Dataset
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-lg-8">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Nazwa dataset</label>
+                                        <input type="text" class="form-control" name="name" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Wersja</label>
+                                        <input type="text" class="form-control" name="version" value="1.0" required>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Opis</label>
+                                <textarea class="form-control" name="description" rows="3" 
+                                          placeholder="Opisz zawartość i przeznaczenie dataset"></textarea>
+                            </div>
+                            
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Język/Region</label>
+                                        <select class="form-select" name="language">
+                                            <option value="pl">Polski</option>
+                                            <option value="en">Angielski</option>
+                                            <option value="multi">Wielojęzyczny</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Licencja</label>
+                                        <select class="form-select" name="license">
+                                            <option value="MIT">MIT</option>
+                                            <option value="Apache-2.0">Apache 2.0</option>
+                                            <option value="GPL-3.0">GPL v3</option>
+                                            <option value="proprietary">Własnościowa</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Privacy Settings -->
+                            <div class="card border-info mb-3">
+                                <div class="card-header bg-info text-white">
+                                    <h6 class="mb-0">Ustawienia Prywatności</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" name="is_public" id="isPublic">
+                                        <label class="form-check-label" for="isPublic">
+                                            Dataset publiczny (widoczny dla wszystkich)
+                                        </label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" name="allow_download" id="allowDownload" checked>
+                                        <label class="form-check-label" for="allowDownload">
+                                            Zezwól na pobieranie
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-lg-4">
+                            <!-- Configuration Summary -->
+                            <div class="card bg-light">
+                                <div class="card-header">
+                                    <h6 class="mb-0">
+                                        <i class="fas fa-summary me-2"></i>Podsumowanie
+                                    </h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="summary-item mb-2">
+                                        <strong>Format:</strong> <span id="summaryFormat">-</span>
+                                    </div>
+                                    <div class="summary-item mb-2">
+                                        <strong>Schemat:</strong> <span id="summarySchema">-</span>
+                                    </div>
+                                    <div class="summary-item mb-2">
+                                        <strong>Obrazy:</strong> <span id="summaryImages">-</span>
+                                    </div>
+                                    <div class="summary-item mb-2">
+                                        <strong>Klasy:</strong> <span id="summaryClasses">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 5: Finalization -->
+        <div class="step-content" id="step-5" style="display: none;">
+            <div class="card card-hover">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-check-circle me-2"></i>Finalizacja
+                    </h5>
+                </div>
+                <div class="card-body text-center py-5">
+                    <i class="fas fa-check-circle fa-5x text-success mb-4"></i>
+                    <h3>Dataset gotowy do przetworzenia!</h3>
+                    <p class="text-muted mb-4">Twój dataset zostanie przetworzony w tle. Otrzymasz powiadomienie po zakończeniu.</p>
+                    
+                    <div class="d-flex justify-content-center gap-3">
+                        <button type="submit" class="btn btn-success btn-lg">
+                            <i class="fas fa-cloud-upload-alt me-2"></i>Prześlij Dataset
+                        </button>
+                        <a href="{% url 'dataset_manager:dataset_list' %}" class="btn btn-outline-secondary btn-lg">
+                            <i class="fas fa-list me-2"></i>Zobacz Datasety
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation Buttons -->
+        <div class="wizard-navigation mt-4">
+            <div class="d-flex justify-content-between">
+                <button type="button" class="btn btn-outline-secondary" id="prevBtn" onclick="previousStep()" style="display: none;">
+                    <i class="fas fa-arrow-left me-2"></i>Poprzedni
+                </button>
+                <button type="button" class="btn btn-primary" id="nextBtn" onclick="nextStep()">
+                    Następny <i class="fas fa-arrow-right ms-2"></i>
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+.upload-wizard {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.progress-steps {
+    position: relative;
+}
+
+.step {
+    text-align: center;
+    flex: 1;
+}
+
+.step-circle {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #e9ecef;
+    color: #6c757d;
+    display: flex;
+    align-items: center;
+    justify-content-center;
+    margin: 0 auto 10px;
+    font-weight: bold;
+    transition: all 0.3s ease;
+}
+
+.step.active .step-circle {
+    background: var(--primary-gradient);
+    color: white;
+}
+
+.step.completed .step-circle {
+    background: #28a745;
+    color: white;
+}
+
+.step-line {
+    height: 2px;
+    background: #e9ecef;
+    flex: 1;
+    margin: 0 20px;
+    margin-top: 20px;
+}
+
+.step.active ~ .step-line,
+.step.completed ~ .step-line {
+    background: var(--primary-gradient);
+}
+
+.upload-area {
+    border: 3px dashed #dee2e6;
+    border-radius: 15px;
+    padding: 60px 20px;
+    text-align: center;
+    transition: all 0.3s ease;
+    background: #f8f9fa;
+}
+
+.upload-area:hover,
+.upload-area.dragover {
+    border-color: #007bff;
+    background: #e3f2fd;
+}
+
+.format-card {
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.format-card:hover .card {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+}
+
+.format-card.selected .card {
+    border-color: #007bff;
+    background: #e3f2fd;
+}
+
+.class-list .badge {
+    margin: 2px;
+    cursor: pointer;
+}
+
+.wizard-navigation {
+    position: sticky;
+    bottom: 20px;
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 -5px 15px rgba(0,0,0,0.1);
+}
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentStep = 1;
+let totalSteps = 5;
+let uploadedFiles = [];
+let detectedFormat = null;
+let selectedSchema = null;
+
+$(document).ready(function() {
+    initializeUploadArea();
+    updateStepDisplay();
+});
+
+function initializeUploadArea() {
+    const uploadArea = $('#uploadArea');
+    const fileInput = $('#fileInput');
+    
+    // Drag & Drop handlers
+    uploadArea.on('dragover', function(e) {
+        e.preventDefault();
+        $(this).addClass('dragover');
+    });
+    
+    uploadArea.on('dragleave', function(e) {
+        e.preventDefault();
+        $(this).removeClass('dragover');
+    });
+    
+    uploadArea.on('drop', function(e) {
+        e.preventDefault();
+        $(this).removeClass('dragover');
+        
+        const files = e.originalEvent.dataTransfer.files;
+        handleFileSelection(files);
+    });
+    
+    // File input change
+    fileInput.on('change', function() {
+        handleFileSelection(this.files);
+    });
+}
+
+function handleFileSelection(files) {
+    if (files.length === 0) return;
+    
+    uploadedFiles = Array.from(files);
+    displaySelectedFiles();
+    
+    // Auto advance to next step
+    setTimeout(() => {
+        nextStep();
+    }, 1000);
+}
+
+function displaySelectedFiles() {
+    const fileList = $('#fileList');
+    const selectedFiles = $('#selectedFiles');
+    
+    selectedFiles.empty();
+    
+    uploadedFiles.forEach((file, index) => {
+        const fileItem = $(`
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+                <div>
+                    <i class="fas fa-file me-2"></i>
+                    <strong>${file.name}</strong>
+                    <small class="text-muted ms-2">(${formatFileSize(file.size)})</small>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeFile(${index})">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        `);
+        selectedFiles.append(fileItem);
+    });
+    
+    fileList.show();
+}
+
+function removeFile(index) {
+    uploadedFiles.splice(index, 1);
+    displaySelectedFiles();
+    
+    if (uploadedFiles.length === 0) {
+        $('#fileList').hide();
+    }
+}
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function nextStep() {
+    if (currentStep < totalSteps) {
+        // Validate current step
+        if (!validateStep(currentStep)) {
+            return;
+        }
+        
+        currentStep++;
+        updateStepDisplay();
+        
+        // Execute step-specific logic
+        executeStepLogic(currentStep);
+    }
+}
+
+function previousStep() {
+    if (currentStep > 1) {
+        currentStep--;
+        updateStepDisplay();
+    }
+}
+
+function validateStep(step) {
+    switch (step) {
+        case 1:
+            if (uploadedFiles.length === 0) {
+                alert('Proszę wybrać pliki do przesłania');
+                return false;
+            }
+            break;
+        case 2:
+            if (!detectedFormat) {
+                alert('Proszę poczekać na wykrycie formatu');
+                return false;
+            }
+            break;
+        case 3:
+            if (!selectedSchema) {
+                alert('Proszę wybrać schemat adnotacji');
+                return false;
+            }
+            break;
+        case 4:
+            if (!$('input[name="name"]').val()) {
+                alert('Proszę podać nazwę dataset');
+                return false;
+            }
+            break;
+    }
+    return true;
+}
+
+function updateStepDisplay() {
+    // Update step indicators
+    $('.step').removeClass('active completed');
+    
+    for (let i = 1; i <= totalSteps; i++) {
+        const step = $(`.step[data-step="${i}"]`);
+        if (i < currentStep) {
+            step.addClass('completed');
+        } else if (i === currentStep) {
+            step.addClass('active');
+        }
+    }
+    
+    // Show/hide step content
+    $('.step-content').hide();
+    $(`#step-${currentStep}`).show();
+    
+    // Update navigation buttons
+    $('#prevBtn').toggle(currentStep > 1);
+    $('#nextBtn').toggle(currentStep < totalSteps);
+    
+    if (currentStep === totalSteps) {
+        $('#nextBtn').hide();
+    }
+}
+
+function executeStepLogic(step) {
+    switch (step) {
+        case 2:
+            simulateFormatDetection();
+            break;
+        case 3:
+            loadAvailableSchemas();
+            break;
+        case 4:
+            updateSummary();
+            break;
+    }
+}
+
+function simulateFormatDetection() {
+    const results = $('#detectionResults');
+    
+    setTimeout(() => {
+        detectedFormat = 'coco'; // Simulate detection
+        
+        results.html(`
+            <div class="alert alert-success">
+                <i class="fas fa-check-circle me-2"></i>
+                <strong>Format wykryty:</strong> COCO JSON
+            </div>
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <i class="fas fa-images fa-2x text-primary mb-2"></i>
+                            <h6>Obrazy</h6>
+                            <h4 class="text-primary">1,247</h4>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <i class="fas fa-tags fa-2x text-success mb-2"></i>
+                            <h6>Adnotacje</h6>
+                            <h4 class="text-success">3,892</h4>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <i class="fas fa-list fa-2x text-info mb-2"></i>
+                            <h6>Klasy</h6>
+                            <h4 class="text-info">12</h4>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `);
+        
+        // Update stats
+        $('#imageCount').text('1,247');
+        $('#annotationCount').text('3,892');
+        $('#classCount').text('12');
+        $('#totalSize').text('1.2 GB');
+        
+        // Show detected classes
+        const detectedClasses = ['person', 'car', 'bicycle', 'dog', 'cat', 'bird', 'traffic_light', 'stop_sign'];
+        const classesHtml = detectedClasses.map(cls => 
+            `<span class="badge bg-primary me-1 mb-1">${cls}</span>`
+        ).join('');
+        $('#detectedClasses').html(classesHtml);
+    }, 2000);
+}
+
+function loadAvailableSchemas() {
+    $('#annotationSchema').on('change', function() {
+        const value = $(this).val();
+        selectedSchema = value;
+        
+        if (value === 'new') {
+            $('#newSchemaForm').show();
+        } else {
+            $('#newSchemaForm').hide();
+            if (value) {
+                showSchemaPreview(value);
+            }
+        }
+    });
+}
+
+function showSchemaPreview(schemaId) {
+    // Simulate schema preview
+    const preview = {
+        "name": "Object Detection Schema",
+        "type": "detection",
+        "classes": ["person", "car", "bicycle"],
+        "format": "coco"
+    };
+    
+    $('#schemaPreviewContent').text(JSON.stringify(preview, null, 2));
+    $('#schemaPreview').show();
+}
+
+function addClass() {
+    const className = $('#newClassName').val().trim();
+    if (className) {
+        const badge = $(`
+            <span class="badge bg-secondary me-1 mb-1" onclick="removeClass(this)">
+                ${className} <i class="fas fa-times ms-1"></i>
+            </span>
+        `);
+        $('#classList').append(badge);
+        $('#newClassName').val('');
+    }
+}
+
+function removeClass(element) {
+    $(element).remove();
+}
+
+function updateSummary() {
+    $('#summaryFormat').text(detectedFormat ? detectedFormat.toUpperCase() : '-');
+    $('#summarySchema').text(selectedSchema || '-');
+    $('#summaryImages').text($('#imageCount').text());
+    $('#summaryClasses').text($('#classCount').text());
+}
+
+// Form submission
+$('#datasetUploadForm').on('submit', function(e) {
+    e.preventDefault();
+    
+    // Show processing modal or redirect
+    alert('Dataset zostanie przetworzony w tle. Sprawdź status na liście datasetów.');
+    window.location.href = "{% url 'dataset_manager:dataset_list' %}";
+});
+</script>
+{% endblock %}

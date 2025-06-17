@@ -1,0 +1,902 @@
+{% extends "dataset_manager/base.html" %}
+
+{% block title %}Pipeline Editor{% endblock %}
+{% block page_title %}Edytor Przepływów Danych{% endblock %}
+{% block page_subtitle %}Wizualny edytor grafów przetwarzania danych{% endblock %}
+
+{% block header_actions %}
+<div class="btn-group me-2">
+    <button type="button" class="btn btn-outline-primary" onclick="savePipeline()">
+        <i class="fas fa-save me-2"></i>Zapisz
+    </button>
+    <button type="button" class="btn btn-success" onclick="executePipeline()">
+        <i class="fas fa-play me-2"></i>Wykonaj
+    </button>
+</div>
+<a href="{% url 'dataset_manager:pipeline_list' %}" class="btn btn-outline-secondary">
+    <i class="fas fa-arrow-left me-2"></i>Powrót
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="pipeline-editor-container">
+    <!-- Toolbar -->
+    <div class="card mb-4">
+        <div class="card-body py-2">
+            <div class="row align-items-center">
+                <div class="col-md-8">
+                    <div class="btn-toolbar" role="toolbar">
+                        <!-- Node Palette -->
+                        <div class="btn-group me-3" role="group">
+                            <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle" 
+                                    data-bs-toggle="dropdown">
+                                <i class="fas fa-plus me-1"></i>Dodaj Węzeł
+                            </button>
+                            <ul class="dropdown-menu">
+                                <li><h6 class="dropdown-header">Źródła Danych</h6></li>
+                                <li><a class="dropdown-item" href="#" onclick="addNode('input', 'Dataset Input')">
+                                    <i class="fas fa-database me-2"></i>Dataset Input
+                                </a></li>
+                                <li><a class="dropdown-item" href="#" onclick="addNode('file', 'File Input')">
+                                    <i class="fas fa-file me-2"></i>File Input
+                                </a></li>
+                                
+                                <li><hr class="dropdown-divider"></li>
+                                <li><h6 class="dropdown-header">Transformacje</h6></li>
+                                <li><a class="dropdown-item" href="#" onclick="addNode('resize', 'Resize Images')">
+                                    <i class="fas fa-expand-arrows-alt me-2"></i>Resize Images
+                                </a></li>
+                                <li><a class="dropdown-item" href="#" onclick="addNode('normalize', 'Normalize')">
+                                    <i class="fas fa-balance-scale me-2"></i>Normalize
+                                </a></li>
+                                <li><a class="dropdown-item" href="#" onclick="addNode('augment', 'Data Augmentation')">
+                                    <i class="fas fa-magic me-2"></i>Data Augmentation
+                                </a></li>
+                                <li><a class="dropdown-item" href="#" onclick="addNode('filter', 'Filter Data')">
+                                    <i class="fas fa-filter me-2"></i>Filter Data
+                                </a></li>
+                                
+                                <li><hr class="dropdown-divider"></li>
+                                <li><h6 class="dropdown-header">Walidacja</h6></li>
+                                <li><a class="dropdown-item" href="#" onclick="addNode('validate', 'Validate Schema')">
+                                    <i class="fas fa-check-circle me-2"></i>Validate Schema
+                                </a></li>
+                                <li><a class="dropdown-item" href="#" onclick="addNode('quality', 'Quality Check')">
+                                    <i class="fas fa-star me-2"></i>Quality Check
+                                </a></li>
+                                
+                                <li><hr class="dropdown-divider"></li>
+                                <li><h6 class="dropdown-header">Wyjścia</h6></li>
+                                <li><a class="dropdown-item" href="#" onclick="addNode('export', 'Export Data')">
+                                    <i class="fas fa-download me-2"></i>Export Data
+                                </a></li>
+                                <li><a class="dropdown-item" href="#" onclick="addNode('train', 'Training Ready')">
+                                    <i class="fas fa-brain me-2"></i>Training Ready
+                                </a></li>
+                            </ul>
+                        </div>
+                        
+                        <!-- Tools -->
+                        <div class="btn-group me-3" role="group">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="selectTool('select')" 
+                                    id="selectTool" title="Select Tool">
+                                <i class="fas fa-mouse-pointer"></i>
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="selectTool('connect')" 
+                                    id="connectTool" title="Connect Tool">
+                                <i class="fas fa-link"></i>
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="selectTool('delete')" 
+                                    id="deleteTool" title="Delete Tool">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                        
+                        <!-- Layout -->
+                        <div class="btn-group me-3" role="group">
+                            <button type="button" class="btn btn-sm btn-outline-info" onclick="autoLayout()" 
+                                    title="Auto Layout">
+                                <i class="fas fa-project-diagram"></i>
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-info" onclick="resetZoom()" 
+                                    title="Reset Zoom">
+                                <i class="fas fa-search"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="col-md-4">
+                    <div class="d-flex justify-content-end align-items-center">
+                        <!-- Pipeline Status -->
+                        <div class="me-3">
+                            <small class="text-muted">Status:</small>
+                            <span class="badge bg-secondary" id="pipelineStatus">Edycja</span>
+                        </div>
+                        
+                        <!-- Validation -->
+                        <div class="me-3">
+                            <button type="button" class="btn btn-sm btn-outline-success" onclick="validatePipeline()">
+                                <i class="fas fa-check-double me-1"></i>Waliduj
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="row g-4">
+        <!-- Pipeline Canvas -->
+        <div class="col-lg-9">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0">
+                        <i class="fas fa-project-diagram me-2"></i>
+                        {{ pipeline.name|default:"Nowy Przepływ" }}
+                    </h6>
+                    <div class="canvas-controls">
+                        <div class="btn-group btn-group-sm">
+                            <button type="button" class="btn btn-outline-secondary" onclick="zoomOut()">
+                                <i class="fas fa-minus"></i>
+                            </button>
+                            <span class="btn btn-outline-secondary" id="zoomLevel">100%</span>
+                            <button type="button" class="btn btn-outline-secondary" onclick="zoomIn()">
+                                <i class="fas fa-plus"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <!-- SVG Canvas -->
+                    <div class="pipeline-canvas" id="pipelineCanvas">
+                        <svg id="pipelineSvg" width="100%" height="600">
+                            <!-- Definitions for arrows and patterns -->
+                            <defs>
+                                <marker id="arrowhead" markerWidth="10" markerHeight="7" 
+                                        refX="9" refY="3.5" orient="auto">
+                                    <polygon points="0 0, 10 3.5, 0 7" fill="#007bff" />
+                                </marker>
+                                <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                                    <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#e9ecef" stroke-width="1"/>
+                                </pattern>
+                            </defs>
+                            
+                            <!-- Grid background -->
+                            <rect width="100%" height="100%" fill="url(#grid)" />
+                            
+                            <!-- Connections layer -->
+                            <g id="connectionsLayer"></g>
+                            
+                            <!-- Nodes layer -->
+                            <g id="nodesLayer"></g>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Properties Panel -->
+        <div class="col-lg-3">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h6 class="mb-0">
+                        <i class="fas fa-cog me-2"></i>Właściwości
+                    </h6>
+                </div>
+                <div class="card-body">
+                    <div id="propertiesPanel">
+                        <div class="text-center text-muted py-5">
+                            <i class="fas fa-mouse-pointer fa-3x mb-3"></i>
+                            <p>Wybierz węzeł aby edytować właściwości</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Pipeline Info -->
+            <div class="card mt-3">
+                <div class="card-header">
+                    <h6 class="mb-0">
+                        <i class="fas fa-info-circle me-2"></i>Informacje
+                    </h6>
+                </div>
+                <div class="card-body">
+                    <div class="info-item mb-2">
+                        <small class="text-muted">Węzły:</small>
+                        <span class="badge bg-primary" id="nodeCount">0</span>
+                    </div>
+                    <div class="info-item mb-2">
+                        <small class="text-muted">Połączenia:</small>
+                        <span class="badge bg-info" id="connectionCount">0</span>
+                    </div>
+                    <div class="info-item mb-2">
+                        <small class="text-muted">Błędy:</small>
+                        <span class="badge bg-danger" id="errorCount">0</span>
+                    </div>
+                    <div class="info-item">
+                        <small class="text-muted">Ostrzeżenia:</small>
+                        <span class="badge bg-warning" id="warningCount">0</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Validation Results -->
+            <div class="card mt-3" id="validationResults" style="display: none;">
+                <div class="card-header">
+                    <h6 class="mb-0">
+                        <i class="fas fa-check-double me-2"></i>Wyniki Walidacji
+                    </h6>
+                </div>
+                <div class="card-body">
+                    <div id="validationContent"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Node Configuration Modal -->
+<div class="modal fade" id="nodeConfigModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Konfiguracja Węzła</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="nodeConfigContent">
+                    <!-- Dynamic content based on node type -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Anuluj</button>
+                <button type="button" class="btn btn-primary" onclick="saveNodeConfig()">Zapisz</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+.pipeline-canvas {
+    background: #f8f9fa;
+    border-radius: 8px;
+    position: relative;
+    overflow: hidden;
+}
+
+.pipeline-node {
+    cursor: move;
+    user-select: none;
+}
+
+.node-rect {
+    fill: white;
+    stroke: #007bff;
+    stroke-width: 2;
+    rx: 8;
+    ry: 8;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));
+}
+
+.node-rect:hover {
+    stroke-width: 3;
+    filter: drop-shadow(0 4px 8px rgba(0,0,0,0.15));
+}
+
+.node-rect.selected {
+    stroke: #28a745;
+    stroke-width: 3;
+    fill: #e8f5e8;
+}
+
+.node-rect.error {
+    stroke: #dc3545;
+    fill: #f8d7da;
+}
+
+.node-text {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 12px;
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.node-icon {
+    font-size: 16px;
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.connection-line {
+    stroke: #007bff;
+    stroke-width: 2;
+    fill: none;
+    marker-end: url(#arrowhead);
+}
+
+.connection-line:hover {
+    stroke-width: 3;
+    stroke: #0056b3;
+}
+
+.connection-line.selected {
+    stroke: #28a745;
+    stroke-width: 3;
+}
+
+.connection-point {
+    fill: #007bff;
+    stroke: white;
+    stroke-width: 2;
+    r: 6;
+    cursor: crosshair;
+}
+
+.connection-point:hover {
+    r: 8;
+    fill: #0056b3;
+}
+
+.temp-connection {
+    stroke: #007bff;
+    stroke-width: 2;
+    stroke-dasharray: 5,5;
+    fill: none;
+}
+
+.canvas-controls {
+    user-select: none;
+}
+
+.info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.node-type-input { color: #28a745; }
+.node-type-transform { color: #007bff; }
+.node-type-validate { color: #ffc107; }
+.node-type-output { color: #dc3545; }
+
+/* Animation for new nodes */
+@keyframes nodeAppear {
+    from {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.node-appear {
+    animation: nodeAppear 0.3s ease-out;
+}
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+class PipelineEditor {
+    constructor() {
+        this.svg = d3.select('#pipelineSvg');
+        this.nodesLayer = this.svg.select('#nodesLayer');
+        this.connectionsLayer = this.svg.select('#connectionsLayer');
+        
+        this.nodes = [];
+        this.connections = [];
+        this.selectedNode = null;
+        this.selectedConnection = null;
+        this.currentTool = 'select';
+        this.dragConnection = null;
+        
+        this.nodeIdCounter = 1;
+        this.connectionIdCounter = 1;
+        
+        this.zoom = d3.zoom()
+            .scaleExtent([0.1, 3])
+            .on('zoom', (event) => {
+                this.nodesLayer.attr('transform', event.transform);
+                this.connectionsLayer.attr('transform', event.transform);
+                this.updateZoomLevel(event.transform.k);
+            });
+            
+        this.svg.call(this.zoom);
+        
+        this.initializeEventListeners();
+        this.loadPipelineData();
+    }
+    
+    initializeEventListeners() {
+        // Canvas click for deselection
+        this.svg.on('click', (event) => {
+            if (event.target === this.svg.node()) {
+                this.deselectAll();
+            }
+        });
+        
+        // Tool selection
+        document.querySelectorAll('[onclick^="selectTool"]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('[onclick^="selectTool"]').forEach(b => 
+                    b.classList.remove('active'));
+                btn.classList.add('active');
+            });
+        });
+        
+        // Select tool by default
+        document.getElementById('selectTool').classList.add('active');
+    }
+    
+    loadPipelineData() {
+        // Load existing pipeline data if editing
+        {% if pipeline.pipeline_definition %}
+        const pipelineData = {{ pipeline.pipeline_definition|safe }};
+        this.loadFromData(pipelineData);
+        {% else %}
+        // Start with default input node
+        this.addNode('input', 'Dataset Input', 100, 100);
+        {% endif %}
+    }
+    
+    addNode(type, label, x = null, y = null) {
+        if (x === null || y === null) {
+            // Place in center of visible area
+            const svgRect = this.svg.node().getBoundingClientRect();
+            x = svgRect.width / 2;
+            y = svgRect.height / 2;
+        }
+        
+        const node = {
+            id: `node_${this.nodeIdCounter++}`,
+            type: type,
+            label: label,
+            x: x,
+            y: y,
+            width: 150,
+            height: 80,
+            config: this.getDefaultConfig(type),
+            inputs: this.getNodeInputs(type),
+            outputs: this.getNodeOutputs(type)
+        };
+        
+        this.nodes.push(node);
+        this.renderNode(node);
+        this.updateStats();
+        
+        return node;
+    }
+    
+    getDefaultConfig(type) {
+        const configs = {
+            'input': { dataset_id: '', format: 'auto' },
+            'resize': { width: 224, height: 224, maintain_aspect: true },
+            'normalize': { mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225] },
+            'augment': { 
+                rotate: true, flip: true, scale: true, 
+                brightness: 0.2, contrast: 0.2 
+            },
+            'filter': { min_size: 100, max_size: 10000, quality_threshold: 0.7 },
+            'validate': { schema_id: '', strict: true },
+            'quality': { min_score: 0.8, check_duplicates: true },
+            'export': { format: 'coco', split_ratio: [0.7, 0.2, 0.1] },
+            'train': { output_path: '/data/processed', ready_format: 'pytorch' }
+        };
+        return configs[type] || {};
+    }
+    
+    getNodeInputs(type) {
+        const inputs = {
+            'input': [],
+            'resize': ['images'],
+            'normalize': ['images'],
+            'augment': ['images'],
+            'filter': ['data'],
+            'validate': ['data'],
+            'quality': ['data'],
+            'export': ['data'],
+            'train': ['data']
+        };
+        return inputs[type] || ['input'];
+    }
+    
+    getNodeOutputs(type) {
+        const outputs = {
+            'input': ['data'],
+            'resize': ['images'],
+            'normalize': ['images'],
+            'augment': ['images'],
+            'filter': ['data'],
+            'validate': ['data'],
+            'quality': ['data'],
+            'export': ['files'],
+            'train': ['ready']
+        };
+        return outputs[type] || ['output'];
+    }
+    
+    renderNode(node) {
+        const nodeGroup = this.nodesLayer.append('g')
+            .attr('class', 'pipeline-node node-appear')
+            .attr('id', node.id)
+            .attr('transform', `translate(${node.x}, ${node.y})`);
+        
+        // Node rectangle
+        nodeGroup.append('rect')
+            .attr('class', `node-rect node-type-${this.getNodeCategory(node.type)}`)
+            .attr('width', node.width)
+            .attr('height', node.height)
+            .attr('x', -node.width/2)
+            .attr('y', -node.height/2);
+        
+        // Node icon
+        nodeGroup.append('text')
+            .attr('class', 'node-icon')
+            .attr('y', -15)
+            .text(this.getNodeIcon(node.type));
+        
+        // Node label
+        nodeGroup.append('text')
+            .attr('class', 'node-text')
+            .attr('y', 0)
+            .text(node.label);
+        
+        // Node type
+        nodeGroup.append('text')
+            .attr('class', 'node-text')
+            .attr('y', 15)
+            .attr('font-size', '10px')
+            .attr('fill', '#666')
+            .text(node.type);
+        
+        // Connection points
+        this.renderConnectionPoints(nodeGroup, node);
+        
+        // Event handlers
+        this.setupNodeEvents(nodeGroup, node);
+    }
+    
+    renderConnectionPoints(nodeGroup, node) {
+        // Input points (left side)
+        node.inputs.forEach((input, i) => {
+            nodeGroup.append('circle')
+                .attr('class', 'connection-point input-point')
+                .attr('cx', -node.width/2)
+                .attr('cy', -20 + i * 20)
+                .attr('data-node-id', node.id)
+                .attr('data-point-type', 'input')
+                .attr('data-point-index', i);
+        });
+        
+        // Output points (right side)
+        node.outputs.forEach((output, i) => {
+            nodeGroup.append('circle')
+                .attr('class', 'connection-point output-point')
+                .attr('cx', node.width/2)
+                .attr('cy', -20 + i * 20)
+                .attr('data-node-id', node.id)
+                .attr('data-point-type', 'output')
+                .attr('data-point-index', i);
+        });
+    }
+    
+    setupNodeEvents(nodeGroup, node) {
+        const drag = d3.drag()
+            .on('start', () => {
+                if (this.currentTool === 'select') {
+                    this.selectNode(node);
+                }
+            })
+            .on('drag', (event) => {
+                if (this.currentTool === 'select') {
+                    node.x = event.x;
+                    node.y = event.y;
+                    nodeGroup.attr('transform', `translate(${node.x}, ${node.y})`);
+                    this.updateConnections();
+                }
+            });
+        
+        nodeGroup.call(drag);
+        
+        // Double click to configure
+        nodeGroup.on('dblclick', () => {
+            this.openNodeConfig(node);
+        });
+        
+        // Connection point events
+        nodeGroup.selectAll('.connection-point')
+            .on('mousedown', (event, d) => {
+                if (this.currentTool === 'connect') {
+                    event.stopPropagation();
+                    this.startConnection(event, node);
+                }
+            });
+    }
+    
+    selectNode(node) {
+        this.deselectAll();
+        this.selectedNode = node;
+        
+        d3.select(`#${node.id} .node-rect`)
+            .classed('selected', true);
+            
+        this.showNodeProperties(node);
+    }
+    
+    deselectAll() {
+        this.selectedNode = null;
+        this.selectedConnection = null;
+        
+        this.nodesLayer.selectAll('.node-rect')
+            .classed('selected', false);
+        this.connectionsLayer.selectAll('.connection-line')
+            .classed('selected', false);
+            
+        this.hideProperties();
+    }
+    
+    showNodeProperties(node) {
+        const panel = document.getElementById('propertiesPanel');
+        panel.innerHTML = `
+            <div class="mb-3">
+                <label class="form-label">Nazwa węzła</label>
+                <input type="text" class="form-control" value="${node.label}" 
+                       onchange="pipelineEditor.updateNodeLabel('${node.id}', this.value)">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Typ</label>
+                <input type="text" class="form-control" value="${node.type}" readonly>
+            </div>
+            <div class="mb-3">
+                <button class="btn btn-primary btn-sm w-100" onclick="pipelineEditor.openNodeConfig('${node.id}')">
+                    <i class="fas fa-cog me-2"></i>Konfiguruj
+                </button>
+            </div>
+            <div class="mb-3">
+                <button class="btn btn-danger btn-sm w-100" onclick="pipelineEditor.deleteNode('${node.id}')">
+                    <i class="fas fa-trash me-2"></i>Usuń
+                </button>
+            </div>
+        `;
+    }
+    
+    hideProperties() {
+        const panel = document.getElementById('propertiesPanel');
+        panel.innerHTML = `
+            <div class="text-center text-muted py-5">
+                <i class="fas fa-mouse-pointer fa-3x mb-3"></i>
+                <p>Wybierz węzeł aby edytować właściwości</p>
+            </div>
+        `;
+    }
+    
+    updateNodeLabel(nodeId, newLabel) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (node) {
+            node.label = newLabel;
+            d3.select(`#${nodeId} .node-text`).text(newLabel);
+        }
+    }
+    
+    deleteNode(nodeId) {
+        if (confirm('Czy na pewno chcesz usunąć ten węzeł?')) {
+            // Remove connections
+            this.connections = this.connections.filter(conn => 
+                conn.source.nodeId !== nodeId && conn.target.nodeId !== nodeId);
+            
+            // Remove node
+            this.nodes = this.nodes.filter(n => n.id !== nodeId);
+            
+            // Remove from DOM
+            d3.select(`#${nodeId}`).remove();
+            
+            this.updateConnections();
+            this.updateStats();
+            this.hideProperties();
+        }
+    }
+    
+    getNodeIcon(type) {
+        const icons = {
+            'input': '📁', 'file': '📄',
+            'resize': '🔧', 'normalize': '⚖️', 'augment': '✨', 'filter': '🔍',
+            'validate': '✅', 'quality': '⭐',
+            'export': '📤', 'train': '🧠'
+        };
+        return icons[type] || '⚙️';
+    }
+    
+    getNodeCategory(type) {
+        if (['input', 'file'].includes(type)) return 'input';
+        if (['resize', 'normalize', 'augment', 'filter'].includes(type)) return 'transform';
+        if (['validate', 'quality'].includes(type)) return 'validate';
+        if (['export', 'train'].includes(type)) return 'output';
+        return 'transform';
+    }
+    
+    updateStats() {
+        document.getElementById('nodeCount').textContent = this.nodes.length;
+        document.getElementById('connectionCount').textContent = this.connections.length;
+        
+        // Update validation counts
+        this.validatePipeline(false);
+    }
+    
+    updateZoomLevel(scale) {
+        document.getElementById('zoomLevel').textContent = Math.round(scale * 100) + '%';
+    }
+    
+    // Add other methods for connections, validation, saving, etc.
+    startConnection(event, node) {
+        // Implementation for connection creation
+        console.log('Starting connection from node:', node.id);
+    }
+    
+    updateConnections() {
+        // Update visual connections after node movement
+        this.connections.forEach(conn => {
+            // Update connection line positions
+        });
+    }
+    
+    openNodeConfig(nodeId) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (node) {
+            // Show configuration modal
+            const modal = new bootstrap.Modal(document.getElementById('nodeConfigModal'));
+            modal.show();
+            
+            // Load node-specific configuration form
+            this.loadNodeConfigForm(node);
+        }
+    }
+    
+    loadNodeConfigForm(node) {
+        // Generate dynamic configuration form based on node type
+        const content = document.getElementById('nodeConfigContent');
+        content.innerHTML = this.generateConfigForm(node);
+    }
+    
+    generateConfigForm(node) {
+        // Generate form HTML based on node.config
+        return '<p>Configuration form for ' + node.type + '</p>';
+    }
+    
+    validatePipeline(showResults = true) {
+        const errors = [];
+        const warnings = [];
+        
+        // Basic validation logic
+        if (this.nodes.length === 0) {
+            errors.push('Pipeline musi zawierać przynajmniej jeden węzeł');
+        }
+        
+        // Check for disconnected nodes
+        const connectedNodes = new Set();
+        this.connections.forEach(conn => {
+            connectedNodes.add(conn.source.nodeId);
+            connectedNodes.add(conn.target.nodeId);
+        });
+        
+        this.nodes.forEach(node => {
+            if (!connectedNodes.has(node.id) && this.nodes.length > 1) {
+                warnings.push(`Węzeł "${node.label}" nie jest połączony`);
+            }
+        });
+        
+        document.getElementById('errorCount').textContent = errors.length;
+        document.getElementById('warningCount').textContent = warnings.length;
+        
+        if (showResults) {
+            this.showValidationResults(errors, warnings);
+        }
+        
+        return { errors, warnings };
+    }
+    
+    showValidationResults(errors, warnings) {
+        const panel = document.getElementById('validationResults');
+        const content = document.getElementById('validationContent');
+        
+        let html = '';
+        
+        if (errors.length > 0) {
+            html += '<div class="alert alert-danger"><h6>Błędy:</h6><ul class="mb-0">';
+            errors.forEach(error => html += `<li>${error}</li>`);
+            html += '</ul></div>';
+        }
+        
+        if (warnings.length > 0) {
+            html += '<div class="alert alert-warning"><h6>Ostrzeżenia:</h6><ul class="mb-0">';
+            warnings.forEach(warning => html += `<li>${warning}</li>`);
+            html += '</ul></div>';
+        }
+        
+        if (errors.length === 0 && warnings.length === 0) {
+            html = '<div class="alert alert-success">Pipeline jest prawidłowy!</div>';
+        }
+        
+        content.innerHTML = html;
+        panel.style.display = 'block';
+    }
+}
+
+// Global functions for toolbar
+let pipelineEditor;
+
+$(document).ready(function() {
+    pipelineEditor = new PipelineEditor();
+});
+
+function selectTool(tool) {
+    pipelineEditor.currentTool = tool;
+}
+
+function addNode(type, label) {
+    pipelineEditor.addNode(type, label);
+}
+
+function autoLayout() {
+    // Implement automatic layout algorithm
+    console.log('Auto layout');
+}
+
+function resetZoom() {
+    pipelineEditor.svg.transition().call(
+        pipelineEditor.zoom.transform,
+        d3.zoomIdentity
+    );
+}
+
+function zoomIn() {
+    pipelineEditor.svg.transition().call(
+        pipelineEditor.zoom.scaleBy, 1.2
+    );
+}
+
+function zoomOut() {
+    pipelineEditor.svg.transition().call(
+        pipelineEditor.zoom.scaleBy, 0.8
+    );
+}
+
+function validatePipeline() {
+    pipelineEditor.validatePipeline(true);
+}
+
+function savePipeline() {
+    const pipelineData = {
+        nodes: pipelineEditor.nodes,
+        connections: pipelineEditor.connections
+    };
+    
+    // Send to server
+    console.log('Saving pipeline:', pipelineData);
+    alert('Pipeline zapisany pomyślnie!');
+}
+
+function executePipeline() {
+    const validation = pipelineEditor.validatePipeline(false);
+    
+    if (validation.errors.length > 0) {
+        alert('Nie można wykonać pipeline z błędami. Proszę naprawić błędy walidacji.');
+        return;
+    }
+    
+    if (confirm('Czy na pewno chcesz wykonać ten pipeline?')) {
+        console.log('Executing pipeline');
+        alert('Pipeline zostanie wykonany w tle. Sprawdź status w sekcji wykonań.');
+    }
+}
+
+function saveNodeConfig() {
+    console.log('Saving node configuration');
+    bootstrap.Modal.getInstance(document.getElementById('nodeConfigModal')).hide();
+}
+</script>
+{% endblock %}

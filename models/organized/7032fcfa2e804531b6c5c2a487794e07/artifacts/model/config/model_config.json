@@ -1,0 +1,30 @@
+{
+  "architecture": "MONAI UNet",
+  "framework": "PyTorch",
+  "model_family": "UNet-Coronary",
+  "architecture_key": "monai_unet",
+  "version": "1.0.0",
+  "total_parameters": 1625420,
+  "trainable_parameters": 1625420,
+  "model_size_mb": 6.2004852294921875,
+  "training_config": {
+    "epochs": 1,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "optimizer": "Adam",
+    "loss_function": "DiceLoss",
+    "device": "cpu",
+    "validation_split": 0.2
+  },
+  "data_info": {
+    "total_training_batches": 32,
+    "total_validation_batches": 7,
+    "crop_size": 128,
+    "augmentations": {
+      "random_flip": true,
+      "random_rotate": true,
+      "random_scale": true,
+      "random_intensity": true
+    }
+  }
+}

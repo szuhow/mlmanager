@@ -1,0 +1,12 @@
+{
+  "epoch": 1,
+  "learning_rate": 0.001,
+  "batch_size": 16,
+  "device": "cpu",
+  "metrics": {
+    "train_loss": 0.6925922509223695,
+    "train_accuracy": 0.5724206349206349,
+    "val_loss": 0.6884656090002793,
+    "val_accuracy": 0.7788461538461539
+  }
+}

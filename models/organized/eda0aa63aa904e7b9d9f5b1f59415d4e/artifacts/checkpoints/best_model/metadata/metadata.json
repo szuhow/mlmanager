@@ -1,0 +1,81 @@
+{
+    "model_info": {
+        "model_id": 94,
+        "unique_identifier": "unet-coronary_20250617_094818_a8708361",
+        "model_family": "UNet-Coronary",
+        "version": "1.0.0",
+        "architecture": "U-Net Classifier",
+        "architecture_key": "unet_classifier",
+        "created_at": "2025-06-17T09:50:55.453747",
+        "framework": "PyTorch",
+        "architecture_description": "U-Net based classifier for image classification tasks"
+    },
+    "architecture_details": "UNetClassifier(\n  (backbone): UNet(\n    (model): Sequential(\n      (0): ResidualUnit(\n        (conv): Sequential(\n          (unit0): Convolution(\n            (conv): Conv2d(1, 16, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1))\n            (adn): ADN(\n              (N): InstanceNorm2d(16, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n              (D): Dropout(p=0.0, inplace=False)\n              (A): PReLU(num_parameters=1)\n            )\n          )\n          (unit1): Convolution(\n            (conv): Conv2d(16, 16, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))\n            (adn): ADN(\n              (N): InstanceNorm2d(16, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n              (D): Dropout(p=0.0, inplace=False)\n              (A): PReLU(num_parameters=1)\n            )\n          )\n        )\n        (residual): Conv2d(1, 16, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1))\n      )\n      (1): SkipConnection(\n        (submodule): Sequential(\n          (0): ResidualUnit(\n            (conv): Sequential(\n              (unit0): Convolution(\n                (conv): Conv2d(16, 32, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1))\n                (adn): ADN(\n                  (N): InstanceNorm2d(32, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                  (D): Dropout(p=0.0, inplace=False)\n                  (A): PReLU(num_parameters=1)\n                )\n              )\n              (unit1): Convolution(\n                (conv): Conv2d(32, 32, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))\n                (adn): ADN(\n                  (N): InstanceNorm2d(32, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                  (D): Dropout(p=0.0, inplace=False)\n                  (A): PReLU(num_parameters=1)\n                )\n              )\n            )\n            (residual): Conv2d(16, 32, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1))\n          )\n          (1): SkipConnection(\n            (submodule): Sequential(\n              (0): ResidualUnit(\n                (conv): Sequential(\n                  (unit0): Convolution(\n                    (conv): Conv2d(32, 64, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1))\n                    (adn): ADN(\n                      (N): InstanceNorm2d(64, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                      (D): Dropout(p=0.0, inplace=False)\n                      (A): PReLU(num_parameters=1)\n                    )\n                  )\n                  (unit1): Convolution(\n                    (conv): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))\n                    (adn): ADN(\n                      (N): InstanceNorm2d(64, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                      (D): Dropout(p=0.0, inplace=False)\n                      (A): PReLU(num_parameters=1)\n                    )\n                  )\n                )\n                (residual): Conv2d(32, 64, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1))\n              )\n              (1): SkipConnection(\n                (submodule): Sequential(\n                  (0): ResidualUnit(\n                    (conv): Sequential(\n                      (unit0): Convolution(\n                        (conv): Conv2d(64, 128, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1))\n                        (adn): ADN(\n                          (N): InstanceNorm2d(128, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                          (D): Dropout(p=0.0, inplace=False)\n                          (A): PReLU(num_parameters=1)\n                        )\n                      )\n                      (unit1): Convolution(\n                        (conv): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))\n                        (adn): ADN(\n                          (N): InstanceNorm2d(128, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                          (D): Dropout(p=0.0, inplace=False)\n                          (A): PReLU(num_parameters=1)\n                        )\n                      )\n                    )\n                    (residual): Conv2d(64, 128, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1))\n                  )\n                  (1): SkipConnection(\n                    (submodule): ResidualUnit(\n                      (conv): Sequential(\n                        (unit0): Convolution(\n                          (conv): Conv2d(128, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))\n                          (adn): ADN(\n                            (N): InstanceNorm2d(256, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                            (D): Dropout(p=0.0, inplace=False)\n                            (A): PReLU(num_parameters=1)\n                          )\n                        )\n                        (unit1): Convolution(\n                          (conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))\n                          (adn): ADN(\n                            (N): InstanceNorm2d(256, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                            (D): Dropout(p=0.0, inplace=False)\n                            (A): PReLU(num_parameters=1)\n                          )\n                        )\n                      )\n                      (residual): Conv2d(128, 256, kernel_size=(1, 1), stride=(1, 1))\n                    )\n                  )\n                  (2): Sequential(\n                    (0): Convolution(\n                      (conv): ConvTranspose2d(384, 64, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), output_padding=(1, 1))\n                      (adn): ADN(\n                        (N): InstanceNorm2d(64, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                        (D): Dropout(p=0.0, inplace=False)\n                        (A): PReLU(num_parameters=1)\n                      )\n                    )\n                    (1): ResidualUnit(\n                      (conv): Sequential(\n                        (unit0): Convolution(\n                          (conv): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))\n                          (adn): ADN(\n                            (N): InstanceNorm2d(64, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                            (D): Dropout(p=0.0, inplace=False)\n                            (A): PReLU(num_parameters=1)\n                          )\n                        )\n                      )\n                      (residual): Identity()\n                    )\n                  )\n                )\n              )\n              (2): Sequential(\n                (0): Convolution(\n                  (conv): ConvTranspose2d(128, 32, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), output_padding=(1, 1))\n                  (adn): ADN(\n                    (N): InstanceNorm2d(32, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                    (D): Dropout(p=0.0, inplace=False)\n                    (A): PReLU(num_parameters=1)\n                  )\n                )\n                (1): ResidualUnit(\n                  (conv): Sequential(\n                    (unit0): Convolution(\n                      (conv): Conv2d(32, 32, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))\n                      (adn): ADN(\n                        (N): InstanceNorm2d(32, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                        (D): Dropout(p=0.0, inplace=False)\n                        (A): PReLU(num_parameters=1)\n                      )\n                    )\n                  )\n                  (residual): Identity()\n                )\n              )\n            )\n          )\n          (2): Sequential(\n            (0): Convolution(\n              (conv): ConvTranspose2d(64, 16, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), output_padding=(1, 1))\n              (adn): ADN(\n                (N): InstanceNorm2d(16, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                (D): Dropout(p=0.0, inplace=False)\n                (A): PReLU(num_parameters=1)\n              )\n            )\n            (1): ResidualUnit(\n              (conv): Sequential(\n                (unit0): Convolution(\n                  (conv): Conv2d(16, 16, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))\n                  (adn): ADN(\n                    (N): InstanceNorm2d(16, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n                    (D): Dropout(p=0.0, inplace=False)\n                    (A): PReLU(num_parameters=1)\n                  )\n                )\n              )\n              (residual): Identity()\n            )\n          )\n        )\n      )\n      (2): Sequential(\n        (0): Convolution(\n          (conv): ConvTranspose2d(32, 64, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), output_padding=(1, 1))\n          (adn): ADN(\n            (N): InstanceNorm2d(64, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False)\n            (D): Dropout(p=0.0, inplace=False)\n            (A): PReLU(num_parameters=1)\n          )\n        )\n        (1): ResidualUnit(\n          (conv): Sequential(\n            (unit0): Convolution(\n              (conv): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))\n            )\n          )\n          (residual): Identity()\n        )\n      )\n    )\n  )\n  (global_pool): AdaptiveAvgPool2d(output_size=1)\n  (classifier): Sequential(\n    (0): Flatten(start_dim=1, end_dim=-1)\n    (1): Dropout(p=0.5, inplace=False)\n    (2): Linear(in_features=64, out_features=32, bias=True)\n    (3): ReLU(inplace=True)\n    (4): Dropout(p=0.3, inplace=False)\n    (5): Linear(in_features=32, out_features=2, bias=True)\n  )\n)",
+    "training_config": {
+        "parameters": {
+            "save_training_template": false,
+            "mode": "train",
+            "model_family": "UNet-Coronary",
+            "model_type": "resunet_classifier",
+            "batch_size": 32,
+            "epochs": 1,
+            "learning_rate": 0.001,
+            "optimizer": "adam",
+            "data_path": "/app/data/datasets/",
+            "dataset_type": "arcade_classification",
+            "validation_split": 0.2,
+            "mlflow_run_id": "eda0aa63aa904e7b9d9f5b1f59415d4e",
+            "model_id": 94,
+            "random_flip": true,
+            "random_rotate": true,
+            "random_scale": true,
+            "random_intensity": true,
+            "crop_size": 128,
+            "num_workers": 4,
+            "lr_scheduler": "plateau",
+            "lr_patience": 5,
+            "lr_factor": 0.5,
+            "lr_step_size": 10,
+            "lr_gamma": 0.1,
+            "min_lr": 1e-07,
+            "use_early_stopping": false,
+            "early_stopping_patience": 10,
+            "early_stopping_min_epochs": 20,
+            "early_stopping_min_delta": 0.0001,
+            "early_stopping_metric": "val_dice",
+            "model_path": null,
+            "input_path": null,
+            "output_dir": null,
+            "device": "auto",
+            "weights_path": null,
+            "resolution": "256"
+        },
+        "hyperparameters": {
+            "optimizer": "Adam",
+            "loss_function": "DiceLoss",
+            "batch_size": 32,
+            "learning_rate": 0.001,
+            "epochs": 1,
+            "validation_split": 0.2
+        }
+    },
+    "performance_metrics": {
+        "train_loss": 0.642284844070673,
+        "train_dice": 0.609375,
+        "val_loss": 0.5904378124645778,
+        "val_dice": 0.7053571428571429
+    },
+    "data_info": {
+        "input_shape": "[1, 128, 128]",
+        "output_shape": "[1, 128, 128]",
+        "data_format": "DICOM/PNG",
+        "normalization": "Scale Intensity [0, 1]"
+    },
+    "artifacts": {
+        "weights_file": "weights/model.pth",
+        "config_file": "config/model_config.json",
+        "training_curves": "artifacts/training_curves.png",
+        "sample_predictions": "predictions/",
+        "training_log": "logs/training.log"
+    }
+}

@@ -1,0 +1,9 @@
+{
+  "epoch_1": {
+    "train_sample_inputs_and_masks": "data/models/organized/2025/06/unet-coronary/unet-coronary_20250617_121922_287737c8_v1.0.0/artifacts/sample_inputs_and_masks.png",
+    "val_sample_inputs_and_masks": "data/models/organized/2025/06/unet-coronary/unet-coronary_20250617_121922_287737c8_v1.0.0/artifacts/val_sample_inputs_and_masks.png",
+    "predictions": [
+      "data/models/organized/2025/06/unet-coronary/unet-coronary_20250617_121922_287737c8_v1.0.0/predictions/epoch_001/predictions_epoch_001.png"
+    ]
+  }
+}

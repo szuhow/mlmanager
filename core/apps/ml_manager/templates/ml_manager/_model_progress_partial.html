@@ -11,14 +11,26 @@
 <div class="row">
     <div class="col-md-6">
         <p>Train Loss: <span id="trainLoss">{{ model.train_loss|floatformat:4 }}</span></p>
+        {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+        <p>Train Accuracy: <span id="trainDice">{{ model.train_dice|floatformat:4 }}</span></p>
+        {% else %}
         <p>Train Dice: <span id="trainDice">{{ model.train_dice|floatformat:4 }}</span></p>
+        {% endif %}
     </div>
     <div class="col-md-6">
         <p>Val Loss: <span id="valLoss">{{ model.val_loss|floatformat:4 }}</span></p>
+        {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+        <p>Val Accuracy: <span id="valDice">{{ model.val_dice|floatformat:4 }}</span></p>
+        {% else %}
         <p>Val Dice: <span id="valDice">{{ model.val_dice|floatformat:4 }}</span></p>
+        {% endif %}
     </div>
 </div>
+{% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+<p>Best Val Accuracy: <span id="bestValDice">{{ model.best_val_dice|floatformat:4 }}</span></p>
+{% else %}
 <p>Best Val Dice: <span id="bestValDice">{{ model.best_val_dice|floatformat:4 }}</span></p>
+{% endif %}
 <hr>
 <h6>Training Logs</h6>
 <pre id="trainingLogs" style="max-height:300px;overflow:auto;background:#222;color:#eee;padding:10px;">{% for line in training_logs %}{{ line }}

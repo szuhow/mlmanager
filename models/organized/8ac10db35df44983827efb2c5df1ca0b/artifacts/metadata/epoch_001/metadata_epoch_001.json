@@ -1,0 +1,10 @@
+{
+  "learning_rate": 0.001,
+  "batch_size": 16,
+  "total_batches": 63,
+  "model_family": "UNet-Coronary",
+  "device": "cpu",
+  "optimizer": "Adam",
+  "loss_function": "CrossEntropyLoss",
+  "epoch_duration": 138.06184601783752
+}

@@ -475,6 +475,120 @@ def setup_default_architectures():
                 logger.error(f"Error registering Residual U-Net models: {e}")
         else:
             logger.warning(f"ResUNet models not found at {training_models_path}")
+        
+        # Register classification models
+        classification_models_path = base_dir.parent / 'training' / 'models' / 'classification_models.py'
+        if classification_models_path.exists():
+            try:
+                import sys
+                import importlib.util
+                
+                # Add the models directory to Python path temporarily
+                models_dir = str(classification_models_path.parent)
+                if models_dir not in sys.path:
+                    sys.path.insert(0, models_dir)
+                
+                try:
+                    spec = importlib.util.spec_from_file_location("classification_models", str(classification_models_path))
+                    classification_module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(classification_module)
+                finally:
+                    # Remove from path after import
+                    if models_dir in sys.path:
+                        sys.path.remove(models_dir)
+                
+                # Register U-Net Classifier
+                registry.register(ArchitectureInfo(
+                    key='unet_classifier',
+                    display_name='U-Net Classifier',
+                    framework='PyTorch',
+                    description='U-Net based classifier for image classification tasks',
+                    model_class=classification_module.UNetClassifier,
+                    default_config={
+                        'n_channels': 3,
+                        'n_classes': 2,
+                        'use_monai': True,
+                        'spatial_dims': 2,
+                        'channels': (16, 32, 64, 128, 256),
+                        'strides': (2, 2, 2, 2),
+                        'num_res_units': 2,
+                    },
+                    category='classification',
+                    supports_2d=True,
+                    supports_3d=False,
+                    author='Custom Implementation',
+                    version='1.0.0'
+                ))
+                
+                # Register ResUNet Classifier
+                registry.register(ArchitectureInfo(
+                    key='resunet_classifier',
+                    display_name='ResUNet Classifier',
+                    framework='PyTorch',
+                    description='ResUNet based classifier for image classification tasks',
+                    model_class=classification_module.ResUNetClassifier,
+                    default_config={
+                        'n_channels': 3,
+                        'n_classes': 2,
+                        'deep': False,
+                        'use_attention': False,
+                        'bilinear': False
+                    },
+                    category='classification',
+                    supports_2d=True,
+                    supports_3d=False,
+                    author='Custom Implementation',
+                    version='1.0.0'
+                ))
+                
+                # Register Deep ResUNet Classifier
+                registry.register(ArchitectureInfo(
+                    key='deep_resunet_classifier',
+                    display_name='Deep ResUNet Classifier',
+                    framework='PyTorch',
+                    description='Deep ResUNet based classifier for complex image classification tasks',
+                    model_class=classification_module.ResUNetClassifier,
+                    default_config={
+                        'n_channels': 3,
+                        'n_classes': 2,
+                        'deep': True,
+                        'use_attention': False,
+                        'bilinear': False
+                    },
+                    category='classification',
+                    supports_2d=True,
+                    supports_3d=False,
+                    author='Custom Implementation',
+                    version='1.0.0'
+                ))
+                
+                # Register ResUNet Classifier with Attention
+                registry.register(ArchitectureInfo(
+                    key='resunet_attention_classifier',
+                    display_name='ResUNet Attention Classifier',
+                    framework='PyTorch',
+                    description='ResUNet based classifier with attention gates for better feature selection',
+                    model_class=classification_module.ResUNetClassifier,
+                    default_config={
+                        'n_channels': 3,
+                        'n_classes': 2,
+                        'deep': False,
+                        'use_attention': True,
+                        'bilinear': False
+                    },
+                    category='classification',
+                    supports_2d=True,
+                    supports_3d=False,
+                    author='Custom Implementation',
+                    version='1.0.0'
+                ))
+                
+                logger.info("Successfully registered all classification model variants")
+                
+            except Exception as e:
+                logger.error(f"Error registering classification models: {e}")
+        else:
+            logger.warning(f"Classification models not found at {classification_models_path}")
     
     except Exception as e:
         logger.error(f"Error setting up default architectures: {e}")

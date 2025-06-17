@@ -234,6 +234,98 @@
         transition: none !important;
         animation: none !important;
     }
+    
+    /* SAFARI-SPECIFIC FIXES FOR DROPDOWN OVERLAPPING */
+    @supports (-webkit-appearance: none) {
+        /* Safari-specific CSS */
+        .custom-dropdown-menu {
+            z-index: 99999 !important;
+            position: fixed !important;
+            will-change: transform, opacity;
+            isolation: isolate;
+            contain: layout style;
+        }
+        
+        .custom-dropdown.show {
+            z-index: 99998 !important;
+            position: relative !important;
+            isolation: isolate;
+        }
+        
+        .table tbody tr {
+            transform: translateZ(0);
+            -webkit-transform: translateZ(0);
+        }
+        
+        .table tbody tr.dropdown-open {
+            z-index: 99997 !important;
+            transform: translateZ(1px);
+            -webkit-transform: translateZ(1px);
+            isolation: isolate;
+        }
+        
+        .actions-cell {
+            position: static !important;
+            z-index: 99996 !important;
+            transform: translateZ(0);
+            -webkit-transform: translateZ(0);
+        }
+        
+        .card-body {
+            overflow: visible !important;
+            transform: translateZ(0);
+            -webkit-transform: translateZ(0);
+        }
+        
+        .table-responsive {
+            overflow: visible !important;
+            transform: translateZ(0);
+            -webkit-transform: translateZ(0);
+        }
+        
+        /* Force stacking context for Safari */
+        .custom-dropdown-menu.show {
+            opacity: 1;
+            visibility: visible;
+            transform: translateZ(2px);
+            -webkit-transform: translateZ(2px);
+        }
+        
+        /* Ensure table cells don't create stacking contexts */
+        .table td {
+            transform: none !important;
+            -webkit-transform: none !important;
+        }
+        
+        .table td.actions-cell {
+            transform: translateZ(0) !important;
+            -webkit-transform: translateZ(0) !important;
+        }
+        
+        /* Additional Safari isolation */
+        .custom-dropdown-toggle {
+            isolation: isolate;
+            z-index: 99995;
+        }
+    }
+    
+    /* Webkit-specific fixes */
+    @media screen and (-webkit-min-device-pixel-ratio: 0) {
+        .custom-dropdown-menu {
+            -webkit-backface-visibility: hidden;
+            -webkit-perspective: 1000px;
+            -webkit-transform: translate3d(0, 0, 0);
+        }
+        
+        .table tbody {
+            -webkit-transform: translateZ(0);
+        }
+        
+        .actions-cell {
+            -webkit-transform: translateZ(0);
+            position: relative !important;
+        }
+    }
 </style>
 {% endblock %}
 
@@ -335,7 +427,7 @@
                         </thead>
                         <tbody>
                             {% for model in models %}
-                            <tr data-model-id="{{ model.pk }}" data-model-status="{{ model.status }}">
+                            <tr data-model-id="{{ model.pk }}" data-model-status="{{ model.status }}" data-dataset-type="{{ model.training_data_info.training_config.parameters.dataset_type|default:'segmentation' }}">
                                 <td>
                                     <input type="checkbox" class="form-check-input model-checkbox" value="{{ model.pk }}">
                                 </td>
@@ -362,10 +454,18 @@
                                     {% endif %}
                                 </td>
                                 <td class="performance-cell">
-                                    {% if model.best_val_dice > 0 %}
-                                        <span class="badge performance-badge bg-info">{{ model.best_val_dice|floatformat:3 }}</span>
+                                    {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+                                        {% if model.performance_metrics.val_accuracy > 0 %}
+                                            <span class="badge performance-badge bg-info">{{ model.performance_metrics.val_accuracy|floatformat:3 }}</span>
+                                        {% else %}
+                                            <span class="text-muted">-</span>
+                                        {% endif %}
                                     {% else %}
-                                        <span class="text-muted">-</span>
+                                        {% if model.best_val_dice > 0 %}
+                                            <span class="badge performance-badge bg-info">{{ model.best_val_dice|floatformat:3 }}</span>
+                                        {% else %}
+                                            <span class="text-muted">-</span>
+                                        {% endif %}
                                     {% endif %}
                                 </td>
                                 <td>
@@ -551,6 +651,13 @@ document.addEventListener('DOMContentLoaded', function() {
             menu.classList.remove('show', 'dropup', 'dropdown-menu-end');
             toggle.setAttribute('aria-expanded', 'false');
             
+            // Reset inline styles for Safari
+            menu.style.position = '';
+            menu.style.top = '';
+            menu.style.left = '';
+            menu.style.transform = '';
+            menu.style.zIndex = '';
+            
             if (parentRow) {
                 parentRow.classList.remove('dropdown-open');
                 // Resume live updates for this row
@@ -564,29 +671,98 @@ document.addEventListener('DOMContentLoaded', function() {
         const windowHeight = window.innerHeight;
         const windowWidth = window.innerWidth;
         
-        // Reset classes
+        // Reset classes and positioning
         menu.classList.remove('dropup', 'dropdown-menu-end');
+        menu.style.position = '';
+        menu.style.top = '';
+        menu.style.left = '';
+        menu.style.transform = '';
         
-        // Force a reflow to get accurate measurements
-        menu.style.visibility = 'hidden';
-        menu.style.display = 'block';
-        const menuRect = menu.getBoundingClientRect();
-        menu.style.visibility = '';
-        menu.style.display = '';
+        // Safari-specific positioning
+        const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
         
-        // Check if dropdown would go off bottom of screen
-        if (rect.bottom + menuRect.height > windowHeight) {
-            menu.classList.add('dropup');
-        }
-        
-        // Check if dropdown would go off right of screen
-        if (rect.left + menuRect.width > windowWidth) {
-            menu.classList.add('dropdown-menu-end');
+        if (isSafari) {
+            // Use fixed positioning for Safari to avoid z-index issues
+            menu.style.position = 'fixed';
+            menu.style.zIndex = '99999';
+            
+            // Calculate position
+            const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+            const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+            
+            let top = rect.bottom + scrollTop;
+            let left = rect.left + scrollLeft;
+            
+            // Force a reflow to get accurate measurements
+            menu.style.visibility = 'hidden';
+            menu.style.display = 'block';
+            const menuRect = menu.getBoundingClientRect();
+            menu.style.visibility = '';
+            
+            // Check if dropdown would go off bottom of screen
+            if (rect.bottom + menuRect.height > windowHeight) {
+                top = rect.top + scrollTop - menuRect.height;
+                menu.classList.add('dropup');
+            }
+            
+            // Check if dropdown would go off right of screen
+            if (rect.left + menuRect.width > windowWidth) {
+                left = rect.right + scrollLeft - menuRect.width;
+                menu.classList.add('dropdown-menu-end');
+            }
+            
+            menu.style.top = `${top}px`;
+            menu.style.left = `${left}px`;
+            
+        } else {
+            // Non-Safari browsers - use relative positioning
+            menu.style.position = 'absolute';
+            
+            // Force a reflow to get accurate measurements
+            menu.style.visibility = 'hidden';
+            menu.style.display = 'block';
+            const menuRect = menu.getBoundingClientRect();
+            menu.style.visibility = '';
+            menu.style.display = '';
+            
+            // Check if dropdown would go off bottom of screen
+            if (rect.bottom + menuRect.height > windowHeight) {
+                menu.classList.add('dropup');
+            }
+            
+            // Check if dropdown would go off right of screen
+            if (rect.left + menuRect.width > windowWidth) {
+                menu.classList.add('dropdown-menu-end');
+            }
         }
     }
 
     // Initialize custom dropdowns
     initCustomDropdowns();
+    
+    // Safari-specific scroll handling for fixed positioning
+    if (/^((?!chrome|android).)*safari/i.test(navigator.userAgent)) {
+        let scrollTimeout = null;
+        
+        window.addEventListener('scroll', function() {
+            // Close dropdowns on scroll in Safari to prevent positioning issues
+            if (scrollTimeout) {
+                clearTimeout(scrollTimeout);
+            }
+            
+            scrollTimeout = setTimeout(() => {
+                const openDropdowns = document.querySelectorAll('.custom-dropdown.show');
+                if (openDropdowns.length > 0) {
+                    closeAllDropdowns();
+                }
+            }, 100);
+        });
+        
+        // Also handle resize events
+        window.addEventListener('resize', function() {
+            closeAllDropdowns();
+        });
+    }
     
     // Auto-refresh system integrated inline - no external ModelProgressUpdater needed
 
@@ -709,25 +885,46 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Auto-refresh functionality for training models
+    // Enhanced auto-refresh functionality for training and pending models
     let autoRefreshInterval;
     let isAutoRefreshEnabled = false;
+    let currentUpdateInterval = 3000; // Default 3 seconds
+    let fastUpdateInterval = 1500; // 1.5 seconds for pending models
+    let normalUpdateInterval = 3000; // 3 seconds for training models
     
     function startAutoRefresh() {
         if (autoRefreshInterval) return; // Already running
         
         isAutoRefreshEnabled = true;
-        autoRefreshInterval = setInterval(() => {
-            updateTrainingModels();
-        }, 3000); // Update every 3 seconds
+        updateActiveModels(); // Initial update
+        scheduleNextUpdate();
         
         showRefreshIndicator();
-        console.log('Auto-refresh started for training models');
+        console.log('Auto-refresh started for active models');
+    }
+    
+    function scheduleNextUpdate() {
+        if (!isAutoRefreshEnabled) return;
+        
+        // Check if we have pending models to determine update frequency
+        const pendingRows = document.querySelectorAll('tr[data-model-status="pending"]:not([data-model-deleted="true"])');
+        const newInterval = pendingRows.length > 0 ? fastUpdateInterval : normalUpdateInterval;
+        
+        if (newInterval !== currentUpdateInterval) {
+            currentUpdateInterval = newInterval;
+            updateRefreshIndicator();
+            console.log('Auto-refresh interval changed to', currentUpdateInterval, 'ms');
+        }
+        
+        autoRefreshInterval = setTimeout(() => {
+            updateActiveModels();
+            scheduleNextUpdate();
+        }, currentUpdateInterval);
     }
     
     function stopAutoRefresh() {
         if (autoRefreshInterval) {
-            clearInterval(autoRefreshInterval);
+            clearTimeout(autoRefreshInterval);
             autoRefreshInterval = null;
         }
         isAutoRefreshEnabled = false;
@@ -735,14 +932,20 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('Auto-refresh stopped');
     }
     
-    function updateTrainingModels() {
-        const trainingRows = document.querySelectorAll('tr[data-model-status="training"]');
-        if (trainingRows.length === 0) {
+    function updateActiveModels() {
+        const trainingRows = document.querySelectorAll('tr[data-model-status="training"]:not([data-model-deleted="true"])');
+        const pendingRows = document.querySelectorAll('tr[data-model-status="pending"]:not([data-model-deleted="true"])');
+        const allActiveRows = [...trainingRows, ...pendingRows];
+        
+        console.log(`Updating ${trainingRows.length} training and ${pendingRows.length} pending models`);
+        
+        if (allActiveRows.length === 0) {
+            console.log('No active models found, stopping auto-refresh');
             stopAutoRefresh();
             return;
         }
         
-        trainingRows.forEach(row => {
+        allActiveRows.forEach(row => {
             const modelId = row.dataset.modelId;
             if (modelId) {
                 updateModelRow(modelId, row);
@@ -765,11 +968,28 @@ document.addEventListener('DOMContentLoaded', function() {
                         return;
                     }
                     
-                    // Update status badge
-                    const statusBadge = row.querySelector('.status-badge');
-                    if (statusBadge && data.model_status) {
-                        statusBadge.className = `badge status-badge ${getStatusClass(data.model_status)}`;
-                        statusBadge.textContent = data.model_status.charAt(0).toUpperCase() + data.model_status.slice(1);
+                    // Check for status changes, especially pending -> training
+                    const currentStatus = row.dataset.modelStatus;
+                    if (data.model_status && data.model_status !== currentStatus) {
+                        console.log(`Status change detected: ${currentStatus} -> ${data.model_status} for model ${modelId}`);
+                        
+                        // Show notification for pending -> training transition
+                        if (currentStatus === 'pending' && data.model_status === 'training') {
+                            showStatusChangeNotification(
+                                'Training Started', 
+                                `Model ${row.querySelector('.model-name')?.textContent || modelId} has started training`,
+                                'success'
+                            );
+                        }
+                        
+                        // Update row status
+                        row.dataset.modelStatus = data.model_status;
+                        
+                        // Status changed significantly, reload page after brief delay
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 2000);
+                        return;
                     }
                     
                     // Update progress bar with batch-level granularity
@@ -790,12 +1010,39 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Update metrics
                     const metricsCell = row.querySelector('.metrics-cell');
                     if (metricsCell && data.metrics) {
+                        const datasetType = row.dataset.datasetType;
+                        const isClassification = datasetType === 'arcade_classification';
+                        const metricLabel = isClassification ? 'Accuracy' : 'Dice';
+                        const metricValue = isClassification ? 
+                            (data.metrics.val_accuracy || 0) : 
+                            (data.metrics.val_dice || 0);
+                        
                         metricsCell.innerHTML = `
                             <small>
-                                Dice: ${(data.metrics.val_dice || 0).toFixed(3)}<br>
+                                ${metricLabel}: ${metricValue.toFixed(3)}<br>
                                 Loss: ${(data.metrics.val_loss || 0).toFixed(3)}
                             </small>
                         `;
+                    }
+                    
+                    // Update performance cell with dynamic metric display
+                    const performanceCell = row.querySelector('.performance-cell');
+                    if (performanceCell && data.metrics) {
+                        const datasetType = row.dataset.datasetType;
+                        const isClassification = datasetType === 'arcade_classification';
+                        
+                        let metricValue = 0;
+                        if (isClassification) {
+                            metricValue = data.metrics.val_accuracy || data.metrics.best_val_accuracy || 0;
+                        } else {
+                            metricValue = data.metrics.val_dice || data.metrics.best_val_dice || 0;
+                        }
+                        
+                        if (metricValue > 0) {
+                            performanceCell.innerHTML = `<span class="badge performance-badge bg-info">${metricValue.toFixed(3)}</span>`;
+                        } else {
+                            performanceCell.innerHTML = `<span class="text-muted">-</span>`;
+                        }
                     }
                     
                     // Update row data-model-status attribute to reflect current status
@@ -844,19 +1091,38 @@ document.addEventListener('DOMContentLoaded', function() {
     
     function showRefreshIndicator() {
         const existing = document.getElementById('auto-refresh-indicator');
-        if (existing) return;
+        if (existing) {
+            updateRefreshIndicator();
+            return;
+        }
         
         const indicator = document.createElement('div');
         indicator.id = 'auto-refresh-indicator';
         indicator.className = 'alert alert-info alert-dismissible fade show position-fixed';
-        indicator.style.cssText = 'top: 20px; right: 20px; z-index: 1060; min-width: 300px;';
+        indicator.style.cssText = 'top: 20px; right: 20px; z-index: 1060; min-width: 320px;';
+        
+        const intervalText = currentUpdateInterval === fastUpdateInterval ? 
+            `${currentUpdateInterval/1000}s (fast mode for pending models)` : 
+            `${currentUpdateInterval/1000}s`;
+            
         indicator.innerHTML = `
             <i class="fas fa-sync-alt fa-spin me-2"></i>
             <strong>Auto-refresh Active</strong>
-            <small class="d-block">Updating training progress every 3 seconds</small>
+            <small class="d-block" id="refresh-interval-text">Updating progress every ${intervalText}</small>
             <button type="button" class="btn-close" onclick="stopAutoRefresh()"></button>
         `;
         document.body.appendChild(indicator);
+    }
+    
+    function updateRefreshIndicator() {
+        const indicator = document.getElementById('auto-refresh-indicator');
+        const intervalText = document.getElementById('refresh-interval-text');
+        if (indicator && intervalText) {
+            const newText = currentUpdateInterval === fastUpdateInterval ? 
+                `${currentUpdateInterval/1000}s (fast mode for pending models)` : 
+                `${currentUpdateInterval/1000}s`;
+            intervalText.textContent = `Updating progress every ${newText}`;
+        }
     }
     
     function hideRefreshIndicator() {
@@ -864,6 +1130,34 @@ document.addEventListener('DOMContentLoaded', function() {
         if (indicator) {
             indicator.remove();
         }
+    }
+    
+    function showStatusChangeNotification(title, message, type = 'info') {
+        const notification = document.createElement('div');
+        notification.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+        notification.style.cssText = 'top: 80px; right: 20px; z-index: 1055; min-width: 350px; max-width: 400px;';
+        
+        const iconClass = type === 'success' ? 'fa-check-circle' : 'fa-info-circle';
+        
+        notification.innerHTML = `
+            <div class="d-flex align-items-center">
+                <i class="fas ${iconClass} text-${type} me-2 fa-lg"></i>
+                <div>
+                    <strong>${title}</strong>
+                    <small class="d-block text-muted">${message}</small>
+                </div>
+            </div>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, 5000);
     }
     
     // Check for training models on page load and setup controls
@@ -888,7 +1182,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Setup manual refresh button
     if (manualRefreshButton) {
         manualRefreshButton.addEventListener('click', function() {
-            updateTrainingModels();
+            updateActiveModels();
             // Briefly show it's working
             this.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i>';
             setTimeout(() => {
@@ -897,10 +1191,13 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Auto-start if training models exist
+    // Auto-start if training or pending models exist
     const trainingModels = document.querySelectorAll('tr[data-model-status="training"]');
-    if (trainingModels.length > 0) {
-        console.log(`Found ${trainingModels.length} training models, starting auto-refresh`);
+    const pendingModels = document.querySelectorAll('tr[data-model-status="pending"]');
+    const totalActiveModels = trainingModels.length + pendingModels.length;
+    
+    if (totalActiveModels > 0) {
+        console.log(`Found ${trainingModels.length} training and ${pendingModels.length} pending models, starting auto-refresh`);
         startAutoRefresh();
         if (toggleButton) {
             toggleButton.innerHTML = '<i class="fas fa-pause"></i> Stop Live Updates';

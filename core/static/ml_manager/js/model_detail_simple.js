@@ -69,6 +69,42 @@ class ModelDetailManager {
     }
     
     createDebugToggleButton() {
+        // Find the navbar navigation list
+        const navbarNav = document.querySelector('.navbar-nav');
+        if (!navbarNav) {
+            console.warn('Navbar not found, falling back to fixed positioning');
+            this.createFixedDebugButton();
+            return;
+        }
+
+        // Create list item for the debug button
+        const listItem = document.createElement('li');
+        listItem.className = 'nav-item ms-auto';
+        
+        // Create the debug button as a nav-link
+        const toggleBtn = document.createElement('button');
+        toggleBtn.id = 'debug-toggle-btn';
+        toggleBtn.className = 'nav-link btn btn-link text-warning';
+        toggleBtn.style.cssText = `
+            border: none;
+            background: none;
+            font-size: 14px;
+            padding: 8px 16px;
+            cursor: pointer;
+            text-decoration: none;
+        `;
+        toggleBtn.innerHTML = '<i class="fas fa-bug me-1"></i>Debug';
+        toggleBtn.addEventListener('click', () => {
+            this.toggleDebugPanel();
+        });
+        
+        // Append button to list item and list item to navbar
+        listItem.appendChild(toggleBtn);
+        navbarNav.appendChild(listItem);
+    }
+
+    createFixedDebugButton() {
+        // Fallback method for fixed positioning if navbar not found
         const toggleBtn = document.createElement('button');
         toggleBtn.id = 'debug-toggle-btn';
         toggleBtn.style.cssText = `
@@ -97,7 +133,13 @@ class ModelDetailManager {
         debugPanel.style.display = isVisible ? 'none' : 'block';
         
         const toggleBtn = document.getElementById('debug-toggle-btn');
-        toggleBtn.innerHTML = isVisible ? '🔍 Debug' : '❌ Hide';
+        if (isVisible) {
+            toggleBtn.innerHTML = '<i class="fas fa-bug me-1"></i>Debug';
+            toggleBtn.className = 'nav-link btn btn-link text-warning';
+        } else {
+            toggleBtn.innerHTML = '<i class="fas fa-bug me-1"></i>Hide';
+            toggleBtn.className = 'nav-link btn btn-link text-danger';
+        }
     }
     
     log(message) {

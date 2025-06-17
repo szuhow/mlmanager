@@ -152,13 +152,13 @@ class TrainingCallback:
             
             # Convert SimpleNamespace or other objects to dict if needed
             if hasattr(architecture_info, '__dict__'):
-                arch_dict = architecture_info.__dict__
+                arch_dict = architecture_info.__dict__.copy()
             elif isinstance(architecture_info, dict):
-                arch_dict = architecture_info
+                arch_dict = architecture_info.copy()
             else:
                 # Try to convert to dict using vars()
                 try:
-                    arch_dict = vars(architecture_info)
+                    arch_dict = vars(architecture_info).copy()
                 except TypeError:
                     # If all else fails, create a basic representation
                     arch_dict = {
@@ -170,7 +170,24 @@ class TrainingCallback:
                         'version': getattr(architecture_info, 'version', '1.0.0')
                     }
             
-            self.model.model_architecture_info.update(arch_dict)
+            # Filter out non-JSON serializable objects (like model_class)
+            json_serializable_dict = {}
+            for key, value in arch_dict.items():
+                try:
+                    # Test if the value is JSON serializable
+                    import json
+                    json.dumps(value)
+                    json_serializable_dict[key] = value
+                except (TypeError, ValueError):
+                    # Skip non-serializable values (like model_class)
+                    print(f"Skipping non-serializable field: {key} = {type(value)}")
+                    # For model_class, save just the class name as string
+                    if key == 'model_class' and hasattr(value, '__name__'):
+                        json_serializable_dict['model_class_name'] = value.__name__
+                    elif key == 'model_class' and hasattr(value, '__class__'):
+                        json_serializable_dict['model_class_name'] = value.__class__.__name__
+            
+            self.model.model_architecture_info.update(json_serializable_dict)
             
         if training_data_info:
             # Ensure training_data_info is initialized as a dict

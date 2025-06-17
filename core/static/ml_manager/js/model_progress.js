@@ -2,8 +2,11 @@
 class ModelProgressUpdater {
     constructor() {
         this.updateInterval = 5000; // 5 seconds
+        this.fastUpdateInterval = 2000; // 2 seconds for pending models
         this.intervalId = null;
         this.isUpdating = false;
+        this.pendingModels = new Set(); // Track pending models
+        this.currentInterval = this.updateInterval;
     }
 
     start() {
@@ -11,10 +14,15 @@ class ModelProgressUpdater {
         
         this.isUpdating = true;
         this.updateProgress();
-        this.intervalId = setInterval(() => this.updateProgress(), this.updateInterval);
+        this.intervalId = setInterval(() => this.updateProgress(), this.currentInterval);
         
         // Add visual indicator
         this.showUpdateIndicator();
+    }
+
+    restart() {
+        this.stop();
+        setTimeout(() => this.start(), 100);
     }
 
     stop() {
@@ -29,17 +37,36 @@ class ModelProgressUpdater {
     async updateProgress() {
         console.log('ModelProgressUpdater: updateProgress called');
         try {
+            // Find both training and pending models
             const trainingRows = document.querySelectorAll('tr[data-model-status="training"]:not([data-model-deleted="true"])');
-            console.log('ModelProgressUpdater: Found', trainingRows.length, 'training rows to update');
+            const pendingRows = document.querySelectorAll('tr[data-model-status="pending"]:not([data-model-deleted="true"])');
             
-            if (trainingRows.length === 0) {
-                console.log('ModelProgressUpdater: No training models, stopping updates');
-                // No training models, stop updating
+            console.log('ModelProgressUpdater: Found', trainingRows.length, 'training rows and', pendingRows.length, 'pending rows to update');
+            
+            // Update pending models set
+            this.pendingModels.clear();
+            pendingRows.forEach(row => {
+                const modelId = row.dataset.modelId;
+                if (modelId) this.pendingModels.add(modelId);
+            });
+            
+            // Adjust update interval based on pending models
+            const newInterval = this.pendingModels.size > 0 ? this.fastUpdateInterval : this.updateInterval;
+            if (newInterval !== this.currentInterval) {
+                console.log('ModelProgressUpdater: Changing update interval from', this.currentInterval, 'to', newInterval);
+                this.currentInterval = newInterval;
+                this.restart();
+                return;
+            }
+            
+            if (trainingRows.length === 0 && pendingRows.length === 0) {
+                console.log('ModelProgressUpdater: No training or pending models, stopping updates');
                 this.stop();
                 return;
             }
 
-            for (const row of trainingRows) {
+            // Update all models
+            for (const row of [...trainingRows, ...pendingRows]) {
                 const modelId = row.dataset.modelId;
                 console.log('ModelProgressUpdater: Updating model', modelId);
                 if (!modelId) continue;
@@ -72,7 +99,7 @@ class ModelProgressUpdater {
         }
 
         try {
-            const response = await fetch(`/ml/model/${modelId}/`, {
+            const response = await fetch(`/ml/model/${modelId}/progress/`, {
                 headers: {
                     'X-Requested-With': 'XMLHttpRequest'
                 }
@@ -99,21 +126,30 @@ class ModelProgressUpdater {
             // Update progress bar
             const progressBar = row.querySelector('.progress-bar');
             if (progressBar && data.progress) {
-                const progressPercent = data.progress.progress_percentage;
+                const progressPercent = data.progress.percentage || 0;
                 progressBar.style.width = `${progressPercent}%`;
                 progressBar.textContent = `${data.progress.current_epoch}/${data.progress.total_epochs}`;
             }
 
             // Update performance
             const performanceCell = row.querySelector('.performance-cell');
-            if (performanceCell && data.progress.best_val_dice > 0) {
-                performanceCell.innerHTML = `<span class="badge bg-info">${data.progress.best_val_dice.toFixed(3)}</span>`;
+            if (performanceCell && data.metrics && data.metrics.best_val_dice > 0) {
+                performanceCell.innerHTML = `<span class="badge bg-info">${data.metrics.best_val_dice.toFixed(3)}</span>`;
             }
 
             // Update status if changed
-            if (data.status !== 'training') {
+            if (data.model_status && data.model_status !== row.dataset.modelStatus) {
+                console.log('ModelProgressUpdater: Status changed from', row.dataset.modelStatus, 'to', data.model_status, 'for model', modelId);
+                
+                // If model was pending and now started training, show notification
+                if (row.dataset.modelStatus === 'pending' && data.model_status === 'training') {
+                    this.showStatusChangeNotification(modelId, 'Training Started', 'Model has started training successfully');
+                }
+                
                 // Status changed, reload page to reflect new state
-                window.location.reload();
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000); // Small delay to show the notification
             }
 
         } catch (error) {
@@ -157,14 +193,53 @@ class ModelProgressUpdater {
             indicator.id = 'update-indicator';
             indicator.className = 'alert alert-info alert-dismissible fade show position-fixed';
             indicator.style.cssText = 'top: 20px; right: 20px; z-index: 1050; min-width: 300px;';
+            
+            const intervalText = this.currentInterval === this.fastUpdateInterval ? 
+                `${this.currentInterval/1000}s (fast mode for pending models)` : 
+                `${this.currentInterval/1000}s`;
+                
             indicator.innerHTML = `
                 <i class="fas fa-sync-alt fa-spin"></i>
                 <strong>Live Updates Active</strong>
-                <small class="d-block">Progress updates every ${this.updateInterval/1000} seconds</small>
+                <small class="d-block">Progress updates every ${intervalText}</small>
                 <button type="button" class="btn-close" onclick="modelProgressUpdater.stop()"></button>
             `;
             document.body.appendChild(indicator);
+        } else {
+            // Update existing indicator
+            const intervalText = this.currentInterval === this.fastUpdateInterval ? 
+                `${this.currentInterval/1000}s (fast mode for pending models)` : 
+                `${this.currentInterval/1000}s`;
+            const small = indicator.querySelector('small');
+            if (small) {
+                small.textContent = `Progress updates every ${intervalText}`;
+            }
         }
+    }
+
+    showStatusChangeNotification(modelId, title, message) {
+        const notification = document.createElement('div');
+        notification.className = 'alert alert-success alert-dismissible fade show position-fixed';
+        notification.style.cssText = 'top: 80px; right: 20px; z-index: 1055; min-width: 350px; max-width: 400px;';
+        notification.innerHTML = `
+            <div class="d-flex align-items-center">
+                <i class="fas fa-play-circle text-success me-2 fa-lg"></i>
+                <div>
+                    <strong>${title}</strong>
+                    <small class="d-block text-muted">${message}</small>
+                </div>
+            </div>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, 5000);
     }
 
     hideUpdateIndicator() {
@@ -182,14 +257,17 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('ModelProgressUpdater: DOM loaded, initializing...');
     modelProgressUpdater = new ModelProgressUpdater();
     
-    // Auto-start if there are training models
+    // Auto-start if there are training or pending models
     const trainingModels = document.querySelectorAll('tr[data-model-status="training"]');
-    console.log('ModelProgressUpdater: Found', trainingModels.length, 'training models');
-    if (trainingModels.length > 0) {
-        console.log('ModelProgressUpdater: Starting auto-updates');
+    const pendingModels = document.querySelectorAll('tr[data-model-status="pending"]');
+    const totalActiveModels = trainingModels.length + pendingModels.length;
+    
+    console.log('ModelProgressUpdater: Found', trainingModels.length, 'training models and', pendingModels.length, 'pending models');
+    if (totalActiveModels > 0) {
+        console.log('ModelProgressUpdater: Starting auto-updates for', totalActiveModels, 'active models');
         modelProgressUpdater.start();
     } else {
-        console.log('ModelProgressUpdater: No training models found, not starting auto-updates');
+        console.log('ModelProgressUpdater: No active models found, not starting auto-updates');
     }
 
     // Add manual refresh button

@@ -55,16 +55,21 @@
             display: block !important;
             opacity: 1 !important;
             visibility: visible !important;
-            /* Prevent Safari from hiding the menu */
-            -webkit-transform: translate3d(0,0,0) !important;
-            transform: translate3d(0,0,0) !important;
+            /* CRITICAL: Use fixed positioning for Safari to escape table context */
+            position: fixed !important;
             /* CRITICAL: Maximum z-index for Safari */
-            z-index: 99999 !important;
+            z-index: 999999 !important;
             /* Force new stacking context */
-            position: absolute !important;
-            /* Ensure it's above everything */
             -webkit-transform-style: preserve-3d !important;
             transform-style: preserve-3d !important;
+            /* Prevent Safari rendering issues */
+            -webkit-transform: translate3d(0,0,1px) !important;
+            transform: translate3d(0,0,1px) !important;
+            /* Ensure Safari renders correctly */
+            will-change: transform, opacity !important;
+            /* Fix Safari text rendering */
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
         
         .custom-dropdown-toggle {
@@ -106,13 +111,16 @@
         }
         
         .table tbody tr.dropdown-open {
-            /* VERY HIGH z-index when dropdown is open */
-            z-index: 100000 !important;
+            /* EXTREMELY HIGH z-index when dropdown is open */
+            z-index: 999998 !important;
             /* Force higher stacking */
             position: relative !important;
             /* Create isolated stacking context */
             -webkit-transform-style: preserve-3d !important;
             transform-style: preserve-3d !important;
+            /* Force Safari to create new layer */
+            -webkit-transform: translate3d(0,0,1px) !important;
+            transform: translate3d(0,0,1px) !important;
         }
         
         /* Ensure table cells don't interfere */
@@ -123,8 +131,11 @@
         
         /* Special handling for actions cell */
         .table tbody tr.dropdown-open td.actions-cell {
-            z-index: 100001 !important;
+            z-index: 999997 !important;
             position: relative !important;
+            /* Create new stacking context */
+            -webkit-transform: translate3d(0,0,1px) !important;
+            transform: translate3d(0,0,1px) !important;
         }
         
         /* Safari-specific animation fixes */
@@ -228,62 +239,16 @@
                         
                         if (menu && target.classList.contains('show')) {
                             // Safari-specific fixes when dropdown opens
-                            console.log('🔧 Safari: Opening dropdown with fixed positioning');
+                            console.log('🔧 Safari: Opening dropdown with enhanced fixed positioning');
+                            
+                            // Force immediate positioning
                             setTimeout(() => {
-                                // Force display first
-                                menu.style.display = 'block';
-                                menu.style.visibility = 'visible';
-                                menu.style.opacity = '1';
-                                
-                                // Get toggle position relative to viewport
-                                const toggle = target.querySelector('.custom-dropdown-toggle');
-                                if (toggle) {
-                                    const toggleRect = toggle.getBoundingClientRect();
-                                    console.log('🔧 Safari: Toggle position:', toggleRect);
-                                    
-                                    // Use fixed positioning for Safari to escape table stacking context
-                                    menu.style.position = 'fixed';
-                                    menu.style.top = (toggleRect.bottom) + 'px';
-                                    menu.style.left = (toggleRect.left) + 'px';
-                                    menu.style.zIndex = '999999';
-                                    
-                                    console.log('🔧 Safari: Menu positioned at:', {
-                                        top: menu.style.top,
-                                        left: menu.style.left,
-                                        position: menu.style.position,
-                                        zIndex: menu.style.zIndex
-                                    });
-                                    
-                                    // Check if menu would go off screen
-                                    setTimeout(() => {
-                                        const menuRect = menu.getBoundingClientRect();
-                                        console.log('🔧 Safari: Menu dimensions:', menuRect);
-                                        
-                                        // Adjust horizontal position if off-screen
-                                        if (toggleRect.left + menuRect.width > window.innerWidth) {
-                                            menu.style.left = (toggleRect.right - menuRect.width) + 'px';
-                                            console.log('🔧 Safari: Adjusted left position to:', menu.style.left);
-                                        }
-                                        
-                                        // Adjust vertical position if off-screen
-                                        if (toggleRect.bottom + menuRect.height > window.innerHeight) {
-                                            menu.style.top = (toggleRect.top - menuRect.height) + 'px';
-                                            console.log('🔧 Safari: Adjusted top position to:', menu.style.top);
-                                        }
-                                    }, 1);
-                                }
-                                
-                                // Force Safari repaint
-                                menu.style.webkitTransform = 'translate3d(0,0,0)';
-                                menu.style.transform = 'translate3d(0,0,0)';
+                                applySafariDropdownPositioning(target, menu);
                             }, 1);
+                            
                         } else if (menu && !target.classList.contains('show')) {
                             console.log('🔧 Safari: Closing dropdown and resetting position');
-                            // Reset positioning when dropdown closes
-                            menu.style.position = '';
-                            menu.style.top = '';
-                            menu.style.left = '';
-                            menu.style.zIndex = '';
+                            resetDropdownPositioning(menu);
                         }
                     }
                 }
@@ -381,5 +346,110 @@
             }
         });
     }, { passive: true });
+    
+    // Enhanced Safari dropdown positioning function
+    function applySafariDropdownPositioning(dropdown, menu) {
+        const toggle = dropdown.querySelector('.custom-dropdown-toggle');
+        if (!toggle) return;
+        
+        // Force display and visibility first
+        menu.style.display = 'block';
+        menu.style.visibility = 'visible';
+        menu.style.opacity = '1';
+        menu.style.position = 'fixed';
+        menu.style.zIndex = '999999';
+        
+        // Get accurate measurements
+        const toggleRect = toggle.getBoundingClientRect();
+        const viewportHeight = window.innerHeight;
+        const viewportWidth = window.innerWidth;
+        const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+        const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+        
+        console.log('🔧 Safari: Toggle rect:', toggleRect);
+        console.log('🔧 Safari: Viewport:', { width: viewportWidth, height: viewportHeight });
+        
+        // Temporarily position menu to measure it
+        menu.style.top = '-9999px';
+        menu.style.left = '-9999px';
+        
+        // Force a layout to get accurate menu dimensions
+        const menuRect = menu.getBoundingClientRect();
+        console.log('🔧 Safari: Menu rect:', menuRect);
+        
+        // Calculate initial position (below toggle)
+        let top = toggleRect.bottom;
+        let left = toggleRect.left;
+        let placement = 'bottom';
+        
+        // Check if menu would overflow bottom of viewport
+        if (top + menuRect.height > viewportHeight - 10) {
+            // Try positioning above
+            const topPosition = toggleRect.top - menuRect.height;
+            if (topPosition >= 10) {
+                top = topPosition;
+                placement = 'top';
+                console.log('🔧 Safari: Positioning above due to bottom overflow');
+            }
+        }
+        
+        // Check if menu would overflow right of viewport
+        if (left + menuRect.width > viewportWidth - 10) {
+            left = Math.max(10, toggleRect.right - menuRect.width);
+            console.log('🔧 Safari: Adjusting left position due to right overflow');
+        }
+        
+        // Ensure menu doesn't go off left edge
+        if (left < 10) {
+            left = 10;
+            console.log('🔧 Safari: Adjusting left position due to left overflow');
+        }
+        
+        // Apply final positioning
+        menu.style.top = top + 'px';
+        menu.style.left = left + 'px';
+        
+        // Add placement class for styling
+        menu.classList.remove('dropdown-placement-top', 'dropdown-placement-bottom');
+        menu.classList.add(`dropdown-placement-${placement}`);
+        
+        // Force Safari to repaint
+        menu.style.webkitTransform = 'translate3d(0,0,1px)';
+        menu.style.transform = 'translate3d(0,0,1px)';
+        
+        console.log('🔧 Safari: Final positioning:', {
+            top: menu.style.top,
+            left: menu.style.left,
+            placement: placement,
+            zIndex: menu.style.zIndex
+        });
+        
+        // Double-check positioning after a frame
+        requestAnimationFrame(() => {
+            const finalRect = menu.getBoundingClientRect();
+            console.log('🔧 Safari: Final menu position verification:', finalRect);
+            
+            // If menu is still not visible or positioned correctly, force position
+            if (finalRect.top < 0 || finalRect.left < 0 || 
+                finalRect.bottom > viewportHeight || finalRect.right > viewportWidth) {
+                console.log('🔧 Safari: Re-positioning menu due to incorrect placement');
+                
+                // Fallback positioning
+                menu.style.top = Math.max(10, Math.min(viewportHeight - menuRect.height - 10, toggleRect.bottom)) + 'px';
+                menu.style.left = Math.max(10, Math.min(viewportWidth - menuRect.width - 10, toggleRect.left)) + 'px';
+            }
+        });
+    }
+    
+    function resetDropdownPositioning(menu) {
+        // Reset all positioning styles
+        menu.style.position = '';
+        menu.style.top = '';
+        menu.style.left = '';
+        menu.style.zIndex = '';
+        menu.style.transform = '';
+        menu.style.webkitTransform = '';
+        menu.classList.remove('dropdown-placement-top', 'dropdown-placement-bottom');
+    }
     
 })();

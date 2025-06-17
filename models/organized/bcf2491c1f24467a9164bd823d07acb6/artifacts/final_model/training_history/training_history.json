@@ -1,0 +1,25 @@
+{
+  "epoch_history": [
+    {
+      "train_loss": 0.9159444514662027,
+      "train_dice": 0.10173017077613622,
+      "val_loss": 0.9135406953947884,
+      "val_dice": 0.10839403420686722
+    }
+  ],
+  "best_metrics": {
+    "best_val_dice": 0.10839403420686722,
+    "final_train_loss": 0.9159444514662027,
+    "final_val_loss": 0.9135406953947884,
+    "final_train_dice": 0.10173017077613622,
+    "final_val_dice": 0.10839403420686722,
+    "total_epochs_trained": 1,
+    "convergence_epoch": 1
+  },
+  "training_summary": {
+    "total_epochs": 1,
+    "best_epoch": 1,
+    "final_lr": 0.001,
+    "model_parameters": 1625420
+  }
+}

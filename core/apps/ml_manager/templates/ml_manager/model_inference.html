@@ -44,12 +44,18 @@
                                     data-crop-size="{{ m.training_data_info.training_parameters.crop_size|default:'128' }}"
                                     data-epochs="{{ m.total_epochs|default:'Unknown' }}"
                                     data-dice-score="{{ m.best_val_dice|floatformat:4|default:'N/A' }}"
+                                    data-accuracy-score="{{ m.performance_metrics.val_accuracy|floatformat:4|default:'N/A' }}"
+                                    data-dataset-type="{{ m.training_data_info.training_config.parameters.dataset_type|default:'segmentation' }}"
                                     {% if m.id == model.id %}selected{% endif %}>
-                                {{ m.name }} | Dice: {{ m.best_val_dice|floatformat:4|default:'N/A' }} | Size: {{ m.training_data_info.training_parameters.crop_size|default:'128' }}px | {{ m.created_at|date:"m/d H:i" }}
+                                {% if m.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+                                    {{ m.name }} | Accuracy: {{ m.performance_metrics.val_accuracy|floatformat:4|default:'N/A' }} | Size: {{ m.training_data_info.training_parameters.crop_size|default:'128' }}px | {{ m.created_at|date:"m/d H:i" }}
+                                {% else %}
+                                    {{ m.name }} | Dice: {{ m.best_val_dice|floatformat:4|default:'N/A' }} | Size: {{ m.training_data_info.training_parameters.crop_size|default:'128' }}px | {{ m.created_at|date:"m/d H:i" }}
+                                {% endif %}
                             </option>
                             {% endfor %}
                         </select>
-                        <small class="form-text text-muted">Shows: Model Name | Best Dice Score | Training Image Size | Created Date</small>
+                        <small class="form-text text-muted">Shows: Model Name | Best Performance Score | Training Image Size | Created Date</small>
                     </div>
                     
                     <div id="model-info" class="alert alert-info" style="display: none;">
@@ -161,11 +167,17 @@ document.addEventListener('DOMContentLoaded', function() {
             const cropSize = selectedOption.dataset.cropSize || '128';
             const epochs = selectedOption.dataset.epochs || 'Unknown';
             const diceScore = selectedOption.dataset.diceScore || 'N/A';
+            const accuracyScore = selectedOption.dataset.accuracyScore || 'N/A';
+            const datasetType = selectedOption.dataset.datasetType || 'segmentation';
+            const isClassification = datasetType === 'arcade_classification';
+            
+            const metricLabel = isClassification ? 'Best Accuracy Score' : 'Best Dice Score';
+            const metricValue = isClassification ? accuracyScore : diceScore;
             
             modelDetails.innerHTML = `
                 <strong>Training Image Size:</strong> ${cropSize}x${cropSize} pixels<br>
                 <strong>Total Epochs:</strong> ${epochs}<br>
-                <strong>Best Dice Score:</strong> ${diceScore}
+                <strong>${metricLabel}:</strong> ${metricValue}
             `;
             modelInfo.style.display = 'block';
         } else {

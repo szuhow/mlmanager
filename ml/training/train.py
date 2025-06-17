@@ -73,6 +73,9 @@ from ml.utils.architecture_registry import registry as architecture_registry
 # Import dynamic learning rate scheduler
 from ml.utils.dynamic_lr_scheduler import DynamicLearningRateScheduler
 
+# Import early stopping
+from ml.utils.early_stopping import EarlyStopping
+
 # Import ARCADE dataset integration
 try:
     from ml.datasets.torch_arcade_loader import (
@@ -301,14 +304,66 @@ def validate_architecture(model_type):
     return arch_info
 
 # --- Patch: Add detailed logging around model architecture loading ---
-def create_model_from_registry(model_type, device, **model_kwargs):
+def create_model_from_registry(model_type, device, task_type=None, **model_kwargs):
     """Create a model instance using the architecture registry"""
     logger.info(f"[ARCH] Attempting to load model_type: {model_type} with kwargs: {model_kwargs}")
+    logger.info(f"[ARCH] Task type: {task_type}")
     logger.info(f"[ARCH] Available architectures in registry: {list(architecture_registry._architectures.keys())}")
 
     try:
-        # Handle special case for MONAI UNet (legacy compatibility) first
-        if model_type in ['unet', 'monai_unet'] or 'unet' in model_type.lower():
+        # Check if this is a classification task and adapt model selection
+        if task_type == 'artery_classification':
+            logger.info("[ARCH] Classification task detected - selecting appropriate classifier")
+            
+            # Map segmentation models to their classification counterparts
+            classification_model_map = {
+                'unet': 'unet_classifier',
+                'monai_unet': 'unet_classifier',
+                'resunet': 'resunet_classifier',
+                'deep_resunet': 'deep_resunet_classifier',
+                'resunet_attention': 'resunet_attention_classifier',
+                'deep_resunet_attention': 'resunet_attention_classifier'
+            }
+            
+            # Get the classification model type
+            classification_model = classification_model_map.get(model_type, 'unet_classifier')
+            logger.info(f"[ARCH] Mapping {model_type} -> {classification_model} for classification")
+            
+            # Validate and get classification architecture
+            arch_info = validate_architecture(classification_model)
+            model_class = arch_info.model_class
+            
+            # Apply default config for classification
+            if arch_info.default_config:
+                logger.info(f"[ARCH] Applying default config for {classification_model}: {arch_info.default_config}")
+                current_model_kwargs = arch_info.default_config.copy()
+                current_model_kwargs.update(model_kwargs) # User-provided kwargs override defaults
+            else:
+                current_model_kwargs = model_kwargs
+            
+            # Ensure classification parameters
+            current_model_kwargs['n_classes'] = model_kwargs.get('out_channels', 2)  # Map out_channels to n_classes
+            if 'out_channels' in current_model_kwargs:
+                del current_model_kwargs['out_channels']  # Remove segmentation parameter
+            
+            # Fix channel configuration for artery classification
+            if task_type == 'artery_classification':
+                # Artery classification uses binary masks (1 channel input)
+                current_model_kwargs['n_channels'] = model_kwargs.get('in_channels', 1)
+                logger.info(f"[ARCH] Override n_channels for artery classification: {current_model_kwargs['n_channels']}")
+            
+            # Ensure we have the correct input channels configuration
+            if 'in_channels' in model_kwargs:
+                current_model_kwargs['n_channels'] = model_kwargs['in_channels']
+                logger.info(f"[ARCH] Using explicit in_channels: {current_model_kwargs['n_channels']}")
+            
+            # Create classification model instance
+            logger.info(f"[ARCH] Instantiating {arch_info.display_name} with effective kwargs: {current_model_kwargs}")
+            model = model_class(**current_model_kwargs)
+            logger.info(f"[ARCH] Successfully loaded classification model: {arch_info.display_name}")
+            
+        # Handle special case for MONAI UNet (legacy compatibility) for segmentation
+        elif model_type in ['unet', 'monai_unet'] or 'unet' in model_type.lower():
             logger.info("[ARCH] Using MONAI UNet with default configuration (special case)")
             model = MonaiUNet(
                 spatial_dims=model_kwargs.get('spatial_dims', 2),
@@ -639,7 +694,7 @@ def save_training_curves(epoch, metrics, logger, model_dir=None):
         logger.warning(f"Could not save training curves: {e}")
         return None
 
-def save_sample_predictions(model, val_loader, device, epoch, model_dir=None):
+def save_sample_predictions(model, val_loader, device, epoch, model_dir=None, class_info=None):
     """Save sample predictions from validation set with enhanced error handling
     
     Enhanced error handling includes:
@@ -648,8 +703,12 @@ def save_sample_predictions(model, val_loader, device, epoch, model_dir=None):
     - Comprehensive error logging with traceback
     - Fallback error image creation when prediction generation fails
     - File size validation to ensure valid PNG output
+    - Classification visualization support
     """
     logger.info(f"[PREDICTIONS] Starting to save sample predictions for epoch {epoch+1}")
+    
+    # Check if this is a classification task
+    is_classification_task = class_info and class_info.get('class_type') == 'classification'
     
     if model_dir:
         # Ensure model directories exist
@@ -687,20 +746,115 @@ def save_sample_predictions(model, val_loader, device, epoch, model_dir=None):
             # Model inference
             outputs = model(images)
             
-            # Apply appropriate post-processing based on number of output channels
-            num_output_channels = outputs.shape[1]
-            if num_output_channels == 1:
-                # Binary segmentation
-                outputs = torch.sigmoid(outputs)
-                outputs = (outputs > 0.5).float()
-                logger.info(f"[PREDICTIONS] Applied binary segmentation post-processing (sigmoid + threshold)")
-                use_colormap = False
+            # Handle classification vs segmentation tasks differently
+            if is_classification_task:
+                # Classification task - create classification visualization
+                logger.info(f"[PREDICTIONS] Creating classification visualization for epoch {epoch+1}")
+                
+                # Get predicted classes and probabilities
+                probs = torch.softmax(outputs, dim=1)
+                predicted_classes = torch.argmax(outputs, dim=1)
+                
+                # Create figure for classification visualization
+                fig, axes = plt.subplots(2, 4, figsize=(15, 8))
+                plt.suptitle(f'Artery Classification Predictions - Epoch {epoch+1}', fontsize=16)
+                
+                num_samples = min(4, images.shape[0])
+                class_names = ['Right Artery', 'Left Artery']  # Standard for artery classification
+                colors = ['lightcoral', 'lightblue']  # Red for right, blue for left
+                
+                for i in range(num_samples):
+                    # Input mask (for artery classification, input is typically binary mask)
+                    axes[0, i].imshow(images[i, 0].cpu().numpy(), cmap='gray')
+                    axes[0, i].set_title(f'Input Mask #{i+1}')
+                    axes[0, i].axis('off')
+                    
+                    # Classification result with confidence
+                    pred_class = predicted_classes[i].item()
+                    true_class = labels[i].item()
+                    confidence = probs[i, pred_class].item()
+                    
+                    # Create classification result visualization
+                    axes[1, i].clear()
+                    axes[1, i].set_xlim(0, 1)
+                    axes[1, i].set_ylim(0, 1)
+                    
+                    # Color background based on prediction
+                    axes[1, i].set_facecolor(colors[pred_class])
+                    
+                    # Add text with prediction and confidence
+                    pred_text = f"Pred: {class_names[pred_class]}\nConf: {confidence:.3f}"
+                    true_text = f"True: {class_names[true_class]}"
+                    
+                    # Show prediction
+                    axes[1, i].text(0.5, 0.7, pred_text, ha='center', va='center', 
+                                   fontsize=12, fontweight='bold', 
+                                   bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+                    
+                    # Show ground truth
+                    axes[1, i].text(0.5, 0.3, true_text, ha='center', va='center', 
+                                   fontsize=10, 
+                                   bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.8))
+                    
+                    # Mark correctness
+                    if pred_class == true_class:
+                        marker_color = 'green'
+                        marker_text = '✓'
+                    else:
+                        marker_color = 'red'
+                        marker_text = '✗'
+                    
+                    axes[1, i].text(0.9, 0.9, marker_text, ha='center', va='center', 
+                                   fontsize=20, color=marker_color, fontweight='bold')
+                    
+                    axes[1, i].set_title(f'Classification #{i+1}')
+                    axes[1, i].axis('off')
+                
+                # Hide unused subplots
+                for i in range(num_samples, 4):
+                    axes[0, i].axis('off')
+                    axes[1, i].axis('off')
+                
+                # Save classification visualization and return
+                plt.tight_layout()
+                
+                # Determine output path for classification
+                if model_dir and os.path.exists(model_dir):
+                    pred_dir = os.path.join(model_dir, f'predictions/epoch_{epoch+1:03d}')
+                    os.makedirs(pred_dir, exist_ok=True)
+                    filename = os.path.join(pred_dir, f'predictions_epoch_{epoch+1:03d}.png')
+                else:
+                    fallback_dir = os.path.join('data', 'models', 'artifacts', 'predictions')
+                    os.makedirs(fallback_dir, exist_ok=True)
+                    filename = os.path.join(fallback_dir, f'predictions_epoch_{epoch+1:03d}.png')
+                
+                plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white', edgecolor='none')
+                plt.close()
+                
+                # Verify file was created
+                if os.path.exists(filename) and os.path.getsize(filename) > 1000:
+                    logger.info(f"[PREDICTIONS] Successfully saved classification prediction samples to: {filename}")
+                    return filename
+                else:
+                    logger.error(f"[PREDICTIONS] Failed to create valid classification prediction file: {filename}")
+                    return None
+                
             else:
-                # Multi-class semantic segmentation
-                outputs = torch.softmax(outputs, dim=1)
-                outputs = torch.argmax(outputs, dim=1, keepdim=True).float()
-                logger.info(f"[PREDICTIONS] Applied multi-class segmentation post-processing (softmax + argmax) for {num_output_channels} classes")
-                use_colormap = True
+                # Segmentation task - use existing logic
+                # Apply appropriate post-processing based on number of output channels
+                num_output_channels = outputs.shape[1]
+                if num_output_channels == 1:
+                    # Binary segmentation
+                    outputs = torch.sigmoid(outputs)
+                    outputs = (outputs > 0.5).float()
+                    logger.info(f"[PREDICTIONS] Applied binary segmentation post-processing (sigmoid + threshold)")
+                    use_colormap = False
+                else:
+                    # Multi-class semantic segmentation
+                    outputs = torch.softmax(outputs, dim=1)
+                    outputs = torch.argmax(outputs, dim=1, keepdim=True).float()
+                    logger.info(f"[PREDICTIONS] Applied multi-class segmentation post-processing (softmax + argmax) for {num_output_channels} classes")
+                    use_colormap = True
             
             # Create figure with proper settings
             fig, axes = plt.subplots(3, 4, figsize=(15, 10))
@@ -1374,6 +1528,15 @@ def parse_args():
     parser.add_argument('--lr-step-size', type=int, default=10, help='Step size for step scheduler')
     parser.add_argument('--lr-gamma', type=float, default=0.1, help='Gamma for step/exponential scheduler')
     parser.add_argument('--min-lr', type=float, default=1e-7, help='Minimum learning rate threshold')
+    
+    # Early Stopping parameters
+    parser.add_argument('--use-early-stopping', action='store_true', help='Enable early stopping during training')
+    parser.add_argument('--early-stopping-patience', type=int, default=10, help='Number of epochs to wait for improvement before stopping')
+    parser.add_argument('--early-stopping-min-epochs', type=int, default=20, help='Minimum number of epochs before early stopping can occur')
+    parser.add_argument('--early-stopping-min-delta', type=float, default=1e-4, help='Minimum improvement required to reset patience counter')
+    parser.add_argument('--early-stopping-metric', type=str, default='val_dice', 
+                       choices=['val_dice', 'val_loss', 'val_accuracy'],
+                       help='Metric to monitor for early stopping')
     
     # Prediction parameters
     parser.add_argument('--model-path', type=str, help='Path to trained model weights')
@@ -2057,9 +2220,15 @@ def train_model(args):
         
         # Create model with dynamically configured parameters
         logger.info(f"[MODEL CONFIG] Final model configuration: {model_config}")
+        
+        # Pass task type information to model creation
+        task_type = class_info.get('task_type') if class_info else None
+        logger.info(f"[MODEL CONFIG] Task type for model creation: {task_type}")
+        
         model, arch_info = create_model_from_registry(
             args.model_type, 
             device,
+            task_type=task_type,
             **model_config
         )
 
@@ -2159,6 +2328,24 @@ def train_model(args):
         best_val_dice = -1
         best_model_path = None
         
+        # Initialize Early Stopping if enabled
+        early_stopping = None
+        if getattr(args, 'use_early_stopping', False):
+            # Determine mode based on metric
+            mode = 'max' if args.early_stopping_metric in ['val_dice', 'val_accuracy'] else 'min'
+            early_stopping = EarlyStopping(
+                patience=args.early_stopping_patience,
+                min_epochs=args.early_stopping_min_epochs,
+                min_delta=args.early_stopping_min_delta,
+                monitor_metric=args.early_stopping_metric,
+                mode=mode,
+                restore_best_weights=True,
+                verbose=True
+            )
+            logger.info(f"[EARLY_STOPPING] Early stopping enabled - monitoring {args.early_stopping_metric}, patience: {args.early_stopping_patience}")
+        else:
+            logger.info("[EARLY_STOPPING] Early stopping disabled")
+        
         epoch_history = []  # Track metrics for each epoch
         
         # Set total number of batches per epoch for progress tracking
@@ -2231,7 +2418,17 @@ def train_model(args):
                     input_min, input_max = inputs.min().item(), inputs.max().item()
                     input_mean, input_std = inputs.mean().item(), inputs.std().item()
                     label_min, label_max = labels.min().item(), labels.max().item()
-                    label_mean, label_std = labels.mean().item(), labels.std().item()
+                    
+                    # Handle both classification and segmentation labels
+                    if labels.dtype in [torch.int64, torch.long, torch.int32, torch.int]:
+                        # Classification labels - convert to float for statistics
+                        label_mean = labels.float().mean().item()
+                        label_std = labels.float().std().item()
+                        is_classification = True
+                    else:
+                        # Segmentation labels - already float
+                        label_mean, label_std = labels.mean().item(), labels.std().item()
+                        is_classification = False
                     
                     logger.info(f"[TRAIN BATCH] 📊 COMPREHENSIVE DATA ANALYSIS:")
                     logger.info(f"[TRAIN BATCH]   🖼️  INPUT IMAGES:")
@@ -2254,66 +2451,92 @@ def train_model(args):
                     else:
                         logger.info(f"[TRAIN BATCH]     ❓ Custom range [{input_min:.2f}-{input_max:.2f}]")
                     
-                    logger.info(f"[TRAIN BATCH]   🎭 MASK LABELS:")
+                    logger.info(f"[TRAIN BATCH]   🎭 LABELS:")
                     logger.info(f"[TRAIN BATCH]     Range: [{label_min:.4f}, {label_max:.4f}] (dtype: {labels.dtype})")
                     logger.info(f"[TRAIN BATCH]     Stats: mean={label_mean:.4f}, std={label_std:.4f}")
                     
-                    # Determine and log data range types for training masks
-                    if label_max <= 1.0 and label_min >= 0.0:
-                        logger.info(f"[TRAIN BATCH]     ✅ Binary normalized [0-1] range")
-                    elif label_max <= 255 and label_min >= 0:
-                        logger.info(f"[TRAIN BATCH]     ⚠️  [0-255] range (needs binary normalization)")
-                    else:
-                        logger.info(f"[TRAIN BATCH]     ❓ Custom range [{label_min:.2f}-{label_max:.2f}]")
-                    
-                    # Check for unique values in training masks with intelligent binary detection
-                    unique_train_labels = torch.unique(labels)
-                    unique_values_array = unique_train_labels.cpu().numpy()
-                    logger.info(f"[TRAIN BATCH]     Raw unique values: {unique_values_array}")
-                    
-                    # Intelligent binary segmentation detection
-                    if len(unique_train_labels) == 2:
-                        # Check if it's standard binary (0,1) or 8-bit binary (0,255)
-                        min_val, max_val = unique_values_array.min(), unique_values_array.max()
-                        if (min_val == 0 and max_val == 1):
-                            logger.info(f"[TRAIN BATCH]     ✅ Binary segmentation confirmed (0,1 format)")
-                            positive_ratio = (labels == 1).float().mean().item()
-                        elif (min_val == 0 and max_val == 255):
-                            logger.info(f"[TRAIN BATCH]     ✅ Binary segmentation confirmed (0,255 format - will be normalized)")
-                            positive_ratio = (labels == 255).float().mean().item()
+                    if is_classification:
+                        # Classification labels
+                        logger.info(f"[TRAIN BATCH]     Type: Classification labels")
+                        unique_labels = torch.unique(labels)
+                        unique_values_array = unique_labels.cpu().numpy()
+                        logger.info(f"[TRAIN BATCH]     Classes: {unique_values_array}")
+                        
+                        # Enhanced class distribution with names for artery classification
+                        if class_info and class_info.get('task_type') == 'artery_classification':
+                            class_names = class_info.get('class_names', ['Right Artery', 'Left Artery'])
+                            logger.info(f"[TRAIN BATCH]     🫀 ARTERY CLASSIFICATION STATISTICS:")
+                            for class_idx in unique_values_array:
+                                class_count = (labels == class_idx).sum().item()
+                                class_ratio = class_count / labels.numel()
+                                class_name = class_names[class_idx] if class_idx < len(class_names) else f"Class {class_idx}"
+                                logger.info(f"[TRAIN BATCH]       {class_name} (class {class_idx}): {class_count} samples ({class_ratio:.2%})")
                         else:
-                            logger.info(f"[TRAIN BATCH]     ✅ Binary segmentation confirmed (custom {min_val},{max_val} format)")
-                            positive_ratio = (labels == max_val).float().mean().item()
-                        logger.info(f"[TRAIN BATCH]     📈 Class distribution: {positive_ratio:.2%} positive, {1-positive_ratio:.2%} background")
-                    elif len(unique_train_labels) == 1:
-                        single_val = unique_values_array[0]
-                        if single_val == 0:
-                            logger.info(f"[TRAIN BATCH]     ⚠️  Single class detected (all background) - check data!")
-                        elif single_val == 1 or single_val == 255:
-                            logger.info(f"[TRAIN BATCH]     ⚠️  Single class detected (all foreground) - check data!")
-                        else:
-                            logger.info(f"[TRAIN BATCH]     ⚠️  Single class detected (all {single_val}) - check data!")
+                            # Generic classification statistics
+                            for class_idx in unique_values_array:
+                                class_count = (labels == class_idx).sum().item()
+                                class_ratio = class_count / labels.numel()
+                                logger.info(f"[TRAIN BATCH]     Class {class_idx}: {class_count} samples ({class_ratio:.2%})")
                     else:
-                        # Check if it's grayscale values that need thresholding
-                        if len(unique_train_labels) > 2:
-                            # Check if it's normalized grayscale (many values between 0-1) or 8-bit grayscale (0-255)
-                            if label_max <= 1.0 and label_min >= 0 and len(unique_train_labels) >= 50:
-                                # Many values in [0-1] range = normalized grayscale masks
-                                logger.info(f"[TRAIN BATCH]     📝 Normalized grayscale mask detected ({len(unique_train_labels)} values)")
-                                logger.info(f"[TRAIN BATCH]     💡 Recommend thresholding: values > 0.5 → 1, else → 0")
-                                # Show sample distribution for debugging
-                                sample_values = sorted(unique_values_array)
-                                logger.info(f"[TRAIN BATCH]     🔍 Sample values: {sample_values[:5]}...{sample_values[-5:]}")
-                            elif label_max <= 255 and label_min >= 0:
-                                # Values in [0-255] range = 8-bit grayscale masks
-                                logger.info(f"[TRAIN BATCH]     📝 8-bit grayscale mask detected ({len(unique_train_labels)} values)")
-                                logger.info(f"[TRAIN BATCH]     💡 Recommend thresholding: values > 127 → 1, else → 0")
-                                if len(unique_train_labels) <= 10:
-                                    logger.info(f"[TRAIN BATCH]     🔍 All values: {sorted(unique_values_array)}")
+                        # Segmentation labels
+                        logger.info(f"[TRAIN BATCH]     Type: Segmentation masks")
+                        
+                        # Determine and log data range types for training masks
+                        if label_max <= 1.0 and label_min >= 0.0:
+                            logger.info(f"[TRAIN BATCH]     ✅ Binary normalized [0-1] range")
+                        elif label_max <= 255 and label_min >= 0:
+                            logger.info(f"[TRAIN BATCH]     ⚠️  [0-255] range (needs binary normalization)")
+                        else:
+                            logger.info(f"[TRAIN BATCH]     ❓ Custom range [{label_min:.2f}-{label_max:.2f}]")
+                        
+                        # Check for unique values in training masks with intelligent binary detection
+                        unique_train_labels = torch.unique(labels)
+                        unique_values_array = unique_train_labels.cpu().numpy()
+                        logger.info(f"[TRAIN BATCH]     Raw unique values: {unique_values_array}")
+                        
+                        # Intelligent binary segmentation detection
+                        if len(unique_train_labels) == 2:
+                            # Check if it's standard binary (0,1) or 8-bit binary (0,255)
+                            min_val, max_val = unique_values_array.min(), unique_values_array.max()
+                            if (min_val == 0 and max_val == 1):
+                                logger.info(f"[TRAIN BATCH]     ✅ Binary segmentation confirmed (0,1 format)")
+                                positive_ratio = (labels == 1).float().mean().item()
+                            elif (min_val == 0 and max_val == 255):
+                                logger.info(f"[TRAIN BATCH]     ✅ Binary segmentation confirmed (0,255 format - will be normalized)")
+                                positive_ratio = (labels == 255).float().mean().item()
+                            else:
+                                logger.info(f"[TRAIN BATCH]     ✅ Binary segmentation confirmed (custom {min_val},{max_val} format)")
+                                positive_ratio = (labels == max_val).float().mean().item()
+                            logger.info(f"[TRAIN BATCH]     📈 Class distribution: {positive_ratio:.2%} positive, {1-positive_ratio:.2%} background")
+                        elif len(unique_train_labels) == 1:
+                            single_val = unique_values_array[0]
+                            if single_val == 0:
+                                logger.info(f"[TRAIN BATCH]     ⚠️  Single class detected (all background) - check data!")
+                            elif single_val == 1 or single_val == 255:
+                                logger.info(f"[TRAIN BATCH]     ⚠️  Single class detected (all foreground) - check data!")
+                            else:
+                                logger.info(f"[TRAIN BATCH]     ⚠️  Single class detected (all {single_val}) - check data!")
+                        else:
+                            # Check if it's grayscale values that need thresholding
+                            if len(unique_train_labels) > 2:
+                                # Check if it's normalized grayscale (many values between 0-1) or 8-bit grayscale (0-255)
+                                if label_max <= 1.0 and label_min >= 0 and len(unique_train_labels) >= 50:
+                                    # Many values in [0-1] range = normalized grayscale masks
+                                    logger.info(f"[TRAIN BATCH]     📝 Normalized grayscale mask detected ({len(unique_train_labels)} values)")
+                                    logger.info(f"[TRAIN BATCH]     💡 Recommend thresholding: values > 0.5 → 1, else → 0")
+                                    # Show sample distribution for debugging
+                                    sample_values = sorted(unique_values_array)
+                                    logger.info(f"[TRAIN BATCH]     🔍 Sample values: {sample_values[:5]}...{sample_values[-5:]}")
+                                elif label_max <= 255 and label_min >= 0:
+                                    # Values in [0-255] range = 8-bit grayscale masks
+                                    logger.info(f"[TRAIN BATCH]     📝 8-bit grayscale mask detected ({len(unique_train_labels)} values)")
+                                    logger.info(f"[TRAIN BATCH]     💡 Recommend thresholding: values > 127 → 1, else → 0")
+                                    if len(unique_train_labels) <= 10:
+                                        logger.info(f"[TRAIN BATCH]     🔍 All values: {sorted(unique_values_array)}")
+                                else:
+                                    logger.info(f"[TRAIN BATCH]     ⚠️  Multi-class ({len(unique_train_labels)} classes) - not binary segmentation")
                             else:
                                 logger.info(f"[TRAIN BATCH]     ⚠️  Multi-class ({len(unique_train_labels)} classes) - not binary segmentation")
-                        else:
-                            logger.info(f"[TRAIN BATCH]     ⚠️  Multi-class ({len(unique_train_labels)} classes) - not binary segmentation")
                     
                     # Additional data quality checks
                     nan_inputs = torch.isnan(inputs).sum().item()
@@ -2328,36 +2551,49 @@ def train_model(args):
                     if nan_inputs == 0 and inf_inputs == 0 and nan_labels == 0 and inf_labels == 0:
                         logger.info(f"[TRAIN BATCH]     ✅ Data quality check passed (no NaN/Inf values)")
                 
-                # Ensure labels are float and binary (0 or 1) with automatic normalization
-                labels = labels.float()
+                # Handle label preprocessing based on task type
+                is_classification_task = class_info and class_info.get('class_type') == 'classification'
                 
-                # Auto-normalize and threshold masks if they're not binary
-                if labels.max() > 1:
-                    if labels.max() <= 255 and labels.min() >= 0:
-                        logger.info(f"[TRAIN BATCH] 🔧 Auto-normalizing masks from [0-255] to [0-1] range")
-                        labels = labels / 255.0
-                        # Ensure binary values after normalization
-                        labels = (labels > 0.5).float()
-                        logger.info(f"[TRAIN BATCH] ✅ Masks normalized to range [{labels.min().item():.1f}-{labels.max().item():.1f}]")
-                    else:
-                        logger.warning(f"[TRAIN BATCH] ❌ Labels out of expected range! min: {labels.min().item()}, max: {labels.max().item()}")
-                        # Try to normalize anyway for custom ranges
-                        labels_max = labels.max()
-                        if labels_max > 0:
-                            labels = labels / labels_max
+                if is_classification_task:
+                    # Classification task - labels should remain as Long (int64)
+                    labels = labels.long()
+                    if epoch == 0 and batch_idx == 0:
+                        logger.info(f"[TRAIN BATCH] 🎯 Classification task detected - labels kept as Long type")
+                        logger.info(f"[TRAIN BATCH]     Label shape: {labels.shape}, dtype: {labels.dtype}")
+                        logger.info(f"[TRAIN BATCH]     Label range: [{labels.min().item()}, {labels.max().item()}]")
+                else:
+                    # Segmentation task - convert to float and apply normalization
+                    labels = labels.float()
+                    
+                    # Auto-normalize and threshold masks if they're not binary
+                    if labels.max() > 1:
+                        if labels.max() <= 255 and labels.min() >= 0:
+                            logger.info(f"[TRAIN BATCH] 🔧 Auto-normalizing masks from [0-255] to [0-1] range")
+                            labels = labels / 255.0
+                            # Ensure binary values after normalization
                             labels = (labels > 0.5).float()
-                            logger.info(f"[TRAIN BATCH] 🔧 Normalized custom range to binary [0-1]")
-                elif labels.max() <= 1 and labels.min() >= 0:
-                    # Check if it's grayscale masks that need thresholding (many values between 0-1)
-                    unique_for_threshold = torch.unique(labels)
-                    if len(unique_for_threshold) > 10:  # More than 10 unique values = grayscale
-                        logger.info(f"[TRAIN BATCH] 🔧 Auto-thresholding grayscale masks ({len(unique_for_threshold)} values → binary)")
-                        labels = (labels > 0.5).float()
-                        final_unique = torch.unique(labels)
-                        logger.info(f"[TRAIN BATCH] ✅ Thresholded to {len(final_unique)} values: {final_unique.cpu().numpy()}")
+                            logger.info(f"[TRAIN BATCH] ✅ Masks normalized to range [{labels.min().item():.1f}-{labels.max().item():.1f}]")
+                        else:
+                            logger.warning(f"[TRAIN BATCH] ❌ Labels out of expected range! min: {labels.min().item()}, max: {labels.max().item()}")
+                            # Try to normalize anyway for custom ranges
+                            labels_max = labels.max()
+                            if labels_max > 0:
+                                labels = labels / labels_max
+                                labels = (labels > 0.5).float()
+                                logger.info(f"[TRAIN BATCH] 🔧 Normalized custom range to binary [0-1]")
+                    elif labels.max() <= 1 and labels.min() >= 0:
+                        # Check if it's grayscale masks that need thresholding (many values between 0-1)
+                        unique_for_threshold = torch.unique(labels)
+                        if len(unique_for_threshold) > 10:  # More than 10 unique values = grayscale
+                            logger.info(f"[TRAIN BATCH] 🔧 Auto-thresholding grayscale masks ({len(unique_for_threshold)} values → binary)")
+                            labels = (labels > 0.5).float()
+                            final_unique = torch.unique(labels)
+                            logger.info(f"[TRAIN BATCH] ✅ Thresholded to {len(final_unique)} values: {final_unique.cpu().numpy()}")
                 
-                if labels.max() > 1 or labels.min() < 0:
-                    logger.warning(f"[TRAIN BATCH] ❌ Labels still out of [0,1] range after normalization! min: {labels.min().item()}, max: {labels.max().item()}")
+                # Additional validation for segmentation tasks only
+                if not is_classification_task:
+                    if labels.max() > 1 or labels.min() < 0:
+                        logger.warning(f"[TRAIN BATCH] ❌ Labels still out of [0,1] range after normalization! min: {labels.min().item()}, max: {labels.max().item()}")
                 
                 # Verify normalization worked correctly for first batch
                 if epoch == 0 and batch_idx == 0:
@@ -2373,8 +2609,7 @@ def train_model(args):
                         logger.info(f"[TRAIN BATCH]     📈 Final class distribution: {positive_ratio_final:.2%} positive, {1-positive_ratio_final:.2%} background")
                     else:
                         logger.warning(f"[TRAIN BATCH]     ⚠️  Normalization may have failed - {len(normalized_unique_labels)} unique values")
-                # Use DiceLoss with sigmoid=False, since model outputs are raw logits
-                loss_function = MonaiDiceLoss(sigmoid=True)
+                
                 with torch.cuda.amp.autocast():
                     outputs = model(inputs)
                     if epoch == 0 and batch_idx == 0:
@@ -2390,29 +2625,40 @@ def train_model(args):
                 
                 epoch_loss += loss.item()
                 
-                # Calculate training dice score
+                # Calculate training metrics
                 with torch.no_grad():
-                    val_outputs = torch.sigmoid(outputs)
-                    val_outputs = (val_outputs > 0.5).float()
-                    dice_metric(y_pred=val_outputs, y=labels)
-                    batch_dice = dice_metric.aggregate().item()
-                    dice_metric.reset()
+                    if class_info and class_info.get('task_type') == 'artery_classification':
+                        # Classification task - calculate accuracy (no dice metric needed)
+                        predicted_classes = torch.argmax(outputs, dim=1)
+                        batch_accuracy = (predicted_classes == labels).float().mean().item()
+                        batch_dice = batch_accuracy  # Use accuracy as the metric
+                    else:
+                        # Segmentation task - calculate dice score
+                        val_outputs = torch.sigmoid(outputs)
+                        val_outputs = (val_outputs > 0.5).float()
+                        dice_metric(y_pred=val_outputs, y=labels)
+                        batch_dice = dice_metric.aggregate().item()
+                        dice_metric.reset()
                     train_dice += batch_dice
                 
                 # Call batch end callback with current metrics
                 if callback:
+                    # Use appropriate metric name for callback
+                    metric_name = 'train_accuracy' if class_info and class_info.get('task_type') == 'artery_classification' else 'train_dice'
                     batch_logs = {
                         'train_loss': loss.item(),
-                        'train_dice': batch_dice,
+                        metric_name: batch_dice,
                         'batch_progress': (batch_idx + 1) / len(train_loader)
                     }
                     callback.on_batch_end(batch_idx, batch_logs)
                 
                 if batch_idx % 10 == 0:  # More frequent logging for GUI
                     progress_pct = (batch_idx / len(train_loader)) * 100
+                    # Use appropriate metric name in logging
+                    metric_display = "Accuracy" if class_info and class_info.get('task_type') == 'artery_classification' else "Dice"
                     logger.info(f"[TRAIN] Epoch {epoch+1}/{args.epochs} - "
                               f"Batch {batch_idx}/{len(train_loader)} ({progress_pct:.1f}%) - "
-                              f"Loss: {loss.item():.4f}, Dice: {batch_dice:.4f}")
+                              f"Loss: {loss.item():.4f}, {metric_display}: {batch_dice:.4f}")
                               
             # Check if training was stopped during batch processing
             if callback and callback.model.stop_requested:
@@ -2575,72 +2821,138 @@ def train_model(args):
                         raise TypeError(f"Unsupported val_data type: {type(val_data)}")
                     
                     # Apply same normalization and thresholding to validation labels as training
-                    val_labels = val_labels.float()
-                    if val_labels.max() > 1:
-                        if val_labels.max() <= 255 and val_labels.min() >= 0:
-                            val_labels = val_labels / 255.0
-                            val_labels = (val_labels > 0.5).float()
-                        else:
-                            # Normalize custom ranges
-                            labels_max = val_labels.max()
-                            if labels_max > 0:
-                                val_labels = val_labels / labels_max
+                    # Handle label preprocessing based on task type (same as training loop)
+                    is_classification_task = class_info and class_info.get('class_type') == 'classification'
+                    
+                    if is_classification_task:
+                        # Classification task - labels should remain as Long (int64)
+                        val_labels = val_labels.long()
+                    else:
+                        # Segmentation task - convert to float and apply normalization
+                        val_labels = val_labels.float()
+                        if val_labels.max() > 1:
+                            if val_labels.max() <= 255 and val_labels.min() >= 0:
+                                val_labels = val_labels / 255.0
                                 val_labels = (val_labels > 0.5).float()
-                    elif val_labels.max() <= 1 and val_labels.min() >= 0:
-                        # Check if it's grayscale masks that need thresholding
-                        unique_for_threshold = torch.unique(val_labels)
-                        if len(unique_for_threshold) > 10:  # More than 10 unique values = grayscale
-                            val_labels = (val_labels > 0.5).float()
+                            else:
+                                # Normalize custom ranges
+                                labels_max = val_labels.max()
+                                if labels_max > 0:
+                                    val_labels = val_labels / labels_max
+                                    val_labels = (val_labels > 0.5).float()
+                        elif val_labels.max() <= 1 and val_labels.min() >= 0:
+                            # Check if it's grayscale masks that need thresholding
+                            unique_for_threshold = torch.unique(val_labels)
+                            if len(unique_for_threshold) > 10:  # More than 10 unique values = grayscale
+                                val_labels = (val_labels > 0.5).float()
                     
                     val_outputs = model(val_inputs)
                     batch_val_loss = loss_function(val_outputs, val_labels).item()
                     val_loss += batch_val_loss
                     
-                    # Apply appropriate post-processing based on number of output channels
-                    num_output_channels = val_outputs.shape[1]
-                    if num_output_channels == 1:
-                        # Binary segmentation
-                        val_outputs = torch.sigmoid(val_outputs)
-                        val_outputs = (val_outputs > 0.5).float()
+                    # Apply appropriate post-processing and calculate metrics based on task type
+                    if class_info and class_info.get('task_type') == 'artery_classification':
+                        # Classification task - calculate accuracy directly (no dice metric)
+                        predicted_classes = torch.argmax(val_outputs, dim=1)
+                        batch_accuracy = (predicted_classes == val_labels).float().mean().item()
+                        
+                        # Accumulate accuracy values for averaging later
+                        if 'val_accuracies' not in locals():
+                            val_accuracies = []
+                        val_accuracies.append(batch_accuracy)
                     else:
-                        # Multi-class semantic segmentation
-                        val_outputs = torch.softmax(val_outputs, dim=1)
-                        val_outputs = torch.argmax(val_outputs, dim=1, keepdim=True).float()
-                    
-                    dice_metric(y_pred=val_outputs, y=val_labels)
+                        # Segmentation task - apply appropriate post-processing
+                        num_output_channels = val_outputs.shape[1]
+                        if num_output_channels == 1:
+                            # Binary segmentation
+                            val_outputs = torch.sigmoid(val_outputs)
+                            val_outputs = (val_outputs > 0.5).float()
+                        else:
+                            # Multi-class semantic segmentation
+                            val_outputs = torch.softmax(val_outputs, dim=1)
+                            val_outputs = torch.argmax(val_outputs, dim=1, keepdim=True).float()
+                        
+                        dice_metric(y_pred=val_outputs, y=val_labels)
                     if val_idx % 5 == 0:
                         val_progress_pct = (val_idx / len(val_loader)) * 100
                         logger.info(f"[VAL] Batch {val_idx}/{len(val_loader)} ({val_progress_pct:.1f}%) - Loss: {batch_val_loss:.4f}")
                 
                 val_loss /= len(val_loader)
-                val_dice = dice_metric.aggregate().item()
-                dice_metric.reset()
+                
+                # Calculate final validation metric based on task type
+                if class_info and class_info.get('task_type') == 'artery_classification':
+                    # For classification, use average accuracy (stored in val_accuracies)
+                    val_dice = sum(val_accuracies) / len(val_accuracies) if 'val_accuracies' in locals() and val_accuracies else 0.0
+                else:
+                    # For segmentation, use dice metric
+                    val_dice = dice_metric.aggregate().item()
+                    dice_metric.reset()
             
-            metrics = {
-                "train_loss": epoch_loss,
-                "train_dice": train_dice,
-                "val_loss": val_loss,
-                "val_dice": val_dice,
-            }
+            # Create metrics dictionary with appropriate names based on task type
+            if class_info and class_info.get('task_type') == 'artery_classification':
+                metrics = {
+                    "train_loss": epoch_loss,
+                    "train_accuracy": train_dice,  # train_dice contains accuracy for classification
+                    "val_loss": val_loss,
+                    "val_accuracy": val_dice,      # val_dice contains accuracy for classification
+                }
+                train_metric_name = "Train Accuracy"
+                val_metric_name = "Val Accuracy"
+                best_metric_name = "Best Val Accuracy"
+            else:
+                metrics = {
+                    "train_loss": epoch_loss,
+                    "train_dice": train_dice,
+                    "val_loss": val_loss,
+                    "val_dice": val_dice,
+                }
+                train_metric_name = "Train Dice"
+                val_metric_name = "Val Dice"
+                best_metric_name = "Best Val Dice"
             
             logger.info(f"[EPOCH] {epoch+1}/{args.epochs} COMPLETED - "
-                       f"Train Loss: {epoch_loss:.4f}, Train Dice: {train_dice:.4f}, "
-                       f"Val Loss: {val_loss:.4f}, Val Dice: {val_dice:.4f}")
+                       f"Train Loss: {epoch_loss:.4f}, {train_metric_name}: {train_dice:.4f}, "
+                       f"Val Loss: {val_loss:.4f}, {val_metric_name}: {val_dice:.4f}")
             
             # Log learning rate and other training details
             current_lr = optimizer.param_groups[0]['lr']
             logger.info(f"[METRICS] Learning Rate: {current_lr:.6f}, "
-                       f"Best Val Dice: {best_val_dice:.4f}")
+                       f"{best_metric_name}: {best_val_dice:.4f}")
             
             # Log batch statistics
             logger.info(f"[STATS] Total batches processed: {len(train_loader)} train, {len(val_loader)} val")
             
-            mlflow.log_metrics(metrics, step=epoch)
+            mlflow.log_metrics(metrics, step=epoch+1)  # Use 1-based epoch numbering
             epoch_history.append(metrics)  # Save metrics for this epoch
             
             # Call epoch end callback with metrics
             if callback:
                 callback.on_epoch_end(epoch, metrics)
+            
+            # Check early stopping condition
+            if early_stopping is not None:
+                # Create metrics dict for early stopping
+                early_stopping_metrics = {
+                    'val_dice': val_dice,
+                    'val_loss': val_loss,
+                    'val_accuracy': val_dice  # Use dice as accuracy proxy for consistency
+                }
+                
+                should_stop_result = early_stopping(epoch, early_stopping_metrics, model)
+                should_stop = should_stop_result.get('should_stop', False) if isinstance(should_stop_result, dict) else should_stop_result
+                
+                if should_stop:
+                    logger.info(f"[EARLY_STOPPING] Early stopping triggered at epoch {epoch+1}")
+                    logger.info(f"[EARLY_STOPPING] Best {args.early_stopping_metric}: {early_stopping.best_metric:.6f} at epoch {early_stopping.best_epoch + 1}")
+                    logger.info(f"[EARLY_STOPPING] No improvement for {early_stopping.epochs_without_improvement} epochs (patience: {early_stopping.patience})")
+                    
+                    # Log early stopping metrics to MLflow
+                    mlflow.log_metric('early_stopping_epoch', epoch + 1)
+                    mlflow.log_metric('early_stopping_best_metric', early_stopping.best_metric)
+                    mlflow.log_metric('early_stopping_best_epoch', early_stopping.best_epoch + 1)
+                    
+                    # Break the training loop
+                    break
             
             # Enhanced MLflow artifact logging using the new artifact manager
             try:
@@ -2651,7 +2963,7 @@ def train_model(args):
                 
                 # Save sample predictions every epoch (not just every 5 epochs)
                 try:
-                    pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir)
+                    pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir, class_info=class_info)
                     if pred_file and os.path.exists(pred_file):
                         epoch_artifacts['predictions'] = pred_file
                         mlflow.log_artifact(pred_file, artifact_path=f"predictions/epoch_{epoch+1:03d}")
@@ -2708,7 +3020,7 @@ def train_model(args):
                     'model_family': getattr(args, 'model_family', 'UNet-Coronary'),
                     'device': str(device),
                     'optimizer': 'Adam',
-                    'loss_function': 'DiceLoss',
+                    'loss_function': loss_function.__class__.__name__,
                     'epoch_duration': time.time() - epoch_start_time if 'epoch_start_time' in locals() else 0
                 }
                 
@@ -2728,7 +3040,7 @@ def train_model(args):
                 logger.warning(f"[MLFLOW] Enhanced artifact logging failed, falling back to basic logging: {e}")
                 
                 # Fallback to original artifact logging - Generate predictions every epoch
-                pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir)
+                pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir, class_info=class_info)
                 if pred_file:
                     mlflow.log_artifact(pred_file, artifact_path=f"predictions/epoch_{epoch+1:03d}")
                     logger.info(f"[MLFLOW] Fallback: Successfully logged prediction samples for epoch {epoch+1}")
@@ -2779,15 +3091,15 @@ def train_model(args):
                         logger.info(f"[LR_SCHEDULER] Reason: {lr_adjustment['reason']}")
                         
                         # Log the adjustment to MLflow
-                        mlflow.log_metric('lr_adjustment_epoch', epoch + 1, step=epoch)
-                        mlflow.log_metric('lr_adjustment_reason', hash(lr_adjustment['reason']), step=epoch)
+                        mlflow.log_metric('lr_adjustment_epoch', epoch + 1, step=epoch+1)
+                        mlflow.log_metric('lr_adjustment_reason', hash(lr_adjustment['reason']), step=epoch+1)
                     
                 except Exception as lr_error:
                     logger.warning(f"[LR_SCHEDULER] Error in learning rate adjustment: {lr_error}")
             
             # Track learning rate
             current_lr = optimizer.param_groups[0]['lr']
-            mlflow.log_metric('learning_rate', current_lr, step=epoch)
+            mlflow.log_metric('learning_rate', current_lr, step=epoch+1)
             
             if val_dice > best_val_dice:
                 best_val_dice = val_dice
@@ -2796,7 +3108,29 @@ def train_model(args):
                 model_name = f"model_{args.model_id if args.model_id else 'unknown'}_epoch_{epoch+1}_dice_{val_dice:.3f}"
                 
                 best_model_path = os.path.join(model_dir, "weights", "model.pth")
-                torch.save(model.state_dict(), best_model_path)
+                
+                # Create enhanced model checkpoint with metadata
+                model_checkpoint = {
+                    'model_state_dict': model.state_dict(),
+                    'model_metadata': {
+                        'model_type': 'classification' if class_info and class_info.get('class_type') == 'classification' else 'segmentation',
+                        'task_type': class_info.get('task_type') if class_info else 'segmentation',
+                        'input_channels': class_info.get('input_channels', 3) if class_info else 3,
+                        'num_classes': class_info.get('num_classes', 1) if class_info else 1,
+                        'model_architecture': getattr(args, 'model_architecture', 'unet'),
+                        'epoch': epoch + 1,
+                        'validation_metric': val_dice,
+                        'class_names': class_info.get('class_names', []) if class_info else []
+                    },
+                    'training_args': {
+                        'epochs': args.epochs,
+                        'batch_size': args.batch_size,
+                        'learning_rate': args.learning_rate,
+                        'crop_size': getattr(args, 'crop_size', 256)
+                    }
+                }
+                
+                torch.save(model_checkpoint, best_model_path)
                 
                 # Save model metadata
                 metadata_path = save_enhanced_model_metadata(
@@ -2891,7 +3225,7 @@ def train_model(args):
                     'batch_size': args.batch_size,
                     'learning_rate': args.learning_rate,
                     'optimizer': 'Adam',
-                    'loss_function': 'DiceLoss',
+                    'loss_function': loss_function.__class__.__name__,
                     'device': str(device),
                     'validation_split': args.validation_split
                 },
@@ -3243,7 +3577,7 @@ def train_model(args):
         # Training Configuration Summary
         logger.info(f"⚙️  TRAINING CONFIGURATION:")
         logger.info(f"   📚 Learning Rate: {args.learning_rate}")
-        logger.info(f"   🎯 Loss Function: DiceLoss with Sigmoid")
+        logger.info(f"   🎯 Loss Function: {loss_function.__class__.__name__}")
         logger.info(f"   🔄 Optimizer: {getattr(args, 'optimizer', 'adam').upper()}")
         logger.info(f"   📐 Resolution: {getattr(args, 'resolution', '256')}px")
         logger.info(f"   ✂️  Crop Size: {getattr(args, 'crop_size', '128')}px")

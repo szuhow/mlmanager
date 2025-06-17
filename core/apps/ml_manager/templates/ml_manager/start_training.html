@@ -554,6 +554,160 @@
                                         {% endfor %}
                                     </div>
                                     
+                                    <!-- Early Stopping Section -->
+                                    <div class="row mb-4">
+                                        <div class="col-12">
+                                            <h5 class="text-primary">
+                                                <i class="fas fa-stop-circle me-1"></i>Early Stopping
+                                                <span class="badge bg-secondary ms-2" id="early-stopping-status">Optional</span>
+                                            </h5>
+                                            <p class="text-muted small mb-2">Automatically stop training when model stops improving to prevent overfitting</p>
+                                            <hr>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Early Stopping Configuration Card -->
+                                    <div class="card mb-4 border-warning">
+                                        <div class="card-body">
+                                            <!-- Enable Early Stopping -->
+                                            <div class="row mb-3">
+                                                <div class="col-md-6">
+                                                    <div class="form-check form-switch">
+                                                        {% for es_field in form %}
+                                                            {% if es_field.name == 'use_early_stopping' %}
+                                                                <input type="checkbox" 
+                                                                       name="{{ es_field.html_name }}"
+                                                                       class="form-check-input"
+                                                                       id="{{ es_field.id_for_label }}"
+                                                                       {% if es_field.value %}checked{% endif %}
+                                                                       onchange="toggleEarlyStoppingFields(this.checked)">
+                                                                <label class="form-check-label fw-bold" for="{{ es_field.id_for_label }}">
+                                                                    <i class="fas fa-toggle-on me-1"></i>{{ es_field.label }}
+                                                                    {% if es_field.help_text %}
+                                                                        <small class="text-muted d-block fw-normal">{{ es_field.help_text }}</small>
+                                                                    {% endif %}
+                                                                </label>
+                                                                {{ es_field.errors }}
+                                                            {% endif %}
+                                                        {% endfor %}
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <div id="early-stopping-info" class="border rounded p-3 bg-light">
+                                                        <h6 class="text-warning mb-2"><i class="fas fa-info-circle me-1"></i>Early Stopping Benefits</h6>
+                                                        <ul class="small mb-0">
+                                                            <li>Prevents overfitting</li>
+                                                            <li>Saves computational resources</li>
+                                                            <li>Automatically finds optimal stopping point</li>
+                                                        </ul>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            <!-- Early Stopping Parameters -->
+                                            <div id="early-stopping-params" style="display: none;">
+                                                <div class="border-start border-3 border-warning ps-3 mb-3">
+                                                    <h6 class="text-warning mb-3"><i class="fas fa-cogs me-1"></i>Early Stopping Configuration</h6>
+                                                    
+                                                    <!-- First Row: Metric and Patience -->
+                                                    <div class="row mb-3">
+                                                        <div class="col-md-6">
+                                                            <!-- Metric Selection -->
+                                                            {% for metric_field in form %}
+                                                                {% if metric_field.name == 'early_stopping_metric' %}
+                                                                    <label for="{{ metric_field.id_for_label }}" class="form-label">
+                                                                        <i class="fas fa-chart-bar me-1"></i>{{ metric_field.label }}
+                                                                        {% if metric_field.help_text %}
+                                                                            <small class="text-muted d-block">{{ metric_field.help_text }}</small>
+                                                                        {% endif %}
+                                                                    </label>
+                                                                    {{ metric_field.errors }}
+                                                                    <select name="{{ metric_field.html_name }}"
+                                                                            class="form-control"
+                                                                            id="{{ metric_field.id_for_label }}">
+                                                                        {% for choice_value, choice_label in metric_field.field.choices %}
+                                                                            <option value="{{ choice_value }}" 
+                                                                                    {% if choice_value == metric_field.value|default:metric_field.field.initial %}selected{% endif %}>
+                                                                                {{ choice_label }}
+                                                                            </option>
+                                                                        {% endfor %}
+                                                                    </select>
+                                                                {% endif %}
+                                                            {% endfor %}
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <!-- Patience -->
+                                                            {% for patience_field in form %}
+                                                                {% if patience_field.name == 'early_stopping_patience' %}
+                                                                    <label for="{{ patience_field.id_for_label }}" class="form-label">
+                                                                        <i class="fas fa-hourglass-half me-1"></i>{{ patience_field.label }}
+                                                                        {% if patience_field.help_text %}
+                                                                            <small class="text-muted d-block">{{ patience_field.help_text }}</small>
+                                                                        {% endif %}
+                                                                    </label>
+                                                                    {{ patience_field.errors }}
+                                                                    <input type="number" 
+                                                                           name="{{ patience_field.html_name }}"
+                                                                           class="form-control"
+                                                                           id="{{ patience_field.id_for_label }}"
+                                                                           value="{{ patience_field.value|default:patience_field.field.initial }}"
+                                                                           min="{{ patience_field.field.min_value }}"
+                                                                           step="1">
+                                                                {% endif %}
+                                                            {% endfor %}
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    <!-- Second Row: Min Epochs and Min Delta -->
+                                                    <div class="row mb-3">
+                                                        <div class="col-md-6">
+                                                            <!-- Min Epochs -->
+                                                            {% for min_epochs_field in form %}
+                                                                {% if min_epochs_field.name == 'early_stopping_min_epochs' %}
+                                                                    <label for="{{ min_epochs_field.id_for_label }}" class="form-label">
+                                                                        <i class="fas fa-play-circle me-1"></i>{{ min_epochs_field.label }}
+                                                                        {% if min_epochs_field.help_text %}
+                                                                            <small class="text-muted d-block">{{ min_epochs_field.help_text }}</small>
+                                                                        {% endif %}
+                                                                    </label>
+                                                                    {{ min_epochs_field.errors }}
+                                                                    <input type="number" 
+                                                                           name="{{ min_epochs_field.html_name }}"
+                                                                           class="form-control"
+                                                                           id="{{ min_epochs_field.id_for_label }}"
+                                                                           value="{{ min_epochs_field.value|default:min_epochs_field.field.initial }}"
+                                                                           min="{{ min_epochs_field.field.min_value }}"
+                                                                           step="1">
+                                                                {% endif %}
+                                                            {% endfor %}
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <!-- Min Delta -->
+                                                            {% for min_delta_field in form %}
+                                                                {% if min_delta_field.name == 'early_stopping_min_delta' %}
+                                                                    <label for="{{ min_delta_field.id_for_label }}" class="form-label">
+                                                                        <i class="fas fa-ruler me-1"></i>{{ min_delta_field.label }}
+                                                                        {% if min_delta_field.help_text %}
+                                                                            <small class="text-muted d-block">{{ min_delta_field.help_text }}</small>
+                                                                        {% endif %}
+                                                                    </label>
+                                                                    {{ min_delta_field.errors }}
+                                                                    <input type="number" 
+                                                                           name="{{ min_delta_field.html_name }}"
+                                                                           class="form-control"
+                                                                           id="{{ min_delta_field.id_for_label }}"
+                                                                           value="{{ min_delta_field.value|default:min_delta_field.field.initial }}"
+                                                                           min="{{ min_delta_field.field.min_value }}"
+                                                                           step="any">
+                                                                {% endif %}
+                                                            {% endfor %}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
                                     <!-- Data Augmentation Section -->
                                     <div class="row mb-4">
                                         <div class="col-12">
@@ -933,6 +1087,30 @@ function updateSchedulerFields(schedulerType) {
             break;
     }
 }
+
+// Early Stopping Toggle Function
+function toggleEarlyStoppingFields(enabled) {
+    const paramsDiv = document.getElementById('early-stopping-params');
+    const statusBadge = document.getElementById('early-stopping-status');
+    
+    if (enabled) {
+        paramsDiv.style.display = 'block';
+        statusBadge.textContent = 'Enabled';
+        statusBadge.className = 'badge bg-success ms-2';
+    } else {
+        paramsDiv.style.display = 'none';
+        statusBadge.textContent = 'Disabled';
+        statusBadge.className = 'badge bg-secondary ms-2';
+    }
+}
+
+// Initialize early stopping state on page load
+document.addEventListener('DOMContentLoaded', function() {
+    const earlyStoppingCheckbox = document.querySelector('input[name="use_early_stopping"]');
+    if (earlyStoppingCheckbox) {
+        toggleEarlyStoppingFields(earlyStoppingCheckbox.checked);
+    }
+});
 </script>
 
 {% endblock %}

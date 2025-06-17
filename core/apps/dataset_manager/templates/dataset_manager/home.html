@@ -1,0 +1,322 @@
+{% extends "dataset_manager/base.html" %}
+
+{% block title %}Dashboard - Dataset Manager{% endblock %}
+
+{% block content %}
+<!-- Quick Stats Cards -->
+<div class="row g-4 mb-4">
+    <div class="col-xl-3 col-lg-6">
+        <div class="metric-card card-hover">
+            <div class="d-flex align-items-center">
+                <div class="flex-shrink-0">
+                    <div class="gradient-primary rounded-circle d-flex align-items-center justify-content-center" style="width: 60px; height: 60px;">
+                        <i class="fas fa-database fa-lg"></i>
+                    </div>
+                </div>
+                <div class="flex-grow-1 ms-3">
+                    <h3 class="mb-0">{{ stats.total_datasets }}</h3>
+                    <p class="text-muted mb-0">Datasety</p>
+                    <small class="text-success">
+                        <i class="fas fa-arrow-up me-1"></i>+{{ stats.datasets_this_month }} w tym miesiącu
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-xl-3 col-lg-6">
+        <div class="metric-card card-hover">
+            <div class="d-flex align-items-center">
+                <div class="flex-shrink-0">
+                    <div class="gradient-success rounded-circle d-flex align-items-center justify-content-center" style="width: 60px; height: 60px;">
+                        <i class="fas fa-sitemap fa-lg"></i>
+                    </div>
+                </div>
+                <div class="flex-grow-1 ms-3">
+                    <h3 class="mb-0">{{ stats.total_schemas }}</h3>
+                    <p class="text-muted mb-0">Schematy</p>
+                    <small class="text-info">
+                        <i class="fas fa-check-circle me-1"></i>{{ stats.active_schemas }} aktywnych
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-xl-3 col-lg-6">
+        <div class="metric-card card-hover">
+            <div class="d-flex align-items-center">
+                <div class="flex-shrink-0">
+                    <div class="gradient-info rounded-circle d-flex align-items-center justify-content-center" style="width: 60px; height: 60px;">
+                        <i class="fas fa-project-diagram fa-lg"></i>
+                    </div>
+                </div>
+                <div class="flex-grow-1 ms-3">
+                    <h3 class="mb-0">{{ stats.total_pipelines }}</h3>
+                    <p class="text-muted mb-0">Przepływy</p>
+                    <small class="text-warning">
+                        <i class="fas fa-play me-1"></i>{{ stats.running_executions }} aktywnych
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-xl-3 col-lg-6">
+        <div class="metric-card card-hover">
+            <div class="d-flex align-items-center">
+                <div class="flex-shrink-0">
+                    <div class="gradient-danger rounded-circle d-flex align-items-center justify-content-center" style="width: 60px; height: 60px;">
+                        <i class="fas fa-chart-line fa-lg"></i>
+                    </div>
+                </div>
+                <div class="flex-grow-1 ms-3">
+                    <h3 class="mb-0">{{ stats.total_samples|floatformat:0 }}{% if stats.total_samples > 1000 %}K{% endif %}</h3>
+                    <p class="text-muted mb-0">Próbki</p>
+                    <small class="text-muted">
+                        <i class="fas fa-hdd me-1"></i>{{ stats.total_size_gb|floatformat:1 }} GB
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="row g-4 mb-4">
+    <div class="col-12">
+        <div class="card card-hover">
+            <div class="card-body">
+                <h5 class="card-title mb-3">
+                    <i class="fas fa-rocket me-2 text-primary"></i>Szybkie Akcje
+                </h5>
+                <div class="row g-3">
+                    <div class="col-lg-3 col-md-6">
+                        <a href="{% url 'dataset_manager:dataset_upload' %}" class="btn btn-gradient w-100 d-flex align-items-center justify-content-center" style="height: 80px;">
+                            <div class="text-center">
+                                <i class="fas fa-upload fa-2x mb-2"></i>
+                                <div>Dodaj Dataset</div>
+                            </div>
+                        </a>
+                    </div>
+                    <div class="col-lg-3 col-md-6">
+                        <a href="{% url 'dataset_manager:schema_create' %}" class="btn btn-outline-primary w-100 d-flex align-items-center justify-content-center" style="height: 80px;">
+                            <div class="text-center">
+                                <i class="fas fa-plus-circle fa-2x mb-2"></i>
+                                <div>Nowy Schemat</div>
+                            </div>
+                        </a>
+                    </div>
+                    <div class="col-lg-3 col-md-6">
+                        <a href="{% url 'dataset_manager:pipeline_create' %}" class="btn btn-outline-success w-100 d-flex align-items-center justify-content-center" style="height: 80px;">
+                            <div class="text-center">
+                                <i class="fas fa-project-diagram fa-2x mb-2"></i>
+                                <div>Nowy Przepływ</div>
+                            </div>
+                        </a>
+                    </div>
+                    <div class="col-lg-3 col-md-6">
+                        <a href="{% url 'dataset_manager:execution_list' %}" class="btn btn-outline-info w-100 d-flex align-items-center justify-content-center" style="height: 80px;">
+                            <div class="text-center">
+                                <i class="fas fa-tasks fa-2x mb-2"></i>
+                                <div>Monitoruj</div>
+                            </div>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Activity -->
+<div class="row g-4">
+    <!-- Recent Datasets -->
+    <div class="col-lg-6">
+        <div class="card card-hover h-100">
+            <div class="card-header bg-transparent border-0 pb-0">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-folder me-2 text-primary"></i>Najnowsze Datasety
+                    </h5>
+                    <a href="{% url 'dataset_manager:dataset_list' %}" class="btn btn-sm btn-outline-primary">
+                        Zobacz wszystkie <i class="fas fa-arrow-right ms-1"></i>
+                    </a>
+                </div>
+            </div>
+            <div class="card-body">
+                {% for dataset in recent_datasets %}
+                <div class="d-flex align-items-center mb-3 {% if not forloop.last %}border-bottom pb-3{% endif %}">
+                    <div class="flex-shrink-0">
+                        <div class="bg-light rounded d-flex align-items-center justify-content-center" style="width: 40px; height: 40px;">
+                            <i class="fas fa-database text-muted"></i>
+                        </div>
+                    </div>
+                    <div class="flex-grow-1 ms-3">
+                        <h6 class="mb-1">
+                            <a href="{% url 'dataset_manager:dataset_detail' dataset.id %}" class="text-decoration-none">
+                                {{ dataset.name }}
+                            </a>
+                        </h6>
+                        <small class="text-muted">
+                            <i class="fas fa-clock me-1"></i>{{ dataset.created_at|timesince }} temu
+                            • <i class="fas fa-file me-1"></i>{{ dataset.sample_count }} próbek
+                        </small>
+                    </div>
+                    <div class="flex-shrink-0">
+                        <span class="status-badge bg-{{ dataset.status|lower }}">
+                            {{ dataset.get_status_display }}
+                        </span>
+                    </div>
+                </div>
+                {% empty %}
+                <div class="text-center py-4">
+                    <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
+                    <p class="text-muted mb-0">Brak datasetów</p>
+                    <a href="{% url 'dataset_manager:dataset_upload' %}" class="btn btn-primary btn-sm mt-2">
+                        Dodaj pierwszy dataset
+                    </a>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    
+    <!-- Recent Executions -->
+    <div class="col-lg-6">
+        <div class="card card-hover h-100">
+            <div class="card-header bg-transparent border-0 pb-0">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-play-circle me-2 text-success"></i>Ostatnie Wykonania
+                    </h5>
+                    <a href="{% url 'dataset_manager:execution_list' %}" class="btn btn-sm btn-outline-success">
+                        Zobacz wszystkie <i class="fas fa-arrow-right ms-1"></i>
+                    </a>
+                </div>
+            </div>
+            <div class="card-body">
+                {% for execution in recent_executions %}
+                <div class="d-flex align-items-center mb-3 {% if not forloop.last %}border-bottom pb-3{% endif %}">
+                    <div class="flex-shrink-0">
+                        <div class="position-relative">
+                            {% if execution.status == 'running' %}
+                            <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                            {% elif execution.status == 'completed' %}
+                            <i class="fas fa-check-circle fa-lg text-success"></i>
+                            {% elif execution.status == 'failed' %}
+                            <i class="fas fa-times-circle fa-lg text-danger"></i>
+                            {% else %}
+                            <i class="fas fa-clock fa-lg text-warning"></i>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="flex-grow-1 ms-3">
+                        <h6 class="mb-1">
+                            <a href="{% url 'dataset_manager:execution_detail' execution.id %}" class="text-decoration-none">
+                                {{ execution.pipeline.name }}
+                            </a>
+                        </h6>
+                        <small class="text-muted">
+                            <i class="fas fa-calendar me-1"></i>{{ execution.started_at|timesince }} temu
+                            {% if execution.duration %}
+                            • <i class="fas fa-stopwatch me-1"></i>{{ execution.duration }}
+                            {% endif %}
+                        </small>
+                    </div>
+                    <div class="flex-shrink-0">
+                        <span class="status-badge bg-{{ execution.status|lower }}">
+                            {{ execution.get_status_display }}
+                        </span>
+                    </div>
+                </div>
+                {% empty %}
+                <div class="text-center py-4">
+                    <i class="fas fa-play-circle fa-3x text-muted mb-3"></i>
+                    <p class="text-muted mb-0">Brak wykonań</p>
+                    <a href="{% url 'dataset_manager:pipeline_list' %}" class="btn btn-success btn-sm mt-2">
+                        Utwórz przepływ
+                    </a>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- System Health -->
+<div class="row g-4 mt-2">
+    <div class="col-12">
+        <div class="card card-hover">
+            <div class="card-header bg-transparent border-0">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-heartbeat me-2 text-danger"></i>Status Systemu
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <div class="text-center">
+                            <div class="mb-2">
+                                <i class="fas fa-server fa-2x text-success"></i>
+                            </div>
+                            <h6>Serwer</h6>
+                            <span class="badge bg-success">Online</span>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="text-center">
+                            <div class="mb-2">
+                                <i class="fas fa-database fa-2x text-success"></i>
+                            </div>
+                            <h6>Baza Danych</h6>
+                            <span class="badge bg-success">Połączona</span>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="text-center">
+                            <div class="mb-2">
+                                <i class="fas fa-hdd fa-2x {% if stats.disk_usage_percent > 80 %}text-warning{% else %}text-success{% endif %}"></i>
+                            </div>
+                            <h6>Dysk</h6>
+                            <span class="badge bg-{% if stats.disk_usage_percent > 80 %}warning{% else %}success{% endif %}">
+                                {{ stats.disk_usage_percent|floatformat:0 }}% użycia
+                            </span>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="text-center">
+                            <div class="mb-2">
+                                <i class="fas fa-tasks fa-2x {% if stats.running_executions > 0 %}text-primary{% else %}text-muted{% endif %}"></i>
+                            </div>
+                            <h6>Zadania</h6>
+                            <span class="badge bg-{% if stats.running_executions > 0 %}primary{% else %}secondary{% endif %}">
+                                {{ stats.running_executions }} aktywnych
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    // Auto-refresh running executions every 30 seconds
+    setInterval(function() {
+        if ($('.spinner-border').length > 0) {
+            location.reload();
+        }
+    }, 30000);
+    
+    // Initialize tooltips
+    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+});
+</script>
+{% endblock %}
