@@ -14,6 +14,15 @@ from django.conf import settings
 from django.utils import timezone
 from django.core.files.storage import default_storage
 import logging
+import torch
+import torch.nn as nn
+from datetime import datetime
+
+try:
+    from monai.losses import DiceLoss as MonaiDiceLoss
+    MONAI_AVAILABLE = True
+except ImportError:
+    MONAI_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -728,3 +737,627 @@ class PipelineExecutor:
         
         # TODO: Generate processed output
         self.execution.add_log_entry('info', 'Generating processed output')
+
+class MixedLoss(nn.Module):
+    """
+    Mixed loss function combining Dice loss with Binary Cross Entropy.
+    Allows configurable proportions for different loss components.
+    """
+    
+    def __init__(self, dice_weight=0.7, bce_weight=0.3, smooth=1e-6):
+        """
+        Initialize mixed loss function.
+        
+        Args:
+            dice_weight (float): Weight for Dice loss component (0-1)
+            bce_weight (float): Weight for BCE loss component (0-1)
+            smooth (float): Smoothing factor for numerical stability
+        """
+        super(MixedLoss, self).__init__()
+        
+        # Normalize weights
+        total_weight = dice_weight + bce_weight
+        self.dice_weight = dice_weight / total_weight
+        self.bce_weight = bce_weight / total_weight
+        self.smooth = smooth
+        
+        # Initialize loss functions
+        if MONAI_AVAILABLE:
+            self.dice_loss = MonaiDiceLoss(sigmoid=True, smooth_nr=smooth, smooth_dr=smooth)
+        else:
+            # Fallback to custom Dice implementation
+            self.dice_loss = self._custom_dice_loss
+            
+        self.bce_loss = nn.BCEWithLogitsLoss()
+        
+        logger.info(f"MixedLoss initialized: Dice={self.dice_weight:.2f}, BCE={self.bce_weight:.2f}")
+    
+    def _custom_dice_loss(self, predictions, targets):
+        """Custom Dice loss implementation for fallback."""
+        predictions = torch.sigmoid(predictions)
+        
+        # Flatten tensors
+        predictions_flat = predictions.view(-1)
+        targets_flat = targets.view(-1)
+        
+        # Calculate Dice coefficient
+        intersection = (predictions_flat * targets_flat).sum()
+        union = predictions_flat.sum() + targets_flat.sum()
+        
+        dice = (2. * intersection + self.smooth) / (union + self.smooth)
+        return 1 - dice
+    
+    def forward(self, predictions, targets):
+        """
+        Calculate mixed loss.
+        
+        Args:
+            predictions: Model predictions (logits)
+            targets: Ground truth targets
+            
+        Returns:
+            torch.Tensor: Combined loss value
+        """
+        # Calculate individual losses
+        dice_loss_val = self.dice_loss(predictions, targets)
+        bce_loss_val = self.bce_loss(predictions, targets)
+        
+        # Combine losses
+        mixed_loss = (self.dice_weight * dice_loss_val + 
+                     self.bce_weight * bce_loss_val)
+        
+        return mixed_loss
+    
+    def get_loss_components(self, predictions, targets):
+        """
+        Get individual loss components for monitoring.
+        
+        Returns:
+            dict: Dictionary with individual loss values
+        """
+        with torch.no_grad():
+            dice_loss_val = self.dice_loss(predictions, targets)
+            bce_loss_val = self.bce_loss(predictions, targets)
+            mixed_loss_val = (self.dice_weight * dice_loss_val + 
+                            self.bce_weight * bce_loss_val)
+            
+        return {
+            'dice_loss': dice_loss_val.item(),
+            'bce_loss': bce_loss_val.item(),
+            'mixed_loss': mixed_loss_val.item(),
+            'dice_weight': self.dice_weight,
+            'bce_weight': self.bce_weight
+        }
+
+
+class EnhancedModelCheckpoint:
+    """
+    Enhanced model checkpointing with automatic saving, versioning, and metadata.
+    """
+    
+    def __init__(self, checkpoint_dir, model_name, save_freq='best', 
+                 max_checkpoints=5, monitor_metric='val_loss', mode='min'):
+        """
+        Initialize enhanced checkpointing.
+        
+        Args:
+            checkpoint_dir (str): Directory to save checkpoints
+            model_name (str): Name prefix for checkpoint files
+            save_freq (str): Frequency of saving ('best', 'epoch', 'interval')
+            max_checkpoints (int): Maximum number of checkpoints to keep
+            monitor_metric (str): Metric to monitor for 'best' mode
+            mode (str): 'min' or 'max' for monitored metric
+        """
+        self.checkpoint_dir = Path(checkpoint_dir)
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.model_name = model_name
+        self.save_freq = save_freq
+        self.max_checkpoints = max_checkpoints
+        self.monitor_metric = monitor_metric
+        self.mode = mode
+        
+        # Tracking variables
+        self.best_metric = float('inf') if mode == 'min' else float('-inf')
+        self.checkpoint_history = []
+        
+        logger.info(f"EnhancedModelCheckpoint initialized: {checkpoint_dir}")
+        logger.info(f"Monitor: {monitor_metric} ({mode}), Max checkpoints: {max_checkpoints}")
+    
+    def save_checkpoint(self, model, optimizer, scheduler, epoch, metrics, 
+                       loss_function=None, training_args=None, model_metadata=None):
+        """
+        Save model checkpoint with comprehensive metadata.
+        
+        Args:
+            model: PyTorch model
+            optimizer: Optimizer instance
+            scheduler: Learning rate scheduler
+            epoch (int): Current epoch
+            metrics (dict): Training and validation metrics
+            loss_function: Loss function instance
+            training_args (dict): Training arguments
+            model_metadata (dict): Additional model metadata
+        """
+        current_metric = metrics.get(self.monitor_metric)
+        should_save = False
+        checkpoint_type = 'regular'
+        
+        # Determine if checkpoint should be saved
+        if self.save_freq == 'best':
+            if current_metric is not None:
+                if ((self.mode == 'min' and current_metric < self.best_metric) or
+                    (self.mode == 'max' and current_metric > self.best_metric)):
+                    self.best_metric = current_metric
+                    should_save = True
+                    checkpoint_type = 'best'
+        elif self.save_freq == 'epoch':
+            should_save = True
+        elif isinstance(self.save_freq, int) and epoch % self.save_freq == 0:
+            should_save = True
+        
+        if should_save:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Create checkpoint filename
+            if checkpoint_type == 'best':
+                checkpoint_name = f"{self.model_name}_best_epoch_{epoch+1:03d}_{timestamp}.pth"
+            else:
+                checkpoint_name = f"{self.model_name}_epoch_{epoch+1:03d}_{timestamp}.pth"
+            
+            checkpoint_path = self.checkpoint_dir / checkpoint_name
+            
+            # Prepare comprehensive checkpoint data
+            checkpoint_data = {
+                # Model and training state
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
+                
+                # Training progress
+                'epoch': epoch + 1,
+                'metrics': metrics,
+                'best_metric': self.best_metric,
+                'monitor_metric': self.monitor_metric,
+                
+                # Model metadata
+                'model_metadata': model_metadata or {},
+                'training_args': training_args or {},
+                
+                # Loss function info
+                'loss_function_class': loss_function.__class__.__name__ if loss_function else None,
+                'loss_function_config': getattr(loss_function, 'get_config', lambda: {})(),
+                
+                # Checkpoint metadata
+                'checkpoint_type': checkpoint_type,
+                'timestamp': timestamp,
+                'pytorch_version': torch.__version__,
+            }
+            
+            # Add mixed loss specific information
+            if hasattr(loss_function, 'get_loss_components'):
+                checkpoint_data['loss_components'] = {
+                    'dice_weight': loss_function.dice_weight,
+                    'bce_weight': loss_function.bce_weight,
+                    'smooth': loss_function.smooth
+                }
+            
+            # Save checkpoint
+            torch.save(checkpoint_data, checkpoint_path)
+            
+            # Update checkpoint history
+            self.checkpoint_history.append({
+                'epoch': epoch + 1,
+                'path': str(checkpoint_path),
+                'metric_value': current_metric,
+                'checkpoint_type': checkpoint_type,
+                'timestamp': timestamp
+            })
+            
+            # Clean up old checkpoints
+            self._cleanup_checkpoints()
+            
+            logger.info(f"Checkpoint saved: {checkpoint_name}")
+            logger.info(f"Metric ({self.monitor_metric}): {current_metric:.6f}")
+            
+            return checkpoint_path
+        
+        return None
+    
+    def _cleanup_checkpoints(self):
+        """Remove old checkpoints beyond max_checkpoints limit."""
+        if len(self.checkpoint_history) > self.max_checkpoints:
+            # Sort by epoch (keep most recent)
+            sorted_checkpoints = sorted(self.checkpoint_history, 
+                                      key=lambda x: x['epoch'], reverse=True)
+            
+            # Keep best checkpoint and recent ones
+            to_remove = []
+            best_checkpoints = [cp for cp in sorted_checkpoints 
+                              if cp['checkpoint_type'] == 'best']
+            regular_checkpoints = [cp for cp in sorted_checkpoints 
+                                 if cp['checkpoint_type'] == 'regular']
+            
+            # Keep all best checkpoints and max_checkpoints-1 regular ones
+            if len(regular_checkpoints) > self.max_checkpoints - len(best_checkpoints):
+                to_remove = regular_checkpoints[self.max_checkpoints - len(best_checkpoints):]
+            
+            # Remove old checkpoint files
+            for checkpoint in to_remove:
+                try:
+                    checkpoint_path = Path(checkpoint['path'])
+                    if checkpoint_path.exists():
+                        checkpoint_path.unlink()
+                        logger.info(f"Removed old checkpoint: {checkpoint_path.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove checkpoint {checkpoint['path']}: {e}")
+                
+                # Remove from history
+                self.checkpoint_history.remove(checkpoint)
+    
+    def load_checkpoint(self, checkpoint_path, model, optimizer=None, scheduler=None):
+        """
+        Load checkpoint and restore training state.
+        
+        Args:
+            checkpoint_path (str): Path to checkpoint file
+            model: PyTorch model to load state into
+            optimizer: Optimizer to load state into (optional)
+            scheduler: Scheduler to load state into (optional)
+            
+        Returns:
+            dict: Checkpoint metadata and metrics
+        """
+        checkpoint_path = Path(checkpoint_path)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        
+        # Load checkpoint
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        
+        # Restore model state
+        model.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Restore optimizer state
+        if optimizer and 'optimizer_state_dict' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        # Restore scheduler state
+        if scheduler and 'scheduler_state_dict' in checkpoint and checkpoint['scheduler_state_dict']:
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        # Update tracking variables
+        self.best_metric = checkpoint.get('best_metric', self.best_metric)
+        
+        logger.info(f"Checkpoint loaded: {checkpoint_path.name}")
+        logger.info(f"Epoch: {checkpoint.get('epoch', 'Unknown')}")
+        logger.info(f"Best metric: {self.best_metric:.6f}")
+        
+        return {
+            'epoch': checkpoint.get('epoch', 0),
+            'metrics': checkpoint.get('metrics', {}),
+            'best_metric': checkpoint.get('best_metric'),
+            'model_metadata': checkpoint.get('model_metadata', {}),
+            'training_args': checkpoint.get('training_args', {}),
+            'loss_components': checkpoint.get('loss_components', {})
+        }
+    
+    def get_best_checkpoint(self):
+        """Get path to best checkpoint."""
+        best_checkpoints = [cp for cp in self.checkpoint_history 
+                          if cp['checkpoint_type'] == 'best']
+        if best_checkpoints:
+            return best_checkpoints[-1]['path']  # Most recent best
+        return None
+    
+    def get_checkpoint_summary(self):
+        """Get summary of all checkpoints."""
+        summary = {
+            'total_checkpoints': len(self.checkpoint_history),
+            'best_metric': self.best_metric,
+            'monitor_metric': self.monitor_metric,
+            'checkpoints': self.checkpoint_history.copy()
+        }
+        return summary
+
+
+def create_loss_function(loss_type='dice', **kwargs):
+    """
+    Factory function to create loss functions with different configurations.
+    
+    Args:
+        loss_type (str): Type of loss ('dice', 'bce', 'mixed', 'crossentropy')
+        **kwargs: Additional arguments for loss configuration
+        
+    Returns:
+        torch.nn.Module: Configured loss function
+    """
+    if loss_type == 'mixed':
+        dice_weight = kwargs.get('dice_weight', 0.7)
+        bce_weight = kwargs.get('bce_weight', 0.3)
+        smooth = kwargs.get('smooth', 1e-6)
+        return MixedLoss(dice_weight=dice_weight, bce_weight=bce_weight, smooth=smooth)
+    
+    elif loss_type == 'dice':
+        if MONAI_AVAILABLE:
+            sigmoid = kwargs.get('sigmoid', True)
+            softmax = kwargs.get('softmax', False)
+            smooth = kwargs.get('smooth', 1e-6)
+            return MonaiDiceLoss(sigmoid=sigmoid, softmax=softmax, 
+                               smooth_nr=smooth, smooth_dr=smooth)
+        else:
+            raise ImportError("MONAI not available for Dice loss")
+    
+    elif loss_type == 'bce':
+        return nn.BCEWithLogitsLoss()
+    
+    elif loss_type == 'crossentropy':
+        return nn.CrossEntropyLoss()
+    
+    else:
+        raise ValueError(f"Unknown loss type: {loss_type}")
+
+
+# =============================================================================
+# ENHANCED TRAINING FEATURES INTEGRATION EXAMPLES
+# =============================================================================
+
+"""
+USAGE EXAMPLES FOR ENHANCED TRAINING FEATURES
+
+1. MIXED LOSS FUNCTION:
+   
+   # Basic usage with default 70% Dice, 30% BCE
+   loss_function = MixedLoss()
+   
+   # Custom proportions - 80% Dice, 20% BCE
+   loss_function = MixedLoss(dice_weight=0.8, bce_weight=0.2)
+   
+   # Using factory function
+   loss_function = create_loss_function('mixed', dice_weight=0.6, bce_weight=0.4)
+   
+   # In training loop
+   for batch in dataloader:
+       predictions = model(inputs)
+       loss = loss_function(predictions, targets)
+       
+       # Optional: Log individual components
+       components = loss_function.get_loss_components(predictions, targets)
+       print(f"Dice: {components['dice_loss']:.4f}, BCE: {components['bce_loss']:.4f}")
+
+2. ENHANCED CHECKPOINTING:
+   
+   # Setup checkpoint manager
+   checkpoint_manager = EnhancedModelCheckpoint(
+       checkpoint_dir='./checkpoints',
+       model_name='unet_model',
+       save_freq='best',           # Save only best models
+       max_checkpoints=5,          # Keep 5 checkpoints
+       monitor_metric='val_dice',  # Monitor validation Dice score
+       mode='max'                  # Higher is better for Dice
+   )
+   
+   # In training loop
+   for epoch in range(num_epochs):
+       # ... training code ...
+       
+       metrics = {
+           'train_loss': train_loss,
+           'val_loss': val_loss,
+           'val_dice': val_dice,
+           'train_dice': train_dice
+       }
+       
+       # Save checkpoint if criteria met
+       checkpoint_path = checkpoint_manager.save_checkpoint(
+           model=model,
+           optimizer=optimizer,
+           scheduler=scheduler,
+           epoch=epoch,
+           metrics=metrics,
+           loss_function=loss_function,
+           training_args=training_args,
+           model_metadata=model_metadata
+       )
+       
+       if checkpoint_path:
+           print(f"Saved checkpoint: {checkpoint_path}")
+   
+   # Load best checkpoint
+   best_path = checkpoint_manager.get_best_checkpoint()
+   if best_path:
+       checkpoint_data = checkpoint_manager.load_checkpoint(
+           best_path, model, optimizer, scheduler
+       )
+
+3. COMPLETE INTEGRATION:
+   
+   # Setup everything at once
+   loss_function, checkpoint_manager, config = TrainingHelper.setup_training_with_enhancements(
+       model_dir='./models/experiment_1',
+       model_name='segmentation_model',
+       loss_config={
+           'type': 'mixed',
+           'dice_weight': 0.75,
+           'bce_weight': 0.25,
+           'smooth': 1e-6
+       },
+       checkpoint_config={
+           'save_freq': 'best',
+           'max_checkpoints': 10,
+           'monitor_metric': 'val_dice',
+           'mode': 'max'
+       }
+   )
+   
+   # Training loop with enhanced features
+   for epoch in range(num_epochs):
+       model.train()
+       train_loss = 0.0
+       train_dice = 0.0
+       
+       for batch_idx, (inputs, targets) in enumerate(train_loader):
+           optimizer.zero_grad()
+           
+           predictions = model(inputs)
+           loss = loss_function(predictions, targets)
+           
+           loss.backward()
+           optimizer.step()
+           
+           train_loss += loss.item()
+           
+           # Log loss components every N batches
+           if batch_idx % 10 == 0:
+               TrainingHelper.log_loss_components(
+                   loss_function, predictions, targets
+               )
+       
+       # Validation
+       model.eval()
+       val_loss = 0.0
+       val_dice = 0.0
+       # ... validation code ...
+       
+       # Update scheduler
+       if scheduler:
+           scheduler.step()
+       
+       # Save checkpoint
+       metrics = {
+           'train_loss': train_loss / len(train_loader),
+           'val_loss': val_loss / len(val_loader),
+           'train_dice': train_dice / len(train_loader),
+           'val_dice': val_dice / len(val_loader)
+       }
+       
+       checkpoint_manager.save_checkpoint(
+           model=model,
+           optimizer=optimizer,
+           scheduler=scheduler,
+           epoch=epoch,
+           metrics=metrics,
+           loss_function=loss_function,
+           training_args={'epochs': num_epochs, 'batch_size': batch_size},
+           model_metadata={'architecture': 'UNet', 'input_channels': 3}
+       )
+
+INTEGRATION WITH EXISTING TRAINING SCRIPT:
+
+To integrate with ml/training/train.py, modify the loss function setup section:
+
+# Replace existing loss function setup (around line 2300)
+if args.loss_type == 'mixed':
+    loss_function = create_loss_function(
+        'mixed',
+        dice_weight=args.dice_weight,
+        bce_weight=args.bce_weight
+    )
+elif args.loss_type == 'dice':
+    loss_function = create_loss_function('dice', sigmoid=True)
+elif args.loss_type == 'bce':
+    loss_function = create_loss_function('bce')
+else:
+    # Default to mixed loss
+    loss_function = create_loss_function('mixed')
+
+# Setup enhanced checkpointing
+checkpoint_manager = EnhancedModelCheckpoint(
+    checkpoint_dir=os.path.join(model_dir, 'checkpoints'),
+    model_name=f'model_{args.model_id}',
+    save_freq='best',
+    max_checkpoints=args.max_checkpoints,
+    monitor_metric='val_dice',
+    mode='max'
+)
+
+Add these arguments to the argument parser:
+parser.add_argument('--loss-type', default='mixed', choices=['dice', 'bce', 'mixed'])
+parser.add_argument('--dice-weight', type=float, default=0.7)
+parser.add_argument('--bce-weight', type=float, default=0.3)
+parser.add_argument('--max-checkpoints', type=int, default=5)
+"""
+
+# Enhanced Training Helper - Integration class
+class TrainingHelper:
+    """
+    Enhanced training helper with checkpoint and loss management.
+    Provides easy integration for GUI training.
+    """
+    
+    def __init__(self, model_dir: str, model_name: str):
+        self.model_dir = model_dir
+        self.model_name = model_name
+        self.loss_function = None
+        self.checkpoint_manager = None
+    
+    def setup_enhanced_training(self, loss_config=None, checkpoint_config=None):
+        """Setup enhanced training with loss and checkpoint management."""
+        try:
+            from ml.utils.loss_manager import LossManager
+            from ml.utils.checkpoint_manager import CheckpointManager
+            
+            # Setup loss function
+            if not loss_config:
+                loss_config = {
+                    "type": "combined",
+                    "dice_weight": 0.7,
+                    "bce_weight": 0.3
+                }
+            
+            self.loss_function = LossManager.create_loss_function(loss_config)
+            
+            # Setup checkpoint manager
+            if not checkpoint_config:
+                checkpoint_config = {
+                    "save_strategy": "best",
+                    "max_checkpoints": 5,
+                    "monitor_metric": "val_dice",
+                    "mode": "max"
+                }
+            
+            self.checkpoint_manager = CheckpointManager(
+                checkpoint_dir=f"{self.model_dir}/checkpoints",
+                model_name=self.model_name,
+                **checkpoint_config
+            )
+            
+            return True
+        except ImportError:
+            return False
+    
+    def get_loss_config_from_form_data(self, form_data):
+        """Convert form data to loss configuration."""
+        loss_type = form_data.get("loss_function", "combined")
+        
+        if loss_type == "combined":
+            return {
+                "type": "combined",
+                "dice_weight": form_data.get("dice_weight", 0.7),
+                "bce_weight": form_data.get("bce_weight", 0.3)
+            }
+        else:
+            return {"type": loss_type}
+    
+    def get_checkpoint_config_from_form_data(self, form_data):
+        """Convert form data to checkpoint configuration."""
+        return {
+            "save_strategy": form_data.get("checkpoint_strategy", "best"),
+            "max_checkpoints": form_data.get("max_checkpoints", 5),
+            "monitor_metric": form_data.get("monitor_metric", "val_dice"),
+            "mode": "max" if form_data.get("monitor_metric", "val_dice") in ["val_dice", "val_accuracy"] else "min"
+        }
+
+def create_enhanced_training_helper(model_dir: str, model_name: str, form_data: dict = None):
+    """Create and setup enhanced training helper from form data."""
+    helper = TrainingHelper(model_dir, model_name)
+    
+    if form_data and form_data.get("use_enhanced_training", True):
+        loss_config = helper.get_loss_config_from_form_data(form_data)
+        checkpoint_config = helper.get_checkpoint_config_from_form_data(form_data)
+        
+        if helper.setup_enhanced_training(loss_config, checkpoint_config):
+            return helper
+    
+    return None
+

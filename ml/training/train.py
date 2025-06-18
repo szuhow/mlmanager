@@ -105,6 +105,18 @@ from monai.transforms import Compose, LoadImaged, ScaleIntensityd, ToTensord, Ra
 from monai.losses import DiceLoss as MonaiDiceLoss
 from monai.metrics import DiceMetric
 
+# Import enhanced training utilities
+try:
+    from core.apps.dataset_manager.utils import (
+        MixedLoss, EnhancedModelCheckpoint, create_loss_function, TrainingHelper
+    )
+    ENHANCED_UTILS_AVAILABLE = True
+    logger.info("[ENHANCED] Enhanced training utilities available")
+except ImportError as e:
+    ENHANCED_UTILS_AVAILABLE = False
+    logger.warning(f"[ENHANCED] Enhanced training utilities not available: {e}")
+    logger.warning("[ENHANCED] Will use standard loss functions and checkpointing")
+
 # Global logger for architecture functions
 logger = logging.getLogger(__name__)
 
@@ -1529,6 +1541,32 @@ def parse_args():
     parser.add_argument('--lr-gamma', type=float, default=0.1, help='Gamma for step/exponential scheduler')
     parser.add_argument('--min-lr', type=float, default=1e-7, help='Minimum learning rate threshold')
     
+    # Loss Function parameters
+    parser.add_argument('--loss-type', type=str, default='mixed', 
+                       choices=['dice', 'bce', 'mixed', 'crossentropy'],
+                       help='Type of loss function to use')
+    parser.add_argument('--dice-weight', type=float, default=0.7,
+                       help='Weight for Dice loss in mixed loss (0.0-1.0)')
+    parser.add_argument('--bce-weight', type=float, default=0.3,
+                       help='Weight for BCE loss in mixed loss (0.0-1.0)')
+    parser.add_argument('--loss-smooth', type=float, default=1e-6,
+                       help='Smoothing factor for loss functions')
+    
+    # Enhanced Checkpointing parameters
+    parser.add_argument('--checkpoint-freq', type=str, default='best',
+                       choices=['best', 'epoch', 'interval'],
+                       help='Frequency of saving checkpoints')
+    parser.add_argument('--checkpoint-interval', type=int, default=5,
+                       help='Interval for saving checkpoints when using interval mode')
+    parser.add_argument('--max-checkpoints', type=int, default=5,
+                       help='Maximum number of checkpoints to keep')
+    parser.add_argument('--checkpoint-metric', type=str, default='val_dice',
+                       choices=['val_dice', 'val_loss', 'train_dice', 'train_loss'],
+                       help='Metric to monitor for best checkpoint selection')
+    parser.add_argument('--checkpoint-mode', type=str, default='max',
+                       choices=['min', 'max'],
+                       help='Mode for checkpoint metric (min for loss, max for accuracy/dice)')
+    
     # Early Stopping parameters
     parser.add_argument('--use-early-stopping', action='store_true', help='Enable early stopping during training')
     parser.add_argument('--early-stopping-patience', type=int, default=10, help='Number of epochs to wait for improvement before stopping')
@@ -1537,6 +1575,26 @@ def parse_args():
     parser.add_argument('--early-stopping-metric', type=str, default='val_dice', 
                        choices=['val_dice', 'val_loss', 'val_accuracy'],
                        help='Metric to monitor for early stopping')
+    
+    # Enhanced Training parameters
+    parser.add_argument('--loss-function', type=str, default='combined',
+                       choices=['bce', 'dice', 'combined', 'focal', 'focal_segmentation', 'balanced_segmentation', 'dice_focused', 'jaccard_based'],
+                       help='Loss function type for training')
+    parser.add_argument('--use-loss-scheduling', action='store_true',
+                       help='Enable dynamic loss weight scheduling during training')
+    parser.add_argument('--loss-scheduler-type', type=str, default='adaptive',
+                       choices=['adaptive', 'cosine', 'step', 'performance'],
+                       help='Type of loss weight scheduler to use')
+    parser.add_argument('--checkpoint-strategy', type=str, default='best',
+                       choices=['best', 'epoch', 'interval', 'all', 'adaptive', 'performance_based'],
+                       help='Checkpoint saving strategy')
+    parser.add_argument('--monitor-metric', type=str, default='val_dice',
+                       choices=['val_dice', 'val_loss', 'val_accuracy', 'val_iou'],
+                       help='Metric to monitor for best model selection')
+    parser.add_argument('--use-enhanced-training', action='store_true', default=True,
+                       help='Enable enhanced training features (checkpointing, loss scheduling)')
+    parser.add_argument('--use-mixed-precision', action='store_true',
+                       help='Enable mixed precision training for performance')
     
     # Prediction parameters
     parser.add_argument('--model-path', type=str, help='Path to trained model weights')
@@ -1705,7 +1763,7 @@ def detect_num_classes_from_masks(dataset_loaders, dataset_type="auto", max_samp
         max_channels = max(mask_channels) if mask_channels else 1
         
         logger.info(f"[CLASS DETECTION] Analyzed {samples_checked} samples")
-        logger.info(f"[CLASS DETECTION] Unique mask values: {unique_values}")
+        # logger.info(f"[CLASS DETECTION] Unique mask values: {unique_values}")
         logger.info(f"[CLASS DETECTION] Max channels found: {max_channels}")
         logger.info(f"[CLASS DETECTION] Typical mask shape: {mask_shapes[0] if mask_shapes else 'Unknown'}")
         
@@ -2156,7 +2214,7 @@ def train_model(args):
                 
                 # Check for unique values in masks to confirm binary nature
                 unique_labels = torch.unique(labels)
-                logger.info(f"[DATASET]   Unique mask values: {unique_labels.cpu().numpy()}")
+                # logger.info(f"[DATASET]   Unique mask values: {unique_labels.cpu().numpy()}")
                 
                 fig, axes = plt.subplots(2, min(4, images.shape[0]), figsize=(12, 6))
                 for i in range(min(4, images.shape[0])):
@@ -2298,19 +2356,55 @@ def train_model(args):
                 logger.warning(f"[MODEL VALIDATION] ⚠️  Model output channels ({model_output_channels}) don't match expected ({expected_channels})")
                 logger.warning(f"[MODEL VALIDATION] This may cause training issues - check model configuration")
 
-        # Configure loss function based on detected class information
-        if class_info and class_info.get('task_type') == 'artery_classification':
-            # Classification task (ARCADEArteryClassification)
-            logger.info(f"[LOSS CONFIG] Using classification loss for artery classification (2 classes)")
-            loss_function = torch.nn.CrossEntropyLoss()
-        elif class_info and class_info['class_type'] == 'semantic_onehot' and class_info['max_channels'] > 1:
-            # Multi-class semantic segmentation with one-hot encoding
-            logger.info(f"[LOSS CONFIG] Using multi-class loss for {class_info['max_channels']} classes")
-            loss_function = MonaiDiceLoss(sigmoid=False, softmax=True)  # Use softmax for multi-class
+        # Configure loss function based on detected class information and args
+        if ENHANCED_UTILS_AVAILABLE:
+            logger.info(f"[LOSS CONFIG] Using enhanced loss configuration")
+            
+            # Determine loss type based on task and arguments
+            if class_info and class_info.get('task_type') == 'artery_classification':
+                # Classification task
+                logger.info(f"[LOSS CONFIG] Using classification loss for artery classification")
+                loss_function = create_loss_function('crossentropy')
+            elif args.loss_type == 'mixed':
+                # Mixed Dice + BCE loss
+                logger.info(f"[LOSS CONFIG] Using mixed loss: {args.dice_weight:.1%} Dice + {args.bce_weight:.1%} BCE")
+                loss_function = create_loss_function(
+                    'mixed',
+                    dice_weight=args.dice_weight,
+                    bce_weight=args.bce_weight,
+                    smooth=args.loss_smooth
+                )
+            elif args.loss_type == 'dice':
+                # Pure Dice loss
+                logger.info(f"[LOSS CONFIG] Using Dice loss")
+                if class_info and class_info['class_type'] == 'semantic_onehot' and class_info['max_channels'] > 1:
+                    loss_function = create_loss_function('dice', sigmoid=False, softmax=True)
+                else:
+                    loss_function = create_loss_function('dice', sigmoid=True, smooth=args.loss_smooth)
+            elif args.loss_type == 'bce':
+                # Pure BCE loss
+                logger.info(f"[LOSS CONFIG] Using Binary Cross Entropy loss")
+                loss_function = create_loss_function('bce')
+            else:
+                # Default to mixed loss
+                logger.info(f"[LOSS CONFIG] Defaulting to mixed loss: 70% Dice + 30% BCE")
+                loss_function = create_loss_function('mixed')
         else:
-            # Binary segmentation (default)
-            logger.info(f"[LOSS CONFIG] Using binary segmentation loss")
-            loss_function = MonaiDiceLoss(sigmoid=True)
+            # Fallback to original configuration if enhanced utils not available
+            logger.info(f"[LOSS CONFIG] Using standard loss configuration (enhanced utils not available)")
+            
+            if class_info and class_info.get('task_type') == 'artery_classification':
+                # Classification task (ARCADEArteryClassification)
+                logger.info(f"[LOSS CONFIG] Using classification loss for artery classification (2 classes)")
+                loss_function = torch.nn.CrossEntropyLoss()
+            elif class_info and class_info['class_type'] == 'semantic_onehot' and class_info['max_channels'] > 1:
+                # Multi-class semantic segmentation with one-hot encoding
+                logger.info(f"[LOSS CONFIG] Using multi-class loss for {class_info['max_channels']} classes")
+                loss_function = MonaiDiceLoss(sigmoid=False, softmax=True)  # Use softmax for multi-class
+            else:
+                # Binary segmentation (default)
+                logger.info(f"[LOSS CONFIG] Using binary segmentation loss")
+                loss_function = MonaiDiceLoss(sigmoid=True)
         
         # Create optimizer based on args.optimizer choice
         optimizer = create_optimizer(model, args)
@@ -2492,7 +2586,7 @@ def train_model(args):
                         # Check for unique values in training masks with intelligent binary detection
                         unique_train_labels = torch.unique(labels)
                         unique_values_array = unique_train_labels.cpu().numpy()
-                        logger.info(f"[TRAIN BATCH]     Raw unique values: {unique_values_array}")
+                        # logger.info(f"[TRAIN BATCH]     Raw unique values: {unique_values_array}")
                         
                         # Intelligent binary segmentation detection
                         if len(unique_train_labels) == 2:
@@ -2731,7 +2825,7 @@ def train_model(args):
                     # Check for unique values in validation masks with intelligent binary detection
                     unique_val_labels = torch.unique(val_labels)
                     unique_val_values_array = unique_val_labels.cpu().numpy()
-                    logger.info(f"[VAL DATA]     Raw unique values: {unique_val_values_array}")
+                    # logger.info(f"[VAL DATA]     Raw unique values: {unique_val_values_array}")
                     
                     # Intelligent binary segmentation detection for validation
                     if len(unique_val_labels) == 2:

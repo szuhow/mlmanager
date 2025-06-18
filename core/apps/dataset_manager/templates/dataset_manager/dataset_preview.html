@@ -1,0 +1,313 @@
+{% extends "dataset_manager/base.html" %}
+{% load static %}
+
+{% block title %}{{ dataset.name }} - Preview - Dataset Manager{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        <i class="fas fa-search"></i>
+                        Dataset Preview: {{ dataset.name }}
+                    </h3>
+                    <div class="card-tools">
+                        <a href="{% url 'dataset_manager:dataset_detail' dataset_id=dataset.id %}" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left"></i> Back to Dataset
+                        </a>
+                        <a href="{% url 'dataset_manager:dataset_samples' dataset_id=dataset.id %}" class="btn btn-primary">
+                            <i class="fas fa-images"></i> View All Samples
+                        </a>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <!-- Dataset Overview -->
+                    <div class="row mb-4">
+                        <div class="col-md-8">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h5>Dataset Overview</h5>
+                                </div>
+                                <div class="card-body">
+                                    <dl class="row">
+                                        <dt class="col-sm-3">Name:</dt>
+                                        <dd class="col-sm-9">{{ dataset.name }}</dd>
+                                        
+                                        <dt class="col-sm-3">Format:</dt>
+                                        <dd class="col-sm-9">{{ dataset.get_format_type_display }}</dd>
+                                        
+                                        <dt class="col-sm-3">Total Samples:</dt>
+                                        <dd class="col-sm-9">{{ dataset.total_samples|default:"0" }}</dd>
+                                        
+                                        <dt class="col-sm-3">Status:</dt>
+                                        <dd class="col-sm-9">
+                                            <span class="badge badge-{{ dataset.status|default:'secondary' }}">
+                                                {{ dataset.get_status_display }}
+                                            </span>
+                                        </dd>
+                                        
+                                        <dt class="col-sm-3">File Size:</dt>
+                                        <dd class="col-sm-9">
+                                            {% if dataset.file_size_bytes %}
+                                                {{ dataset.file_size_bytes|filesizeformat }}
+                                            {% else %}
+                                                Unknown
+                                            {% endif %}
+                                        </dd>
+                                    </dl>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-4">
+                            <!-- Quick Stats -->
+                            <div class="card">
+                                <div class="card-header">
+                                    <h5>Quick Statistics</h5>
+                                </div>
+                                <div class="card-body">
+                                    <div class="info-box bg-info mb-2">
+                                        <span class="info-box-icon"><i class="fas fa-images"></i></span>
+                                        <div class="info-box-content">
+                                            <span class="info-box-text">Images</span>
+                                            <span class="info-box-number">{{ image_count|default:"0" }}</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="info-box bg-success mb-2">
+                                        <span class="info-box-icon"><i class="fas fa-tags"></i></span>
+                                        <div class="info-box-content">
+                                            <span class="info-box-text">Annotated</span>
+                                            <span class="info-box-number">{{ annotated_count|default:"0" }}</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="info-box bg-warning mb-2">
+                                        <span class="info-box-icon"><i class="fas fa-list"></i></span>
+                                        <div class="info-box-content">
+                                            <span class="info-box-text">Classes</span>
+                                            <span class="info-box-number">{{ class_count|default:"0" }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Class Distribution -->
+                    {% if class_distribution %}
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h5>Class Distribution</h5>
+                                </div>
+                                <div class="card-body">
+                                    <div class="row">
+                                        {% for class_name, count in class_distribution.items %}
+                                        <div class="col-md-3 col-sm-6 mb-2">
+                                            <div class="class-item">
+                                                <span class="badge badge-primary">{{ class_name }}</span>
+                                                <span class="text-muted ml-2">{{ count }} samples</span>
+                                            </div>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- Sample Preview -->
+                    {% if preview_samples %}
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h5>Sample Preview (First {{ preview_samples|length }} samples)</h5>
+                                </div>
+                                <div class="card-body">
+                                    <div class="row">
+                                        {% for sample in preview_samples %}
+                                        <div class="col-md-3 col-sm-6 mb-3">
+                                            <div class="card sample-preview-card">
+                                                <div class="card-body p-2">
+                                                    {% if 'image' in sample.file_type %}
+                                                    <div class="sample-image-container">
+                                                        <img src="{{ sample.file_path }}" 
+                                                             alt="{{ sample.file_name }}" 
+                                                             class="img-fluid rounded"
+                                                             style="max-height: 120px; width: 100%; object-fit: cover;"
+                                                             onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                                                        <div class="no-image-placeholder text-center p-3" style="display: none;">
+                                                            <i class="fas fa-image fa-2x text-muted"></i>
+                                                            <p class="text-muted mt-1">No preview</p>
+                                                        </div>
+                                                    </div>
+                                                    {% else %}
+                                                    <div class="file-preview text-center p-3">
+                                                        <i class="fas fa-file-alt fa-2x text-muted"></i>
+                                                        <p class="text-muted mt-1">{{ sample.file_type }}</p>
+                                                    </div>
+                                                    {% endif %}
+                                                    
+                                                    <div class="sample-info mt-2">
+                                                        <small class="text-muted">
+                                                            <strong>{{ sample.file_name|truncatechars:15 }}</strong><br>
+                                                            {% if sample.sample_class %}
+                                                            <span class="badge badge-sm badge-secondary">{{ sample.sample_class }}</span><br>
+                                                            {% endif %}
+                                                            {{ sample.file_size_bytes|filesizeformat }}
+                                                        </small>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- Dataset Structure -->
+                    {% if detected_structure %}
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h5>Detected Structure</h5>
+                                </div>
+                                <div class="card-body">
+                                    <pre class="bg-light p-3 rounded"><code>{{ detected_structure|pprint }}</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- File Types -->
+                    {% if file_types %}
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h5>File Types</h5>
+                                </div>
+                                <div class="card-body">
+                                    <div class="row">
+                                        {% for file_type, count in file_types.items %}
+                                        <div class="col-md-2 col-sm-4 col-6 mb-2">
+                                            <div class="text-center">
+                                                <div class="file-type-icon">
+                                                    {% if 'image' in file_type %}
+                                                        <i class="fas fa-image fa-2x text-info"></i>
+                                                    {% elif 'json' in file_type %}
+                                                        <i class="fas fa-file-code fa-2x text-warning"></i>
+                                                    {% elif 'xml' in file_type %}
+                                                        <i class="fas fa-file-code fa-2x text-success"></i>
+                                                    {% else %}
+                                                        <i class="fas fa-file fa-2x text-secondary"></i>
+                                                    {% endif %}
+                                                </div>
+                                                <div class="file-type-info mt-1">
+                                                    <small class="font-weight-bold">{{ file_type }}</small><br>
+                                                    <small class="text-muted">{{ count }} files</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- No Data Message -->
+                    {% if not preview_samples and dataset.status == 'ready' %}
+                    <div class="text-center py-5">
+                        <i class="fas fa-search fa-5x text-muted mb-3"></i>
+                        <h4 class="text-muted">No Preview Available</h4>
+                        <p class="text-muted">This dataset doesn't have any previewable samples.</p>
+                        <a href="{% url 'dataset_manager:dataset_samples' dataset_id=dataset.id %}" class="btn btn-primary">
+                            <i class="fas fa-list"></i> View Raw Samples
+                        </a>
+                    </div>
+                    {% elif dataset.status != 'ready' %}
+                    <div class="text-center py-5">
+                        <i class="fas fa-spinner fa-spin fa-5x text-muted mb-3"></i>
+                        <h4 class="text-muted">Processing Dataset</h4>
+                        <p class="text-muted">Dataset is being processed. Preview will be available once processing is complete.</p>
+                        <div class="progress mt-3" style="width: 50%; margin: 0 auto;">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                 role="progressbar" style="width: {{ dataset.processing_progress|default:0 }}%">
+                                {{ dataset.processing_progress|default:0 }}%
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.info-box {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border-radius: 5px;
+    color: white;
+}
+
+.info-box-icon {
+    font-size: 1.5rem;
+    margin-right: 10px;
+}
+
+.info-box-content {
+    flex: 1;
+}
+
+.info-box-text {
+    display: block;
+    font-size: 0.8rem;
+    opacity: 0.8;
+}
+
+.info-box-number {
+    display: block;
+    font-size: 1.2rem;
+    font-weight: bold;
+}
+
+.sample-preview-card {
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.sample-preview-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.class-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+}
+
+.file-type-icon {
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+</style>
+{% endblock %}

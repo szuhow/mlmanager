@@ -52,6 +52,7 @@ urlpatterns = [
     # AJAX/API endpoints
     path('ajax/validate-schema/', views.validate_schema_ajax, name='validate_schema_ajax'),
     path('ajax/process-upload/', views.process_upload_ajax, name='process_upload_ajax'),
+    path('ajax/analyze-dataset/', views.analyze_dataset_ajax, name='analyze_dataset_ajax'),
     path('ajax/pipeline-nodes/', views.pipeline_nodes_ajax, name='pipeline_nodes_ajax'),
     path('ajax/execution-status/', views.execution_status_ajax, name='execution_status_ajax'),
     

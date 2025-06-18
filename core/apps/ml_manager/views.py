@@ -12,6 +12,7 @@ from .models import MLModel, Prediction, TrainingTemplate
 import mlflow
 import subprocess
 import sys
+import os
 from pathlib import Path
 import json
 from django.views.decorators.http import require_POST
@@ -22,7 +23,6 @@ import time
 import torch
 import shutil
 from PIL import Image
-import os
 import re
 import hashlib
 from django.views.decorators.csrf import csrf_exempt
@@ -250,6 +250,19 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
         
         # Get model architecture details
         context['architecture_details'] = self._get_architecture_details()
+        
+        # Add missing template context variables
+        if self.object.training_data_info:
+            # Add total_samples if missing
+            context['total_samples'] = self.object.training_data_info.get('total_samples', 'N/A')
+            
+            # Add training_config for backward compatibility
+            context['training_config'] = {
+                'parameters': self.object.training_data_info
+            }
+        else:
+            context['total_samples'] = 'N/A'
+            context['training_config'] = {'parameters': {}}
         
         # Generate MLflow UI URL for this model's run
         context['mlflow_ui_url'] = None
@@ -940,7 +953,18 @@ class StartTrainingView(LoginRequiredMixin, FormView):
             active_run = mlflow.active_run()
             if active_run:
                 logger.warning(f"Found active MLflow run {active_run.info.run_id}, ending it to start new training")
-                mlflow.end_run()
+                try:
+                    mlflow.end_run()
+                except Exception as e:
+                    logger.warning(f"Failed to end active MLflow run {active_run.info.run_id}: {e}")
+                    # Force clear the active run by setting environment variable
+                    if 'MLFLOW_TRACKING_RUN_ID' in os.environ:
+                        del os.environ['MLFLOW_TRACKING_RUN_ID']
+                    # Try force end with KILLED status
+                    try:
+                        mlflow.end_run(status='KILLED')
+                    except:
+                        logger.warning("Could not force kill MLflow run, continuing anyway")
             
             # Create MLflow run first, but DO NOT call mlflow.end_run() here!
             mlflow_run = mlflow.start_run()
@@ -976,6 +1000,10 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                     'use_random_intensity': form_data['use_random_intensity'],
                     'crop_size': form_data['crop_size'],
                     'num_workers': form_data['num_workers'],
+                    # Dataset info placeholders (will be updated during training)
+                    'training_samples': 0,
+                    'validation_samples': 0,
+                    'total_samples': 0,
                     # Learning rate scheduler parameters
                     'lr_scheduler': form_data.get('lr_scheduler', 'none'),
                     'lr_patience': form_data.get('lr_patience', 5),
@@ -989,10 +1017,27 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                     'early_stopping_min_epochs': form_data.get('early_stopping_min_epochs', 20),
                     'early_stopping_min_delta': form_data.get('early_stopping_min_delta', 1e-4),
                     'early_stopping_metric': form_data.get('early_stopping_metric', 'val_dice'),
+                    # Enhanced Training Features
+                    'loss_function': form_data.get('loss_function', 'combined'),
+                    'dice_weight': form_data.get('dice_weight', 0.7),
+                    'bce_weight': form_data.get('bce_weight', 0.3),
+                    'use_loss_scheduling': form_data.get('use_loss_scheduling', False),
+                    'loss_scheduler_type': form_data.get('loss_scheduler_type', 'adaptive'),
+                    'checkpoint_strategy': form_data.get('checkpoint_strategy', 'best'),
+                    'max_checkpoints': form_data.get('max_checkpoints', 5),
+                    'monitor_metric': form_data.get('monitor_metric', 'val_dice'),
+                    'use_enhanced_training': form_data.get('use_enhanced_training', True),
+                    'use_mixed_precision': form_data.get('use_mixed_precision', False),
                 },
                 model_type=form_data['model_type']
             )
             logger.info(f"Created MLModel instance with ID: {ml_model.id}, model_type: {ml_model.model_type}, mlflow_run_id: {mlflow_run_id}")
+            
+            # Debug form data for crop_size
+            logger.info(f"DEBUG: crop_size in form_data = {form_data.get('crop_size')}, type = {type(form_data.get('crop_size'))}")
+            logger.info(f"DEBUG: All form keys: {list(form_data.keys())}")
+            logger.info(f"DEBUG: Form data crop_size related: {[k for k in form_data.keys() if 'crop' in k.lower()]}")
+            
             command = [
                 sys.executable,
                 str(Path(__file__).parent.parent.parent.parent / 'ml' / 'training' / 'train.py'),
@@ -1009,25 +1054,47 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 f'--validation-split={form_data["validation_split"]}',
                 f'--resolution={form_data["resolution"]}',
                 f'--device={form_data["device"]}',
-                f'--crop-size={form_data["crop_size"]}',
+                f'--crop-size={form_data.get("crop_size", 512)}',
                 f'--num-workers={form_data["num_workers"]}',
-                # Learning rate scheduler parameters
+                # Learning rate scheduler parameters (with None validation)
                 f'--lr-scheduler={form_data.get("lr_scheduler", "none")}',
-                f'--lr-patience={form_data.get("lr_patience", 5)}',
-                f'--lr-factor={form_data.get("lr_factor", 0.5)}',
-                f'--lr-step-size={form_data.get("lr_step_size", 10)}',
-                f'--lr-gamma={form_data.get("lr_gamma", 0.1)}',
-                f'--min-lr={form_data.get("min_lr", 1e-7)}',
-                # Early stopping parameters
-                f'--early-stopping-patience={form_data.get("early_stopping_patience", 10)}',
-                f'--early-stopping-min-epochs={form_data.get("early_stopping_min_epochs", 20)}',
-                f'--early-stopping-min-delta={form_data.get("early_stopping_min_delta", 1e-4)}',
-                f'--early-stopping-metric={form_data.get("early_stopping_metric", "val_dice")}'
+                f'--lr-patience={form_data.get("lr_patience") or 5}',
+                f'--lr-factor={form_data.get("lr_factor") or 0.5}',
+                f'--lr-step-size={form_data.get("lr_step_size") or 10}',
+                f'--lr-gamma={form_data.get("lr_gamma") or 0.1}',
+                f'--min-lr={form_data.get("min_lr") or 1e-7}',
+                # Early stopping parameters (with None validation)
+                f'--early-stopping-patience={form_data.get("early_stopping_patience") or 10}',
+                f'--early-stopping-min-epochs={form_data.get("early_stopping_min_epochs") or 20}',
+                f'--early-stopping-min-delta={form_data.get("early_stopping_min_delta") or 1e-4}',
+                f'--early-stopping-metric={form_data.get("early_stopping_metric") or "val_dice"}',
+                # Enhanced Training Parameters (with None validation)
+                f'--loss-type={form_data.get("loss_function", "mixed")}',
+                f'--checkpoint-strategy={form_data.get("checkpoint_strategy", "best")}',
+                f'--max-checkpoints={form_data.get("max_checkpoints") or 5}',
+                f'--monitor-metric={form_data.get("monitor_metric", "val_dice")}',
+                f'--loss-scheduler-type={form_data.get("loss_scheduler_type", "adaptive")}'
             ]
+            
+            # Add loss function weights only for combined losses
+            loss_function = form_data.get("loss_function", "combined")
+            if loss_function in ['combined', 'focal_segmentation', 'balanced_segmentation']:
+                command.append(f'--dice-weight={form_data.get("dice_weight") or 0.7}')
+                command.append(f'--bce-weight={form_data.get("bce_weight") or 0.3}')
             
             # Add early stopping flag if enabled
             if form_data.get('use_early_stopping'):
                 command.append('--use-early-stopping')
+            
+            # Add enhanced training flags
+            if form_data.get('use_enhanced_training', True):
+                command.append('--use-enhanced-training')
+            if form_data.get('use_loss_scheduling', False):
+                command.append('--use-loss-scheduling')
+            if form_data.get('use_mixed_precision', False):
+                command.append('--use-mixed-precision')
+            
+            # Add augmentation flags
             if form_data.get('use_random_flip'): command.append('--random-flip')
             if form_data.get('use_random_rotate'): command.append('--random-rotate')
             if form_data.get('use_random_scale'): command.append('--random-scale')
@@ -1066,6 +1133,18 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 ml_model.training_logs = f"Failed to start training process: {e}"
                 ml_model.save()
             return self.form_invalid(form)
+
+    def form_invalid(self, form):
+        """Handle form validation errors"""
+        logger = logging.getLogger(__name__)
+        logger.error("StartTrainingView.form_invalid() called")
+        logger.error(f"Form errors: {form.errors}")
+        logger.error(f"Non-field errors: {form.non_field_errors()}")
+        
+        # Add a message to help with debugging
+        messages.error(self.request, "Form validation failed. Please check all required fields.")
+        
+        return super().form_invalid(form)
 
     def get_initial(self):
         """Pre-populate form data from rerun parameter or template"""
@@ -1155,16 +1234,18 @@ def stop_training(request, model_id):
                 'message': 'Model is not currently training'
             })
         
-        # Update model status to stopped
+        # Update model status to stopped and set stop_requested flag
         model.status = 'stopped'
+        model.stop_requested = True
         model.save()
         
-        # Here you would typically send a signal to stop the actual training process
-        # For now, we'll just update the status
+        # Try to terminate the actual training process if possible
+        # This could be enhanced to send SIGTERM to the training process
         
         return JsonResponse({
             'status': 'success',
-            'message': f'Training for model "{model.name}" has been stopped'
+            'message': f'Training for model "{model.name}" has been stopped',
+            'model_status': 'stopped'
         })
         
     except Exception as e:
@@ -1180,10 +1261,13 @@ class ModelDeleteView(LoginRequiredMixin, DeleteView):
     template_name = 'ml_manager/model_confirm_delete.html'
     success_url = reverse_lazy('ml_manager:model-list')
     
-    def delete(self, request, *args, **kwargs):
+    def form_valid(self, form):
+        """
+        Custom deletion logic moved from delete() to form_valid()
+        as recommended by Django DeleteView warning.
+        """
         try:
             self.object = self.get_object()
-            success_url = self.get_success_url()
             
             # Clean up associated files if needed
             if self.object.model_directory and os.path.exists(self.object.model_directory):
@@ -1192,15 +1276,25 @@ class ModelDeleteView(LoginRequiredMixin, DeleteView):
                 except Exception as e:
                     logging.warning(f"Could not delete model directory: {e}")
             
-            self.object.delete()
-            messages.success(request, f'Model "{self.object.name}" has been deleted.')
+            messages.success(self.request, f'Model "{self.object.name}" has been deleted.')
             
-            return JsonResponse({'status': 'success', 'redirect': success_url})
+            # Call parent form_valid which will delete the object
+            response = super().form_valid(form)
+            
+            # Return JSON response for AJAX requests
+            if self.request.headers.get('Content-Type') == 'application/json' or self.request.META.get('HTTP_ACCEPT') == 'application/json':
+                return JsonResponse({'status': 'success', 'redirect': str(self.success_url)})
+            
+            return response
             
         except Exception as e:
             logging.error(f"Error deleting model: {e}")
-            messages.error(request, f'Error deleting model: {e}')
-            return JsonResponse({'status': 'error', 'message': str(e)})
+            messages.error(self.request, f'Error deleting model: {e}')
+            
+            if self.request.headers.get('Content-Type') == 'application/json' or self.request.META.get('HTTP_ACCEPT') == 'application/json':
+                return JsonResponse({'status': 'error', 'message': str(e)})
+            
+            return self.form_invalid(form)
 
 
 @login_required
@@ -2811,7 +2905,7 @@ def dataset_preview_view(request):
                                                     if len(img_array.shape) == 3:
                                                         img_pil = Image.fromarray(img_array)
                                                     else:
-                                                        img_pil = Image.fromarray(img_array, mode='L').convert('RGB')
+                                                        img_pil = Image.fromarray(img_array, mode='L')
                                                 else:
                                                     img_pil = img.convert('RGB') if hasattr(img, 'convert') else img
                                                 

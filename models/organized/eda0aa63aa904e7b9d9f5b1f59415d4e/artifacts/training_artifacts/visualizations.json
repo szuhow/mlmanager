@@ -1,7 +1,0 @@
-{
-  "epoch_1": {
-    "predictions": [
-      "data/models/organized/2025/06/unet-coronary/unet-coronary_20250617_094818_a8708361_v1.0.0/predictions/epoch_001/predictions_epoch_001.png"
-    ]
-  }
-}

@@ -1,0 +1,248 @@
+{% extends "dataset_manager/base.html" %}
+{% load static %}
+
+{% block title %}{{ schema.name }} - Preview - Dataset Manager{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        <i class="fas fa-eye"></i>
+                        Schema Preview: {{ schema.name }}
+                    </h3>
+                    <div class="card-tools">
+                        <a href="{% url 'dataset_manager:schema_detail' schema_id=schema.id %}" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left"></i> Back to Schema
+                        </a>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <!-- Schema Information -->
+                            <div class="card mb-4">
+                                <div class="card-header">
+                                    <h5>Schema Information</h5>
+                                </div>
+                                <div class="card-body">
+                                    <dl class="row">
+                                        <dt class="col-sm-4">Name:</dt>
+                                        <dd class="col-sm-8">{{ schema.name }}</dd>
+                                        
+                                        <dt class="col-sm-4">Type:</dt>
+                                        <dd class="col-sm-8">
+                                            <span class="badge badge-info">{{ schema.get_type_display }}</span>
+                                        </dd>
+                                        
+                                        <dt class="col-sm-4">Description:</dt>
+                                        <dd class="col-sm-8">{{ schema.description|default:"No description provided" }}</dd>
+                                        
+                                        <dt class="col-sm-4">Created:</dt>
+                                        <dd class="col-sm-8">{{ schema.created_at|date:"Y-m-d H:i" }}</dd>
+                                        
+                                        <dt class="col-sm-4">Created by:</dt>
+                                        <dd class="col-sm-8">{{ schema.created_by.username }}</dd>
+                                        
+                                        <dt class="col-sm-4">Usage Count:</dt>
+                                        <dd class="col-sm-8">{{ schema.usage_count }}</dd>
+                                        
+                                        <dt class="col-sm-4">Public:</dt>
+                                        <dd class="col-sm-8">
+                                            {% if schema.is_public %}
+                                                <span class="badge badge-success">Yes</span>
+                                            {% else %}
+                                                <span class="badge badge-secondary">No</span>
+                                            {% endif %}
+                                        </dd>
+                                    </dl>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <!-- Schema Definition -->
+                            <div class="card mb-4">
+                                <div class="card-header">
+                                    <h5>Schema Definition</h5>
+                                </div>
+                                <div class="card-body">
+                                    {% if schema.schema_definition %}
+                                    <pre class="bg-light p-3 rounded"><code>{{ schema.schema_definition|pprint }}</code></pre>
+                                    {% else %}
+                                    <p class="text-muted">No schema definition provided</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-6">
+                            <!-- Validation Rules -->
+                            <div class="card mb-4">
+                                <div class="card-header">
+                                    <h5>Validation Rules</h5>
+                                </div>
+                                <div class="card-body">
+                                    {% if schema.validation_rules %}
+                                    <pre class="bg-light p-3 rounded"><code>{{ schema.validation_rules|pprint }}</code></pre>
+                                    {% else %}
+                                    <p class="text-muted">No validation rules defined</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <!-- Example Annotation -->
+                            <div class="card mb-4">
+                                <div class="card-header">
+                                    <h5>Example Annotation</h5>
+                                </div>
+                                <div class="card-body">
+                                    {% if schema.example_annotation %}
+                                    <pre class="bg-light p-3 rounded"><code>{{ schema.example_annotation|pprint }}</code></pre>
+                                    {% else %}
+                                    <p class="text-muted">No example annotation provided</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Schema Type Specific Information -->
+                    {% if schema.type == 'classification' %}
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5>Classification Schema Details</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle"></i>
+                                <strong>Classification Schema:</strong> This schema is designed for image classification tasks where each sample belongs to one or more classes.
+                            </div>
+                            
+                            {% if schema.schema_definition.classes %}
+                            <h6>Available Classes:</h6>
+                            <div class="row">
+                                {% for class_name in schema.schema_definition.classes %}
+                                <div class="col-md-3 mb-2">
+                                    <span class="badge badge-primary">{{ class_name }}</span>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    {% elif schema.type == 'segmentation' %}
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5>Segmentation Schema Details</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle"></i>
+                                <strong>Segmentation Schema:</strong> This schema is designed for semantic segmentation tasks where each pixel is classified.
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {% elif schema.type == 'detection' %}
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5>Detection Schema Details</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle"></i>
+                                <strong>Detection Schema:</strong> This schema is designed for object detection tasks with bounding boxes and class labels.
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+                    
+                    <!-- Usage Statistics -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h5>Usage Statistics</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <div class="info-box bg-info">
+                                        <span class="info-box-icon"><i class="fas fa-chart-bar"></i></span>
+                                        <div class="info-box-content">
+                                            <span class="info-box-text">Times Used</span>
+                                            <span class="info-box-number">{{ schema.usage_count }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="info-box bg-success">
+                                        <span class="info-box-icon"><i class="fas fa-database"></i></span>
+                                        <div class="info-box-content">
+                                            <span class="info-box-text">Datasets Using</span>
+                                            <span class="info-box-number">{{ datasets_using_schema|length }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="info-box bg-warning">
+                                        <span class="info-box-icon"><i class="fas fa-calendar"></i></span>
+                                        <div class="info-box-content">
+                                            <span class="info-box-text">Days Active</span>
+                                            <span class="info-box-number">{{ days_active }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.info-box {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border-radius: 5px;
+    color: white;
+    margin-bottom: 10px;
+}
+
+.info-box-icon {
+    font-size: 2rem;
+    margin-right: 15px;
+}
+
+.info-box-content {
+    flex: 1;
+}
+
+.info-box-text {
+    display: block;
+    font-size: 0.9rem;
+    opacity: 0.8;
+}
+
+.info-box-number {
+    display: block;
+    font-size: 1.5rem;
+    font-weight: bold;
+}
+
+pre code {
+    font-size: 0.9rem;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+</style>
+{% endblock %}

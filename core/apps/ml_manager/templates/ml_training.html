@@ -1,0 +1,77 @@
+    try {
+        // Initialize basic functionality
+        showStep(1);
+        
+        // Initialize all toggle states first
+        const enhancedTrainingCheckbox = document.getElementById('{{ form.use_enhanced_training.id_for_label }}');
+        if (enhancedTrainingCheckbox) {
+            log('Found enhanced training checkbox, checked:', enhancedTrainingCheckbox.checked);
+            toggleEnhancedTrainingFeatures(enhancedTrainingCheckbox.checked);
+        }
+        
+        const lossSchedulingCheckbox = document.getElementById('{{ form.use_loss_scheduling.id_for_label }}');
+        if (lossSchedulingCheckbox) {
+            log('Found loss scheduling checkbox, checked:', lossSchedulingCheckbox.checked);
+            toggleLossFunctionConfig(lossSchedulingCheckbox.checked);
+        }
+        
+        const earlyStoppingCheckbox = document.getElementById('{{ form.use_early_stopping.id_for_label }}');
+        if (earlyStoppingCheckbox) {
+            log('Found early stopping checkbox, checked:', earlyStoppingCheckbox.checked);
+            toggleEarlyStoppingFields(earlyStoppingCheckbox.checked);
+        }
+        
+        // Initialize Dice/BCE weights
+        const lossFunctionSelect = document.getElementById('{{ form.loss_function.id_for_label }}');
+        if (lossFunctionSelect) {
+            log('Found loss function select');
+            toggleDiceBceWeights(lossFunctionSelect.value);
+        }
+        
+        // Initialize augmentation checkboxes
+        const augmentationCheckboxes = document.querySelectorAll('.augmentation-card input[type="checkbox"]');
+        log('Found augmentation checkboxes:', augmentationCheckboxes.length);
+        
+        augmentationCheckboxes.forEach(checkbox => {
+            const card = checkbox.closest('.augmentation-card');
+            if (card) {
+                log('Initializing augmentation card:', card.id, 'checked:', checkbox.checked);
+                toggleAugmentationCard(card.id, checkbox.checked);
+            }
+        });
+        
+        // Setup step navigation
+        const stepLinks = document.querySelectorAll('.step-link');
+        log('Found step links:', stepLinks.length);
+        
+        stepLinks.forEach((link, index) => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                const stepNumber = parseInt(link.getAttribute('data-step')) || (index + 1);
+                log('Step link clicked, going to step:', stepNumber);
+                currentStep = stepNumber;
+                showStep(currentStep);
+            });
+        });
+        
+        // Setup prev/next buttons
+        const prevBtn = document.getElementById('prev-btn');
+        const nextBtn = document.getElementById('next-btn');
+        
+        if (prevBtn) {
+            prevBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                previousStep();
+            });
+        }
+        
+        if (nextBtn) {
+            nextBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                nextStep();
+            });
+        }
+        
+        log('Initialization completed');
+        
+    } catch (error) {

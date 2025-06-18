@@ -2,1115 +2,2117 @@
 
 {% block title %}Start Training - ML Manager{% endblock %}
 
-{% block content %}
-<div class="container">
-    <div class="row justify-content-center">
-        <div class="col-md-10">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h2>Start New Training</h2>
-                <div>
-                    <a href="{% url 'ml_manager:template-list' %}" class="btn btn-info">
-                        <i class="fas fa-clipboard-list"></i> Manage Templates
-                    </a>
-                    <a href="{% url 'ml_manager:model-list' %}" class="btn btn-secondary">
-                        <i class="fas fa-arrow-left"></i> Back to Models
-                    </a>
-                </div>
-            </div>
-            
-            <div class="card">
-                <div class="card-header">
-                    <h4 class="card-title mb-0">Training Configuration</h4>
-                </div>
-                <div class="card-body">
-                    <form method="post" id="training-form">
-                        {% csrf_token %}
-                        
-                        <!-- Rerun Notification -->
-                        {% if rerun_model %}
-                        <div class="alert alert-info mb-4">
-                            <h6><i class="fas fa-redo me-1"></i> Rerunning Training</h6>
-                            <p class="mb-2">Configuration pre-populated from model: <strong>{{ rerun_model.name }}</strong></p>
-                            <small class="text-muted">
-                                Original training: {{ rerun_model.total_epochs }} epochs, 
-                                Status: <span class="badge bg-{{ rerun_model.status|yesno:'success,danger' }}">{{ rerun_model.status|title }}</span>
-                            </small>
-                        </div>
-                        {% endif %}
-                        
-                        <!-- Template Selection -->
-                        {% if form.template %}
-                        <div class="row mb-4">
-                            <div class="col-12">
-                                <h5 class="text-primary">Quick Start</h5>
-                                <hr>
-                            </div>
-                            <div class="col-md-8">
-                                <label for="{{ form.template.id_for_label }}" class="form-label">
-                                    {{ form.template.label }}
-                                    {% if form.template.help_text %}
-                                        <small class="text-muted">{{ form.template.help_text }}</small>
-                                    {% endif %}
-                                </label>
-                                {{ form.template.errors }}
-                                {{ form.template }}
-                            </div>
-                            <div class="col-md-4 d-flex align-items-end">
-                                <button type="button" id="load-template-btn" class="btn btn-outline-primary">
-                                    <i class="fas fa-download"></i> Load Template
-                                </button>
-                            </div>
-                        </div>
-                        {% endif %}
-                        
-                        <!-- Basic Information -->
-                        <div class="row mb-4">
-                            <div class="col-12">
-                                <h5 class="text-primary">Basic Information</h5>
-                                <hr>
-                            </div>
-                        </div>
-                        
-                        <!-- Render all form fields except template (already handled above) -->
-                        {% for field in form %}
-                            {% if field.name != 'template' %}
-                                {% if field.name == 'name' %}
-                                    <!-- Basic Information Section -->
-                                    <div class="row mb-3">
-                                        <div class="col-md-6">
-                                            <label for="{{ field.id_for_label }}" class="form-label">
-                                                {{ field.label }}
-                                                {% if field.help_text %}
-                                                    <small class="text-muted">{{ field.help_text }}</small>
-                                                {% endif %}
-                                            </label>
-                                            {{ field.errors }}
-                                            <input type="text" 
-                                                   name="{{ field.html_name }}"
-                                                   class="form-control"
-                                                   id="{{ field.id_for_label }}"
-                                                   value="{{ field.value|default:field.field.initial }}"
-                                                   required>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <!-- Data Path Field -->
-                                            {% for data_field in form %}
-                                                {% if data_field.name == 'data_path' %}
-                                                    <label for="{{ data_field.id_for_label }}" class="form-label">
-                                                        {{ data_field.label }}
-                                                        {% if data_field.help_text %}
-                                                            <small class="text-muted">{{ data_field.help_text }}</small>
-                                                        {% endif %}
-                                                    </label>
-                                                    {{ data_field.errors }}
-                                                    <div class="input-group">
-                                                        <input type="text" 
-                                                               name="{{ data_field.html_name }}"
-                                                               class="form-control"
-                                                               id="{{ data_field.id_for_label }}"
-                                                               value="{{ data_field.value|default:data_field.field.initial }}"
-                                                               placeholder="e.g., /host/desktop/my_dataset or /app/data/datasets"
-                                                               required>
-                                                        <button type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
-                                                            Browse Host
-                                                        </button>
-                                                        <ul class="dropdown-menu">
-                                                            <li><h6 class="dropdown-header">Host Directories</h6></li>
-                                                            <li><a class="dropdown-item" href="#" onclick="setDataPath('/host/desktop')">
-                                                                <i class="fas fa-desktop"></i> Desktop
-                                                            </a></li>
-                                                            <li><a class="dropdown-item" href="#" onclick="setDataPath('/host/downloads')">
-                                                                <i class="fas fa-download"></i> Downloads
-                                                            </a></li>
-                                                            <li><a class="dropdown-item" href="#" onclick="setDataPath('/host/documents')">
-                                                                <i class="fas fa-file-alt"></i> Documents
-                                                            </a></li>
-                                                            <li><hr class="dropdown-divider"></li>
-                                                            <li><h6 class="dropdown-header">Container Paths</h6></li>
-                                                            <li><a class="dropdown-item" href="#" onclick="setDataPath('/app/data/datasets')">
-                                                                <i class="fas fa-heart"></i> Built-in Coronary Dataset
-                                                            </a></li>
-                                                        </ul>
-                                                    </div>
-                                                    <small class="text-muted">
-                                                        Use /host/desktop, /host/downloads, or /host/documents to access files from your computer
-                                                    </small>
-                                                {% endif %}
-                                            {% endfor %}
-                                        </div>
-                                    </div>
-                                    
-                                    <!-- Dataset Type Field -->
-                                    <div class="row mb-3">
-                                        {% for dataset_field in form %}
-                                            {% if dataset_field.name == 'dataset_type' %}
-                                                <div class="col-md-12">
-                                                    <label for="{{ dataset_field.id_for_label }}" class="form-label">
-                                                        {{ dataset_field.label }}
-                                                        {% if dataset_field.help_text %}
-                                                            <small class="text-muted">{{ dataset_field.help_text }}</small>
-                                                        {% endif %}
-                                                    </label>
-                                                    {{ dataset_field.errors }}
-                                                    {{ dataset_field }}
-                                                </div>
-                                            {% endif %}
-                                        {% endfor %}
-                                    </div>
-                                    
-                                    <!-- Description Field -->
-                                    {% for desc_field in form %}
-                                        {% if desc_field.name == 'description' %}
-                                            <div class="mb-3">
-                                                <label for="{{ desc_field.id_for_label }}" class="form-label">
-                                                    {{ desc_field.label }}
-                                                    {% if desc_field.help_text %}
-                                                        <small class="text-muted">{{ desc_field.help_text }}</small>
-                                                    {% endif %}
-                                                </label>
-                                                {{ desc_field.errors }}
-                                                <textarea name="{{ desc_field.html_name }}"
-                                                          class="form-control"
-                                                          id="{{ desc_field.id_for_label }}"
-                                                          rows="3">{{ desc_field.value|default:desc_field.field.initial }}</textarea>
-                                            </div>
-                                        {% endif %}
-                                    {% endfor %}
-                                    
-                                    <!-- Model Configuration Section -->
-                                    <div class="row mb-4">
-                                        <div class="col-12">
-                                            <h5 class="text-primary">Model Configuration</h5>
-                                            <hr>
-                                        </div>
-                                    </div>
-                                    
-                                {% elif field.name == 'model_type' %}
-                                    <div class="row mb-3">
-                                        <div class="col-md-6">
-                                            <label for="{{ field.id_for_label }}" class="form-label">
-                                                {{ field.label }}
-                                                {% if field.help_text %}
-                                                    <small class="text-muted">{{ field.help_text }}</small>
-                                                {% endif %}
-                                            </label>
-                                            {{ field.errors }}
-                                            {{ field }}
-                                        </div>
-                                        <div class="col-md-6">
-                                            <!-- Batch Size Field -->
-                                            {% for batch_field in form %}
-                                                {% if batch_field.name == 'batch_size' %}
-                                                    <label for="{{ batch_field.id_for_label }}" class="form-label">
-                                                        {{ batch_field.label }}
-                                                        {% if batch_field.help_text %}
-                                                            <small class="text-muted">{{ batch_field.help_text }}</small>
-                                                        {% endif %}
-                                                    </label>
-                                                    {{ batch_field.errors }}
-                                                    <input type="number" 
-                                                           name="{{ batch_field.html_name }}"
-                                                           class="form-control"
-                                                           id="{{ batch_field.id_for_label }}"
-                                                           value="{{ batch_field.value|default:batch_field.field.initial }}"
-                                                           min="{{ batch_field.field.min_value }}"
-                                                           step="1">
-                                                {% endif %}
-                                            {% endfor %}
-                                        </div>
-                                    </div>
-                                    
-                                    <!-- Training Parameters Section -->
-                                    <div class="row mb-4">
-                                        <div class="col-12">
-                                            <h5 class="text-primary">Training Parameters</h5>
-                                            <hr>
-                                        </div>
-                                    </div>
-                                    
-                                {% elif field.name == 'epochs' %}
-                                    <div class="row mb-3">
-                                        <div class="col-md-4">
-                                            <label for="{{ field.id_for_label }}" class="form-label">
-                                                {{ field.label }}
-                                                {% if field.help_text %}
-                                                    <small class="text-muted">{{ field.help_text }}</small>
-                                                {% endif %}
-                                            </label>
-                                            {{ field.errors }}
-                                            <input type="number" 
-                                                   name="{{ field.html_name }}"
-                                                   class="form-control"
-                                                   id="{{ field.id_for_label }}"
-                                                   value="{{ field.value|default:field.field.initial }}"
-                                                   min="{{ field.field.min_value }}"
-                                                   step="1">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <!-- Learning Rate Field -->
-                                            {% for lr_field in form %}
-                                                {% if lr_field.name == 'learning_rate' %}
-                                                    <label for="{{ lr_field.id_for_label }}" class="form-label">
-                                                        {{ lr_field.label }}
-                                                        {% if lr_field.help_text %}
-                                                            <small class="text-muted">{{ lr_field.help_text }}</small>
-                                                        {% endif %}
-                                                    </label>
-                                                    {{ lr_field.errors }}
-                                                    <input type="number" 
-                                                           name="{{ lr_field.html_name }}"
-                                                           class="form-control"
-                                                           id="{{ lr_field.id_for_label }}"
-                                                           value="{{ lr_field.value|default:lr_field.field.initial }}"
-                                                           min="{{ lr_field.field.min_value }}"
-                                                           step="any">
-                                                {% endif %}
-                                            {% endfor %}
-                                        </div>
-                                        <div class="col-md-4">
-                                            <!-- Optimizer Field -->
-                                            {% for opt_field in form %}
-                                                {% if opt_field.name == 'optimizer' %}
-                                                    <label for="{{ opt_field.id_for_label }}" class="form-label">
-                                                        {{ opt_field.label }}
-                                                        {% if opt_field.help_text %}
-                                                            <small class="text-muted">{{ opt_field.help_text }}</small>
-                                                        {% endif %}
-                                                    </label>
-                                                    {{ opt_field.errors }}
-                                                    <select name="{{ opt_field.html_name }}"
-                                                            class="form-control"
-                                                            id="{{ opt_field.id_for_label }}">
-                                                        {% for choice_value, choice_label in opt_field.field.choices %}
-                                                            <option value="{{ choice_value }}" 
-                                                                    {% if choice_value == opt_field.value|default:opt_field.field.initial %}selected{% endif %}>
-                                                                {{ choice_label }}
-                                                            </option>
-                                                        {% endfor %}
-                                                    </select>
-                                                {% endif %}
-                                            {% endfor %}
-                                        </div>
-                                    </div>
-                                    
-                                    <!-- Learning Rate Scheduler Section -->
-                                    <div class="row mb-4">
-                                        <div class="col-12">
-                                            <h5 class="text-primary">
-                                                <i class="fas fa-chart-line me-1"></i>Learning Rate Scheduler
-                                                <span class="badge bg-info ms-2" id="scheduler-status">Adaptive Training</span>
-                                            </h5>
-                                            <p class="text-muted small mb-2">Configure how the learning rate changes during training to improve convergence</p>
-                                            <hr>
-                                        </div>
-                                    </div>
-                                    
-                                    <!-- Scheduler Configuration Card -->
-                                    <div class="card mb-4 border-info">
-                                        <div class="card-body">
-                                            <!-- Scheduler Type Selection -->
-                                            <div class="row mb-3">
-                                                <div class="col-md-6">
-                                                    <!-- LR Scheduler Type Field -->
-                                                    {% for scheduler_field in form %}
-                                                        {% if scheduler_field.name == 'lr_scheduler' %}
-                                                            <label for="{{ scheduler_field.id_for_label }}" class="form-label fw-bold">
-                                                                <i class="fas fa-cogs me-1"></i>{{ scheduler_field.label }}
-                                                                {% if scheduler_field.help_text %}
-                                                                    <small class="text-muted d-block fw-normal">{{ scheduler_field.help_text }}</small>
-                                                                {% endif %}
-                                                            </label>
-                                                            {{ scheduler_field.errors }}
-                                                            <select name="{{ scheduler_field.html_name }}"
-                                                                    class="form-control"
-                                                                    id="{{ scheduler_field.id_for_label }}"
-                                                                    onchange="updateSchedulerFields(this.value)">
-                                                                {% for choice_value, choice_label in scheduler_field.field.choices %}
-                                                                    <option value="{{ choice_value }}" 
-                                                                            {% if choice_value == scheduler_field.value|default:scheduler_field.field.initial %}selected{% endif %}>
-                                                                        {{ choice_label }}
-                                                                    </option>
-                                                                {% endfor %}
-                                                            </select>
-                                                        {% endif %}
-                                                    {% endfor %}
-                                                </div>
-                                                <div class="col-md-6">
-                                                    <div id="scheduler-description" class="border rounded p-3 bg-light">
-                                                        <h6 class="text-primary mb-2"><i class="fas fa-info-circle me-1"></i>Scheduler Info</h6>
-                                                        <p class="small mb-0" id="scheduler-info-text">Select a scheduler to see its description</p>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            
-                                            <!-- Scheduler Parameters (organized by type) -->
-                                            <div id="scheduler-params">
-                                                <!-- Common Parameters Row -->
-                                                <div class="row mb-3" id="common-params">
-                                                    <div class="col-md-6">
-                                                        <!-- Min LR Field -->
-                                                        {% for min_lr_field in form %}
-                                                            {% if min_lr_field.name == 'min_lr' %}
-                                                                <label for="{{ min_lr_field.id_for_label }}" class="form-label">
-                                                                    <i class="fas fa-arrow-down me-1"></i>{{ min_lr_field.label }}
-                                                                    {% if min_lr_field.help_text %}
-                                                                        <small class="text-muted d-block">{{ min_lr_field.help_text }}</small>
-                                                                    {% endif %}
-                                                                </label>
-                                                                {{ min_lr_field.errors }}
-                                                                <input type="number" 
-                                                                       name="{{ min_lr_field.html_name }}"
-                                                                       class="form-control"
-                                                                       id="{{ min_lr_field.id_for_label }}"
-                                                                       value="{{ min_lr_field.value|default:min_lr_field.field.initial }}"
-                                                                       min="{{ min_lr_field.field.min_value }}"
-                                                                       step="any">
-                                                            {% endif %}
-                                                        {% endfor %}
-                                                    </div>
-                                                </div>
-                                                
-                                                <!-- Plateau Scheduler Parameters -->
-                                                <div class="scheduler-group" id="plateau-params" style="display: none;">
-                                                    <div class="border-start border-3 border-warning ps-3 mb-3">
-                                                        <h6 class="text-warning mb-2"><i class="fas fa-chart-area me-1"></i>Plateau Scheduler Settings</h6>
-                                                        <div class="row">
-                                                            <div class="col-md-6">
-                                                                <!-- LR Patience Field -->
-                                                                {% for patience_field in form %}
-                                                                    {% if patience_field.name == 'lr_patience' %}
-                                                                        <label for="{{ patience_field.id_for_label }}" class="form-label">
-                                                                            <i class="fas fa-clock me-1"></i>{{ patience_field.label }}
-                                                                            {% if patience_field.help_text %}
-                                                                                <small class="text-muted d-block">{{ patience_field.help_text }}</small>
-                                                                            {% endif %}
-                                                                        </label>
-                                                                        {{ patience_field.errors }}
-                                                                        <input type="number" 
-                                                                               name="{{ patience_field.html_name }}"
-                                                                               class="form-control"
-                                                                               id="{{ patience_field.id_for_label }}"
-                                                                               value="{{ patience_field.value|default:patience_field.field.initial }}"
-                                                                               min="{{ patience_field.field.min_value }}"
-                                                                               step="1">
-                                                                    {% endif %}
-                                                                {% endfor %}
-                                                            </div>
-                                                            <div class="col-md-6">
-                                                                <!-- LR Factor Field -->
-                                                                {% for factor_field in form %}
-                                                                    {% if factor_field.name == 'lr_factor' %}
-                                                                        <label for="{{ factor_field.id_for_label }}" class="form-label">
-                                                                            <i class="fas fa-percentage me-1"></i>{{ factor_field.label }}
-                                                                            {% if factor_field.help_text %}
-                                                                                <small class="text-muted d-block">{{ factor_field.help_text }}</small>
-                                                                            {% endif %}
-                                                                        </label>
-                                                                        {{ factor_field.errors }}
-                                                                        <input type="number" 
-                                                                               name="{{ factor_field.html_name }}"
-                                                                               class="form-control"
-                                                                               id="{{ factor_field.id_for_label }}"
-                                                                               value="{{ factor_field.value|default:factor_field.field.initial }}"
-                                                                               min="{{ factor_field.field.min_value }}"
-                                                                               max="{{ factor_field.field.max_value }}"
-                                                                               step="any">
-                                                                    {% endif %}
-                                                                {% endfor %}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                
-                                                <!-- Step Scheduler Parameters -->
-                                                <div class="scheduler-group" id="step-params" style="display: none;">
-                                                    <div class="border-start border-3 border-success ps-3 mb-3">
-                                                        <h6 class="text-success mb-2"><i class="fas fa-stairs me-1"></i>Step Scheduler Settings</h6>
-                                                        <div class="row">
-                                                            <div class="col-md-6">
-                                                                <!-- LR Step Size Field -->
-                                                                {% for step_field in form %}
-                                                                    {% if step_field.name == 'lr_step_size' %}
-                                                                        <label for="{{ step_field.id_for_label }}" class="form-label">
-                                                                            <i class="fas fa-step-forward me-1"></i>{{ step_field.label }}
-                                                                            {% if step_field.help_text %}
-                                                                                <small class="text-muted d-block">{{ step_field.help_text }}</small>
-                                                                            {% endif %}
-                                                                        </label>
-                                                                        {{ step_field.errors }}
-                                                                        <input type="number" 
-                                                                               name="{{ step_field.html_name }}"
-                                                                               class="form-control"
-                                                                               id="{{ step_field.id_for_label }}"
-                                                                               value="{{ step_field.value|default:step_field.field.initial }}"
-                                                                               min="{{ step_field.field.min_value }}"
-                                                                               step="1">
-                                                                    {% endif %}
-                                                                {% endfor %}
-                                                            </div>
-                                                            <div class="col-md-6">
-                                                                <!-- LR Gamma Field -->
-                                                                {% for gamma_field in form %}
-                                                                    {% if gamma_field.name == 'lr_gamma' %}
-                                                                        <label for="{{ gamma_field.id_for_label }}" class="form-label">
-                                                                            <i class="fas fa-calculator me-1"></i>{{ gamma_field.label }}
-                                                                            {% if gamma_field.help_text %}
-                                                                                <small class="text-muted d-block">{{ gamma_field.help_text }}</small>
-                                                                            {% endif %}
-                                                                        </label>
-                                                                        {{ gamma_field.errors }}
-                                                                        <input type="number" 
-                                                                               name="{{ gamma_field.html_name }}"
-                                                                               class="form-control"
-                                                                               id="{{ gamma_field.id_for_label }}"
-                                                                               value="{{ gamma_field.value|default:gamma_field.field.initial }}"
-                                                                               min="{{ gamma_field.field.min_value }}"
-                                                                               max="{{ gamma_field.field.max_value }}"
-                                                                               step="any">
-                                                                    {% endif %}
-                                                                {% endfor %}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                
-                                                <!-- Exponential Scheduler Parameters -->
-                                                <div class="scheduler-group" id="exponential-params" style="display: none;">
-                                                    <div class="border-start border-3 border-danger ps-3 mb-3">
-                                                        <h6 class="text-danger mb-2"><i class="fas fa-chart-line me-1"></i>Exponential Scheduler Settings</h6>
-                                                        <div class="row">
-                                                            <div class="col-md-6">
-                                                                <!-- LR Gamma Field (reused) -->
-                                                                <label class="form-label">
-                                                                    <i class="fas fa-calculator me-1"></i>Decay Factor (Gamma)
-                                                                    <small class="text-muted d-block">Multiplicative factor for exponential decay</small>
-                                                                </label>
-                                                                <p class="text-muted small">Uses the same gamma parameter as Step scheduler</p>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    
-                                    <!-- Validation Split Row -->
-                                    <div class="row mb-3">
-                                        <div class="col-md-4">
-                                            <!-- Validation Split Field -->
-                                            {% for val_field in form %}
-                                                {% if val_field.name == 'validation_split' %}
-                                                    <label for="{{ val_field.id_for_label }}" class="form-label">
-                                                        {{ val_field.label }}
-                                                        {% if val_field.help_text %}
-                                                            <small class="text-muted">{{ val_field.help_text }}</small>
-                                                        {% endif %}
-                                                    </label>
-                                                    {{ val_field.errors }}
-                                                    <input type="number" 
-                                                           name="{{ val_field.html_name }}"
-                                                           class="form-control"
-                                                           id="{{ val_field.id_for_label }}"
-                                                           value="{{ val_field.value|default:val_field.field.initial }}"
-                                                           min="{{ val_field.field.min_value }}"
-                                                           max="{{ val_field.field.max_value }}"
-                                                           step="any">
-                                                {% endif %}
-                                            {% endfor %}
-                                        </div>
-                                    </div>
-                                    
-                                    <!-- Resolution Field -->
-                                    <div class="row mb-3">
-                                        {% for res_field in form %}
-                                            {% if res_field.name == 'resolution' %}
-                                                <div class="col-md-6">
-                                                    <label for="{{ res_field.id_for_label }}" class="form-label">
-                                                        {{ res_field.label }}
-                                                        {% if res_field.help_text %}
-                                                            <small class="text-muted">{{ res_field.help_text }}</small>
-                                                        {% endif %}
-                                                    </label>
-                                                    {{ res_field.errors }}
-                                                    {{ res_field }}
-                                                </div>
-                                            {% endif %}
-                                        {% endfor %}
-                                        
-                                        <!-- Device Field -->
-                                        {% for device_field in form %}
-                                            {% if device_field.name == 'device' %}
-                                                <div class="col-md-6">
-                                                    <label for="{{ device_field.id_for_label }}" class="form-label">
-                                                        {{ device_field.label }}
-                                                        {% if device_field.help_text %}
-                                                            <small class="text-muted">{{ device_field.help_text }}</small>
-                                                        {% endif %}
-                                                    </label>
-                                                    {{ device_field.errors }}
-                                                    {{ device_field }}
-                                                </div>
-                                            {% endif %}
-                                        {% endfor %}
-                                    </div>
-                                    
-                                    <!-- Early Stopping Section -->
-                                    <div class="row mb-4">
-                                        <div class="col-12">
-                                            <h5 class="text-primary">
-                                                <i class="fas fa-stop-circle me-1"></i>Early Stopping
-                                                <span class="badge bg-secondary ms-2" id="early-stopping-status">Optional</span>
-                                            </h5>
-                                            <p class="text-muted small mb-2">Automatically stop training when model stops improving to prevent overfitting</p>
-                                            <hr>
-                                        </div>
-                                    </div>
-                                    
-                                    <!-- Early Stopping Configuration Card -->
-                                    <div class="card mb-4 border-warning">
-                                        <div class="card-body">
-                                            <!-- Enable Early Stopping -->
-                                            <div class="row mb-3">
-                                                <div class="col-md-6">
-                                                    <div class="form-check form-switch">
-                                                        {% for es_field in form %}
-                                                            {% if es_field.name == 'use_early_stopping' %}
-                                                                <input type="checkbox" 
-                                                                       name="{{ es_field.html_name }}"
-                                                                       class="form-check-input"
-                                                                       id="{{ es_field.id_for_label }}"
-                                                                       {% if es_field.value %}checked{% endif %}
-                                                                       onchange="toggleEarlyStoppingFields(this.checked)">
-                                                                <label class="form-check-label fw-bold" for="{{ es_field.id_for_label }}">
-                                                                    <i class="fas fa-toggle-on me-1"></i>{{ es_field.label }}
-                                                                    {% if es_field.help_text %}
-                                                                        <small class="text-muted d-block fw-normal">{{ es_field.help_text }}</small>
-                                                                    {% endif %}
-                                                                </label>
-                                                                {{ es_field.errors }}
-                                                            {% endif %}
-                                                        {% endfor %}
-                                                    </div>
-                                                </div>
-                                                <div class="col-md-6">
-                                                    <div id="early-stopping-info" class="border rounded p-3 bg-light">
-                                                        <h6 class="text-warning mb-2"><i class="fas fa-info-circle me-1"></i>Early Stopping Benefits</h6>
-                                                        <ul class="small mb-0">
-                                                            <li>Prevents overfitting</li>
-                                                            <li>Saves computational resources</li>
-                                                            <li>Automatically finds optimal stopping point</li>
-                                                        </ul>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            
-                                            <!-- Early Stopping Parameters -->
-                                            <div id="early-stopping-params" style="display: none;">
-                                                <div class="border-start border-3 border-warning ps-3 mb-3">
-                                                    <h6 class="text-warning mb-3"><i class="fas fa-cogs me-1"></i>Early Stopping Configuration</h6>
-                                                    
-                                                    <!-- First Row: Metric and Patience -->
-                                                    <div class="row mb-3">
-                                                        <div class="col-md-6">
-                                                            <!-- Metric Selection -->
-                                                            {% for metric_field in form %}
-                                                                {% if metric_field.name == 'early_stopping_metric' %}
-                                                                    <label for="{{ metric_field.id_for_label }}" class="form-label">
-                                                                        <i class="fas fa-chart-bar me-1"></i>{{ metric_field.label }}
-                                                                        {% if metric_field.help_text %}
-                                                                            <small class="text-muted d-block">{{ metric_field.help_text }}</small>
-                                                                        {% endif %}
-                                                                    </label>
-                                                                    {{ metric_field.errors }}
-                                                                    <select name="{{ metric_field.html_name }}"
-                                                                            class="form-control"
-                                                                            id="{{ metric_field.id_for_label }}">
-                                                                        {% for choice_value, choice_label in metric_field.field.choices %}
-                                                                            <option value="{{ choice_value }}" 
-                                                                                    {% if choice_value == metric_field.value|default:metric_field.field.initial %}selected{% endif %}>
-                                                                                {{ choice_label }}
-                                                                            </option>
-                                                                        {% endfor %}
-                                                                    </select>
-                                                                {% endif %}
-                                                            {% endfor %}
-                                                        </div>
-                                                        <div class="col-md-6">
-                                                            <!-- Patience -->
-                                                            {% for patience_field in form %}
-                                                                {% if patience_field.name == 'early_stopping_patience' %}
-                                                                    <label for="{{ patience_field.id_for_label }}" class="form-label">
-                                                                        <i class="fas fa-hourglass-half me-1"></i>{{ patience_field.label }}
-                                                                        {% if patience_field.help_text %}
-                                                                            <small class="text-muted d-block">{{ patience_field.help_text }}</small>
-                                                                        {% endif %}
-                                                                    </label>
-                                                                    {{ patience_field.errors }}
-                                                                    <input type="number" 
-                                                                           name="{{ patience_field.html_name }}"
-                                                                           class="form-control"
-                                                                           id="{{ patience_field.id_for_label }}"
-                                                                           value="{{ patience_field.value|default:patience_field.field.initial }}"
-                                                                           min="{{ patience_field.field.min_value }}"
-                                                                           step="1">
-                                                                {% endif %}
-                                                            {% endfor %}
-                                                        </div>
-                                                    </div>
-                                                    
-                                                    <!-- Second Row: Min Epochs and Min Delta -->
-                                                    <div class="row mb-3">
-                                                        <div class="col-md-6">
-                                                            <!-- Min Epochs -->
-                                                            {% for min_epochs_field in form %}
-                                                                {% if min_epochs_field.name == 'early_stopping_min_epochs' %}
-                                                                    <label for="{{ min_epochs_field.id_for_label }}" class="form-label">
-                                                                        <i class="fas fa-play-circle me-1"></i>{{ min_epochs_field.label }}
-                                                                        {% if min_epochs_field.help_text %}
-                                                                            <small class="text-muted d-block">{{ min_epochs_field.help_text }}</small>
-                                                                        {% endif %}
-                                                                    </label>
-                                                                    {{ min_epochs_field.errors }}
-                                                                    <input type="number" 
-                                                                           name="{{ min_epochs_field.html_name }}"
-                                                                           class="form-control"
-                                                                           id="{{ min_epochs_field.id_for_label }}"
-                                                                           value="{{ min_epochs_field.value|default:min_epochs_field.field.initial }}"
-                                                                           min="{{ min_epochs_field.field.min_value }}"
-                                                                           step="1">
-                                                                {% endif %}
-                                                            {% endfor %}
-                                                        </div>
-                                                        <div class="col-md-6">
-                                                            <!-- Min Delta -->
-                                                            {% for min_delta_field in form %}
-                                                                {% if min_delta_field.name == 'early_stopping_min_delta' %}
-                                                                    <label for="{{ min_delta_field.id_for_label }}" class="form-label">
-                                                                        <i class="fas fa-ruler me-1"></i>{{ min_delta_field.label }}
-                                                                        {% if min_delta_field.help_text %}
-                                                                            <small class="text-muted d-block">{{ min_delta_field.help_text }}</small>
-                                                                        {% endif %}
-                                                                    </label>
-                                                                    {{ min_delta_field.errors }}
-                                                                    <input type="number" 
-                                                                           name="{{ min_delta_field.html_name }}"
-                                                                           class="form-control"
-                                                                           id="{{ min_delta_field.id_for_label }}"
-                                                                           value="{{ min_delta_field.value|default:min_delta_field.field.initial }}"
-                                                                           min="{{ min_delta_field.field.min_value }}"
-                                                                           step="any">
-                                                                {% endif %}
-                                                            {% endfor %}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    
-                                    <!-- Data Augmentation Section -->
-                                    <div class="row mb-4">
-                                        <div class="col-12">
-                                            <h5 class="text-primary">Data Augmentation</h5>
-                                            <hr>
-                                        </div>
-                                    </div>
-                                    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4 mb-4">
-                                        <!-- Flip Augmentation Card -->
-                                        <div class="col">
-                                            <div class="card h-100 shadow-sm border-primary">
-                                                <div class="card-body">
-                                                    <h6 class="card-title"><i class="fas fa-arrows-alt-h me-1"></i> Random Flip</h6>
-                                                    <div class="form-check mb-2">
-                                                        {{ form.use_random_flip }}
-                                                        <label class="form-check-label" for="{{ form.use_random_flip.id_for_label }}">
-                                                            Enable
-                                                        </label>
-                                                    </div>
-                                                    <label for="{{ form.flip_probability.id_for_label }}" class="form-label small">Flip Probability</label>
-                                                    {{ form.flip_probability.errors }}
-                                                    {{ form.flip_probability }}
-                                                    <small class="text-muted d-block">{{ form.flip_probability.help_text }}</small>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <!-- Rotate Augmentation Card -->
-                                        <div class="col">
-                                            <div class="card h-100 shadow-sm border-success">
-                                                <div class="card-body">
-                                                    <h6 class="card-title"><i class="fas fa-sync-alt me-1"></i> Random Rotate</h6>
-                                                    <div class="form-check mb-2">
-                                                        {{ form.use_random_rotate }}
-                                                        <label class="form-check-label" for="{{ form.use_random_rotate.id_for_label }}">
-                                                            Enable
-                                                        </label>
-                                                    </div>
-                                                    <label for="{{ form.rotation_range.id_for_label }}" class="form-label small">Rotation Range (°)</label>
-                                                    {{ form.rotation_range.errors }}
-                                                    {{ form.rotation_range }}
-                                                    <small class="text-muted d-block">{{ form.rotation_range.help_text }}</small>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <!-- Scale Augmentation Card -->
-                                        <div class="col">
-                                            <div class="card h-100 shadow-sm border-warning">
-                                                <div class="card-body">
-                                                    <h6 class="card-title"><i class="fas fa-expand-arrows-alt me-1"></i> Random Scale</h6>
-                                                    <div class="form-check mb-2">
-                                                        {{ form.use_random_scale }}
-                                                        <label class="form-check-label" for="{{ form.use_random_scale.id_for_label }}">
-                                                            Enable
-                                                        </label>
-                                                    </div>
-                                                    <div class="mb-2">
-                                                        <label for="{{ form.scale_range_min.id_for_label }}" class="form-label small">Min Scale</label>
-                                                        {{ form.scale_range_min.errors }}
-                                                        {{ form.scale_range_min }}
-                                                    </div>
-                                                    <div class="mb-2">
-                                                        <label for="{{ form.scale_range_max.id_for_label }}" class="form-label small">Max Scale</label>
-                                                        {{ form.scale_range_max.errors }}
-                                                        {{ form.scale_range_max }}
-                                                    </div>
-                                                    <small class="text-muted d-block">Scale range (0.1-2.0)</small>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <!-- Intensity Augmentation Card -->
-                                        <div class="col">
-                                            <div class="card h-100 shadow-sm border-info">
-                                                <div class="card-body">
-                                                    <h6 class="card-title"><i class="fas fa-adjust me-1"></i> Random Intensity</h6>
-                                                    <div class="form-check mb-2">
-                                                        {{ form.use_random_intensity }}
-                                                        <label class="form-check-label" for="{{ form.use_random_intensity.id_for_label }}">
-                                                            Enable
-                                                        </label>
-                                                    </div>
-                                                    <label for="{{ form.intensity_range.id_for_label }}" class="form-label small">Intensity Range</label>
-                                                    {{ form.intensity_range.errors }}
-                                                    {{ form.intensity_range }}
-                                                    <small class="text-muted d-block">{{ form.intensity_range.help_text }}</small>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <!-- Crop Augmentation Card -->
-                                        <div class="col">
-                                            <div class="card h-100 shadow-sm border-secondary">
-                                                <div class="card-body">
-                                                    <h6 class="card-title"><i class="fas fa-crop-alt me-1"></i> Random Crop</h6>
-                                                    <div class="form-check mb-2">
-                                                        {{ form.use_random_crop }}
-                                                        <label class="form-check-label" for="{{ form.use_random_crop.id_for_label }}">
-                                                            Enable
-                                                        </label>
-                                                    </div>
-                                                    <label for="{{ form.crop_size.id_for_label }}" class="form-label small">Crop Size (px)</label>
-                                                    {{ form.crop_size.errors }}
-                                                    {{ form.crop_size }}
-                                                    <small class="text-muted d-block">{{ form.crop_size.help_text }}</small>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <!-- Elastic Transform Card -->
-                                        <div class="col">
-                                            <div class="card h-100 shadow-sm border-danger">
-                                                <div class="card-body">
-                                                    <h6 class="card-title"><i class="fas fa-wave-square me-1"></i> Elastic Transform</h6>
-                                                    <div class="form-check mb-2">
-                                                        {{ form.use_elastic_transform }}
-                                                        <label class="form-check-label" for="{{ form.use_elastic_transform.id_for_label }}">
-                                                            Enable
-                                                        </label>
-                                                    </div>
-                                                    <div class="mb-2">
-                                                        <label for="{{ form.elastic_alpha.id_for_label }}" class="form-label small">Alpha</label>
-                                                        {{ form.elastic_alpha.errors }}
-                                                        {{ form.elastic_alpha }}
-                                                    </div>
-                                                    <div class="mb-2">
-                                                        <label for="{{ form.elastic_sigma.id_for_label }}" class="form-label small">Sigma</label>
-                                                        {{ form.elastic_sigma.errors }}
-                                                        {{ form.elastic_sigma }}
-                                                    </div>
-                                                    <small class="text-muted d-block">Medical image deformation</small>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <!-- Gaussian Noise Card -->
-                                        <div class="col">
-                                            <div class="card h-100 shadow-sm border-dark">
-                                                <div class="card-body">
-                                                    <h6 class="card-title"><i class="fas fa-braille me-1"></i> Gaussian Noise</h6>
-                                                    <div class="form-check mb-2">
-                                                        {{ form.use_gaussian_noise }}
-                                                        <label class="form-check-label" for="{{ form.use_gaussian_noise.id_for_label }}">
-                                                            Enable
-                                                        </label>
-                                                    </div>
-                                                    <label for="{{ form.noise_std.id_for_label }}" class="form-label small">Noise Std</label>
-                                                    {{ form.noise_std.errors }}
-                                                    {{ form.noise_std }}
-                                                    <small class="text-muted d-block">{{ form.noise_std.help_text }}</small>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    
-                                    <!-- Advanced Settings Section -->
-                                    <div class="row mb-4">
-                                        <div class="col-12">
-                                            <h5 class="text-primary">Advanced Settings</h5>
-                                            <hr>
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="row mb-3">
-                                        <div class="col-md-6">
-                                            <label for="{{ form.num_workers.id_for_label }}" class="form-label">
-                                                {{ form.num_workers.label }}
-                                                {% if form.num_workers.help_text %}
-                                                    <small class="text-muted">{{ form.num_workers.help_text }}</small>
-                                                {% endif %}
-                                            </label>
-                                            {{ form.num_workers.errors }}
-                                            {{ form.num_workers }}
-                                        </div>
-                                    </div>
-                                    
-                                {% elif field.name == 'crop_size' %}
-                                    <div class="row mb-3">
-                                        <div class="col-md-6">
-                                            <label for="{{ field.id_for_label }}" class="form-label">
-                                                {{ field.label }}
-                                                {% if field.help_text %}
-                                                    <small class="text-muted">{{ field.help_text }}</small>
-                                                {% endif %}
-                                            </label>
-                                            {{ field.errors }}
-                                            <input type="number" 
-                                                   name="{{ field.html_name }}"
-                                                   class="form-control"
-                                                   id="{{ field.id_for_label }}"
-                                                   value="{{ field.value|default:field.field.initial }}"
-                                                   min="{{ field.field.min_value }}"
-                                                   step="1">
-                                        </div>
-                                    </div>
-                                {% endif %}
-                            {% endif %}
-                        {% endfor %}
+{% block extra_css %}
+<style>
+    /* Main Layout */
+    .training-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+    
+    .training-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 12px;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    }
+    
+    .training-header h1 {
+        margin: 0;
+        font-size: 2.5rem;
+        font-weight: 700;
+    }
+    
+    .training-header p {
+        margin: 0.5rem 0 0;
+        opacity: 0.9;
+        font-size: 1.1rem;
+    }
+    
+    /* Step Navigation */
+    .step-nav {
+        display: flex;
+        justify-content: center;
+        margin-bottom: 2rem;
+        padding: 0;
+        list-style: none;
+    }
+    
+    .step-nav li {
+        position: relative;
+        margin: 0 1rem;
+    }
+    
+    .step-nav li:not(:last-child)::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        right: -2rem;
+        width: 2rem;
+        height: 2px;
+        background: #dee2e6;
+        transform: translateY(-50%);
+    }
+    
+    .step-nav a {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 3rem;
+        height: 3rem;
+        border-radius: 50%;
+        background: #f8f9fa;
+        color: #6c757d;
+        text-decoration: none;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        border: 2px solid #dee2e6;
+    }
+    
+    .step-nav a.active {
+        background: #0d6efd;
+        color: white;
+        border-color: #0d6efd;
+    }
+    
+    .step-nav a.completed {
+        background: #28a745;
+        color: white;
+        border-color: #28a745;
+    }
+    
+    /* Form Sections */
+    .form-section {
+        background: white;
+        border-radius: 12px;
+        padding: 2rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        border: 1px solid #e9ecef;
+        display: none;
+    }
+    
+    .form-section.active {
+        display: block;
+        animation: slideIn 0.3s ease-out;
+    }
+    
+    @keyframes slideIn {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    .section-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 2px solid #f8f9fa;
+    }
+    
+    .section-header .icon {
+        width: 3rem;
+        height: 3rem;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 1rem;
+        font-size: 1.2rem;
+    }
+    
+    .section-header h3 {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: #343a40;
+    }
+    
+    .section-header p {
+        margin: 0.25rem 0 0;
+        color: #6c757d;
+        font-size: 0.9rem;
+    }
+    
+    /* Form Controls */
+    .form-group {
+        margin-bottom: 1.5rem;
+    }
+    
+    .form-label {
+        font-weight: 600;
+        color: #495057;
+        margin-bottom: 0.5rem;
+        display: block;
+    }
+    
+    .form-control, .form-select {
+        border-radius: 8px;
+        border: 2px solid #e9ecef;
+        padding: 0.75rem 1rem;
+        transition: all 0.3s ease;
+        background: #fff;
+    }
+    
+    .form-control:focus, .form-select:focus {
+        border-color: #0d6efd;
+        box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.1);
+        outline: none;
+    }
+    
+    .form-text {
+        color: #6c757d;
+        font-size: 0.875rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Toggle Switches */
+    .toggle-group {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 1rem;
+        margin: 1rem 0;
+    }
+    
+    .toggle-item {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 1rem;
+        border: 2px solid #e9ecef;
+        transition: all 0.3s ease;
+    }
+    
+    .toggle-item:hover {
+        border-color: #0d6efd;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+    
+    .toggle-item.active {
+        border-color: #28a745;
+        background: #f8fff9;
+    }
+    
+    .form-switch {
+        display: flex;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+    
+    .form-switch input[type="checkbox"] {
+        width: 3rem;
+        height: 1.5rem;
+        margin-right: 0.75rem;
+        cursor: pointer;
+    }
+    
+    .form-switch label {
+        font-weight: 600;
+        margin: 0;
+        cursor: pointer;
+    }
+    
+    /* Augmentation Cards */
+    .augmentation-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 1.5rem;
+        margin: 1.5rem 0;
+    }
+    
+    .augmentation-card {
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        border: 2px solid #e9ecef;
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: visible;
+        min-height: 180px;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .augmentation-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: var(--card-color, #6c757d);
+    }
+    
+    .augmentation-card.flip { --card-color: #007bff; }
+    .augmentation-card.rotate { --card-color: #28a745; }
+    .augmentation-card.scale { --card-color: #fd7e14; }
+    .augmentation-card.brightness { --card-color: #ffc107; }
+    .augmentation-card.contrast { --card-color: #6f42c1; }
+    .augmentation-card.blur { --card-color: #20c997; }
+    .augmentation-card.noise { --card-color: #dc3545; }
+    .augmentation-card.intensity { --card-color: #e83e8c; }
+    .augmentation-card.crop { --card-color: #17a2b8; }
+    .augmentation-card.elastic { --card-color: #6c757d; }
+    
+    .augmentation-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+        border-color: var(--card-color, #6c757d);
+    }
+    
+    .augmentation-card.enabled {
+        border-color: var(--card-color, #6c757d);
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 249, 250, 0.9) 100%);
+    }
+    
+    .card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1rem;
+    }
+    
+    .card-title {
+        display: flex;
+        align-items: center;
+        font-weight: 600;
+        color: #343a40;
+        margin: 0;
+    }
+    
+    .card-title i {
+        margin-right: 0.5rem;
+        color: var(--card-color, #6c757d);
+    }
+    
+    /* Navigation Buttons */
+    .nav-buttons {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 2rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid #e9ecef;
+    }
+    
+    .btn {
+        padding: 0.75rem 1.5rem;
+        border-radius: 8px;
+        font-weight: 600;
+        text-decoration: none;
+        transition: all 0.3s ease;
+        border: 2px solid transparent;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    .btn-primary {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-color: transparent;
+    }
+    
+    .btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+    }
+    
+    .btn-secondary {
+        background: #6c757d;
+        color: white;
+        border-color: #6c757d;
+    }
+    
+    .btn-secondary:hover {
+        background: #545b62;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(108, 117, 125, 0.3);
+    }
+    
+    .btn-outline-primary {
+        background: transparent;
+        color: #0d6efd;
+        border-color: #0d6efd;
+    }
+    
+    .btn-outline-primary:hover {
+        background: #0d6efd;
+        color: white;
+        transform: translateY(-2px);
+    }
+    
+    .btn-success {
+        background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+        color: white;
+        border-color: transparent;
+        font-size: 1.1rem;
+        padding: 1rem 2rem;
+    }
+    
+    .btn-success:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4);
+    }
+    
+    /* Custom range slider styling */
+    .form-range {
+        height: 8px;
+        background: linear-gradient(90deg, #e9ecef 0%, #007bff 50%, #28a745 100%);
+        border-radius: 4px;
+    }
+    
+    .form-range::-webkit-slider-thumb {
+        background: #007bff;
+        border: 2px solid white;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    
+    .form-range::-moz-range-thumb {
+        background: #007bff;
+        border: 2px solid white;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    
+    /* Responsive Design */
+    @media (max-width: 768px) {
+        .training-container {
+            padding: 1rem;
+        }
+        
+        .training-header {
+            padding: 1.5rem;
+            text-align: center;
+        }
+        
+        .training-header h1 {
+            font-size: 2rem;
+        }
+        
+        .step-nav {
+            flex-wrap: wrap;
+        }
+        
+        .step-nav li {
+            margin: 0.5rem;
+        }
+        
+        .form-section {
+            padding: 1.5rem;
+        }
+        
+        .nav-buttons {
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .augmentation-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+    
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+</style>
+{% endblock %}
 
-                        <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
-                            <a href="{% url 'ml_manager:model-list' %}" class="btn btn-secondary me-md-2">Cancel</a>
-                            <button type="submit" class="btn btn-primary btn-lg">
-                                <i class="fas fa-play"></i> Start Training
-                            </button>
-                        </div>
-                    </form>
-                </div>
+{% block content %}
+<div class="training-container" style="pointer-events: auto !important; opacity: 1 !important;">
+    <!-- Header -->
+    <div class="training-header">
+        <div class="d-flex justify-content-between align-items-center">
+            <div>
+                <h1><i class="fas fa-play-circle me-2"></i>Start Training</h1>
+                <p>Configure and launch your machine learning model training</p>
+            </div>
+            <div>
+                <a href="{% url 'ml_manager:template-list' %}" class="btn btn-outline-primary">
+                    <i class="fas fa-clipboard-list"></i> Templates
+                </a>
+                <a href="{% url 'ml_manager:model-list' %}" class="btn btn-secondary">
+                    <i class="fas fa-arrow-left"></i> Back
+                </a>
             </div>
         </div>
     </div>
+
+    <!-- Step Progress Indicator -->
+    <div class="step-progress text-center mb-3">
+        <span class="text-muted">Step <span id="current-step-display">1</span> of 5</span>
+    </div>
+    
+    <!-- Step Navigation with Arrows -->
+    <div class="step-navigation d-flex align-items-center justify-content-center mb-4">
+        <!-- Previous Arrow -->
+        <button type="button" id="step-prev-arrow" class="btn btn-outline-secondary btn-sm me-3" style="display: none;">
+            <i class="fas fa-chevron-left"></i>
+        </button>
+        
+        <!-- Step Numbers -->
+        <ul class="step-nav mb-0">
+            <li><a href="#" class="step-link active" data-step="1">1</a></li>
+            <li><a href="#" class="step-link" data-step="2">2</a></li>
+            <li><a href="#" class="step-link" data-step="3">3</a></li>
+            <li><a href="#" class="step-link" data-step="4">4</a></li>
+            <li><a href="#" class="step-link" data-step="5">5</a></li>
+        </ul>
+        
+        <!-- Next Arrow -->
+        <button type="button" id="step-next-arrow" class="btn btn-outline-primary btn-sm ms-3">
+            <i class="fas fa-chevron-right"></i>
+        </button>
+    </div>
+
+    <form method="post" id="training-form" style="pointer-events: auto !important;" onsubmit="console.log('FORM SUBMITTING!'); return true;">
+        {% csrf_token %}
+        
+        <!-- Display form errors -->
+        {% if form.non_field_errors %}
+            <div class="alert alert-danger">
+                <h6><i class="fas fa-exclamation-triangle me-2"></i>Form Validation Errors</h6>
+                {{ form.non_field_errors }}
+            </div>
+        {% endif %}
+        
+        <!-- Display individual field errors -->
+        {% if form.errors %}
+            <div class="alert alert-warning">
+                <h6><i class="fas fa-exclamation-triangle me-2"></i>Please fix the following errors:</h6>
+                <ul class="mb-0">
+                {% for field, errors in form.errors.items %}
+                    {% for error in errors %}
+                        <li><strong>{{ field|title }}:</strong> {{ error }}</li>
+                    {% endfor %}
+                {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+        
+        <!-- Rerun Notification -->
+        {% if rerun_model %}
+        <div class="alert alert-info">
+            <h6><i class="fas fa-redo me-2"></i>Rerunning Training</h6>
+            <p class="mb-1">Configuration pre-populated from model: <strong>{{ rerun_model.name }}</strong></p>
+            <small>Original: {{ rerun_model.total_epochs }} epochs, Status: {{ rerun_model.status|title }}</small>
+        </div>
+        {% endif %}
+
+        <!-- Step 1: Basic Information -->
+        <div class="form-section active" id="step-1">
+            <div class="section-header">
+                <div class="icon" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                    <i class="fas fa-info-circle"></i>
+                </div>
+                <div>
+                    <h3>Basic Information</h3>
+                    <p>Enter the basic details for your training session</p>
+                </div>
+            </div>
+
+            <!-- Template Selection -->
+            {% if form.template %}
+            <div class="form-group">
+                <label for="{{ form.template.id_for_label }}" class="form-label">
+                    <i class="fas fa-template me-1"></i>Quick Start Template
+                </label>
+                <div class="row">
+                    <div class="col-md-8">
+                        {{ form.template }}
+                        {% if form.template.help_text %}
+                            <div class="form-text">{{ form.template.help_text }}</div>
+                        {% endif %}
+                        {{ form.template.errors }}
+                    </div>
+                    <div class="col-md-4">
+                        <button type="button" id="load-template-btn" class="btn btn-outline-primary w-100">
+                            <i class="fas fa-download me-1"></i>Load Template
+                        </button>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.name.id_for_label }}" class="form-label">
+                            <i class="fas fa-tag me-1"></i>Training Name <span class="text-danger">*</span>
+                        </label>
+                        <input type="text" 
+                               name="{{ form.name.html_name }}"
+                               class="form-control"
+                               id="{{ form.name.id_for_label }}"
+                               value="{{ form.name.value|default:'' }}"
+                               placeholder="Enter a descriptive name for your training..."
+                               required>
+                        {% if form.name.help_text %}
+                            <div class="form-text">{{ form.name.help_text }}</div>
+                        {% endif %}
+                        {{ form.name.errors }}
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.dataset_type.id_for_label }}" class="form-label">
+                            <i class="fas fa-database me-1"></i>Dataset Type <span class="text-danger">*</span>
+                        </label>
+                        {{ form.dataset_type }}
+                        {% if form.dataset_type.help_text %}
+                            <div class="form-text">{{ form.dataset_type.help_text }}</div>
+                        {% endif %}
+                        {{ form.dataset_type.errors }}
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="{{ form.data_path.id_for_label }}" class="form-label">
+                    <i class="fas fa-folder me-1"></i>Data Path <span class="text-danger">*</span>
+                </label>
+                <div class="input-group">
+                    <input type="text" 
+                           name="{{ form.data_path.html_name }}"
+                           class="form-control"
+                           id="{{ form.data_path.id_for_label }}"
+                           value="{{ form.data_path.value|default:'' }}"
+                           placeholder="/host/desktop/my_dataset or /app/data/datasets"
+                           required>
+                    <div class="dropdown">
+                        <button type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+                            Browse
+                        </button>
+                        <ul class="dropdown-menu">
+                            <li><h6 class="dropdown-header">Host Directories</h6></li>
+                            <li><a class="dropdown-item" href="#" onclick="setDataPath('/host/desktop')">
+                                <i class="fas fa-desktop me-1"></i>Desktop
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" onclick="setDataPath('/host/downloads')">
+                                <i class="fas fa-download me-1"></i>Downloads
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" onclick="setDataPath('/host/documents')">
+                                <i class="fas fa-file-alt me-1"></i>Documents
+                            </a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><h6 class="dropdown-header">Built-in Datasets</h6></li>
+                            <li><a class="dropdown-item" href="#" onclick="setDataPath('/app/data/datasets')">
+                                <i class="fas fa-heart me-1"></i>Coronary Dataset
+                            </a></li>
+                        </ul>
+                    </div>
+                </div>
+                {% if form.data_path.help_text %}
+                    <div class="form-text">{{ form.data_path.help_text }}</div>
+                {% endif %}
+                {{ form.data_path.errors }}
+            </div>
+
+            <div class="form-group">
+                <label for="{{ form.description.id_for_label }}" class="form-label">
+                    <i class="fas fa-align-left me-1"></i>Description
+                </label>
+                <textarea name="{{ form.description.html_name }}"
+                          class="form-control"
+                          id="{{ form.description.id_for_label }}"
+                          rows="3"
+                          placeholder="Optional description of your training session...">{{ form.description.value|default:'' }}</textarea>
+                {% if form.description.help_text %}
+                    <div class="form-text">{{ form.description.help_text }}</div>
+                {% endif %}
+                {{ form.description.errors }}
+            </div>
+        </div>
+
+        <!-- Step 2: Model Configuration -->
+        <div class="form-section" id="step-2">
+            <div class="section-header">
+                <div class="icon" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white;">
+                    <i class="fas fa-brain"></i>
+                </div>
+                <div>
+                    <h3>Model Configuration</h3>
+                    <p>Select your model architecture and basic parameters</p>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.model_type.id_for_label }}" class="form-label">
+                            <i class="fas fa-sitemap me-1"></i>Model Architecture <span class="text-danger">*</span>
+                        </label>
+                        {{ form.model_type }}
+                        {% if form.model_type.help_text %}
+                            <div class="form-text">{{ form.model_type.help_text }}</div>
+                        {% endif %}
+                        {{ form.model_type.errors }}
+                    </div>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.crop_size.id_for_label }}" class="form-label">
+                            <i class="fas fa-crop me-1"></i>Input Image Size
+                        </label>
+                        <input type="number" 
+                               name="{{ form.crop_size.html_name }}"
+                               class="form-control"
+                               id="{{ form.crop_size.id_for_label }}"
+                               value="{{ form.crop_size.value|default:form.crop_size.field.initial }}"
+                               min="{{ form.crop_size.field.min_value|default:64 }}"
+                               step="1">
+                        {% if form.crop_size.help_text %}
+                            <div class="form-text">{{ form.crop_size.help_text }}</div>
+                        {% endif %}
+                        {{ form.crop_size.errors }}
+                    </div>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.resolution.id_for_label }}" class="form-label">
+                            <i class="fas fa-expand me-1"></i>Image Resolution <span class="text-danger">*</span>
+                        </label>
+                        {{ form.resolution }}
+                        {% if form.resolution.help_text %}
+                            <div class="form-text">{{ form.resolution.help_text }}</div>
+                        {% endif %}
+                        {{ form.resolution.errors }}
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.device.id_for_label }}" class="form-label">
+                            <i class="fas fa-microchip me-1"></i>Training Device <span class="text-danger">*</span>
+                        </label>
+                        {{ form.device }}
+                        {% if form.device.help_text %}
+                            <div class="form-text">{{ form.device.help_text }}</div>
+                        {% endif %}
+                        {{ form.device.errors }}
+                    </div>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.validation_split.id_for_label }}" class="form-label">
+                            <i class="fas fa-chart-pie me-1"></i>Validation Split
+                        </label>
+                        <input type="number" 
+                               name="{{ form.validation_split.html_name }}"
+                               class="form-control"
+                               id="{{ form.validation_split.id_for_label }}"
+                               value="{{ form.validation_split.value|default:form.validation_split.field.initial }}"
+                               min="{{ form.validation_split.field.min_value|default:0 }}"
+                               max="{{ form.validation_split.field.max_value|default:1 }}"
+                               step="0.01">
+                        {% if form.validation_split.help_text %}
+                            <div class="form-text">{{ form.validation_split.help_text }}</div>
+                        {% endif %}
+                        {{ form.validation_split.errors }}
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.epochs.id_for_label }}" class="form-label">
+                            <i class="fas fa-clock me-1"></i>Epochs <span class="text-danger">*</span>
+                        </label>
+                        <input type="number" 
+                               name="{{ form.epochs.html_name }}"
+                               class="form-control"
+                               id="{{ form.epochs.id_for_label }}"
+                               value="{{ form.epochs.value|default:form.epochs.field.initial }}"
+                               min="{{ form.epochs.field.min_value|default:1 }}"
+                               step="1"
+                               required>
+                        {% if form.epochs.help_text %}
+                            <div class="form-text">{{ form.epochs.help_text }}</div>
+                        {% endif %}
+                        {{ form.epochs.errors }}
+                    </div>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.batch_size.id_for_label }}" class="form-label">
+                            <i class="fas fa-layer-group me-1"></i>Batch Size <span class="text-danger">*</span>
+                        </label>
+                        <input type="number" 
+                               name="{{ form.batch_size.html_name }}"
+                               class="form-control"
+                               id="{{ form.batch_size.id_for_label }}"
+                               value="{{ form.batch_size.value|default:form.batch_size.field.initial }}"
+                               min="{{ form.batch_size.field.min_value|default:1 }}"
+                               step="1"
+                               required>
+                        {% if form.batch_size.help_text %}
+                            <div class="form-text">{{ form.batch_size.help_text }}</div>
+                        {% endif %}
+                        {{ form.batch_size.errors }}
+                    </div>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.num_workers.id_for_label }}" class="form-label">
+                            <i class="fas fa-users me-1"></i>Data Loading Workers
+                        </label>
+                        <input type="number" 
+                               name="{{ form.num_workers.html_name }}"
+                               class="form-control"
+                               id="{{ form.num_workers.id_for_label }}"
+                               value="{{ form.num_workers.value|default:form.num_workers.field.initial }}"
+                               min="{{ form.num_workers.field.min_value|default:0 }}"
+                               step="1">
+                        {% if form.num_workers.help_text %}
+                            <div class="form-text">{{ form.num_workers.help_text }}</div>
+                        {% endif %}
+                        {{ form.num_workers.errors }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Training Parameters -->
+        <div class="form-section" id="step-3">
+            <div class="section-header">
+                <div class="icon" style="background: linear-gradient(135deg, #fd7e14 0%, #ffc107 100%); color: white;">
+                    <i class="fas fa-chart-line"></i>
+                </div>
+                <div>
+                    <h3>Training Parameters</h3>
+                    <p>Configure learning parameters and optimization settings</p>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.learning_rate.id_for_label }}" class="form-label">
+                            <i class="fas fa-tachometer-alt me-1"></i>Learning Rate
+                        </label>
+                        <input type="number" 
+                               name="{{ form.learning_rate.html_name }}"
+                               class="form-control"
+                               id="{{ form.learning_rate.id_for_label }}"
+                               value="{{ form.learning_rate.value|default:form.learning_rate.field.initial }}"
+                               min="{{ form.learning_rate.field.min_value|default:0.000001 }}"
+                               step="any">
+                        {% if form.learning_rate.help_text %}
+                            <div class="form-text">{{ form.learning_rate.help_text }}</div>
+                        {% endif %}
+                        {{ form.learning_rate.errors }}
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.optimizer.id_for_label }}" class="form-label">
+                            <i class="fas fa-cogs me-1"></i>Optimizer <span class="text-danger">*</span>
+                        </label>
+                        {{ form.optimizer }}
+                        {% if form.optimizer.help_text %}
+                            <div class="form-text">{{ form.optimizer.help_text }}</div>
+                        {% endif %}
+                        {{ form.optimizer.errors }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loss Function Configuration -->
+            <div id="loss-function-config" style="display: {% if form.use_loss_scheduling.value %}block{% else %}none{% endif %};" class="form-group">
+                <label class="form-label">
+                    <i class="fas fa-bullseye me-1"></i>Loss Function Configuration
+                </label>
+                <div class="row">
+                    <div class="col-md-6">
+                        <label for="{{ form.loss_function.id_for_label }}" class="form-label">Loss Function</label>
+                        <select name="{{ form.loss_function.html_name }}"
+                                class="form-control"
+                                id="{{ form.loss_function.id_for_label }}"
+                                onchange="toggleDiceBceWeights(this.value)">
+                            {% for value, label in form.loss_function.field.choices %}
+                                <option value="{{ value }}" {% if form.loss_function.value == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                        {% if form.loss_function.help_text %}
+                            <div class="form-text">{{ form.loss_function.help_text }}</div>
+                        {% endif %}
+                        {{ form.loss_function.errors }}
+                    </div>
+                    <div id="dice-bce-weights" style="display: none;" class="col-md-6">
+                        <div class="row">
+                            <div class="col-6">
+                                <label for="{{ form.dice_weight.id_for_label }}" class="form-label">Dice Weight</label>
+                                <input type="number" 
+                                       name="{{ form.dice_weight.html_name }}"
+                                       class="form-control"
+                                       id="{{ form.dice_weight.id_for_label }}"
+                                       value="{{ form.dice_weight.value|default:form.dice_weight.field.initial }}"
+                                       min="{{ form.dice_weight.field.min_value|default:0 }}"
+                                       max="{{ form.dice_weight.field.max_value|default:1 }}"
+                                       step="0.1"
+                                       onchange="updateWeights('dice')"
+                                       oninput="updateWeights('dice')">
+                                {% if form.dice_weight.help_text %}
+                                    <div class="form-text">{{ form.dice_weight.help_text }}</div>
+                                {% endif %}
+                                {{ form.dice_weight.errors }}
+                            </div>
+                            <div class="col-6">
+                                <label for="{{ form.bce_weight.id_for_label }}" class="form-label">BCE Weight</label>
+                                <input type="number" 
+                                       name="{{ form.bce_weight.html_name }}"
+                                       class="form-control"
+                                       id="{{ form.bce_weight.id_for_label }}"
+                                       value="{{ form.bce_weight.value|default:form.bce_weight.field.initial }}"
+                                       min="{{ form.bce_weight.field.min_value|default:0 }}"
+                                       max="{{ form.bce_weight.field.max_value|default:1 }}"
+                                       step="0.1"
+                                       onchange="updateWeights('bce')"
+                                       oninput="updateWeights('bce')">
+                                {% if form.bce_weight.help_text %}
+                                    <div class="form-text">{{ form.bce_weight.help_text }}</div>
+                                {% endif %}
+                                {{ form.bce_weight.errors }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Learning Rate Scheduler Configuration -->
+            <div class="form-group">
+                <label class="form-label">
+                    <i class="fas fa-chart-line me-1"></i>Learning Rate Scheduler
+                </label>
+                <div class="row">
+                    <div class="col-md-4">
+                        <label for="{{ form.lr_scheduler.id_for_label }}" class="form-label">Scheduler Type</label>
+                        {{ form.lr_scheduler }}
+                        {% if form.lr_scheduler.help_text %}
+                            <div class="form-text">{{ form.lr_scheduler.help_text }}</div>
+                        {% endif %}
+                        {{ form.lr_scheduler.errors }}
+                    </div>
+                    <div class="col-md-4">
+                        <label for="{{ form.min_lr.id_for_label }}" class="form-label">Minimum Learning Rate</label>
+                        <input type="number" 
+                               name="{{ form.min_lr.html_name }}"
+                               class="form-control"
+                               id="{{ form.min_lr.id_for_label }}"
+                               value="{{ form.min_lr.value|default:form.min_lr.field.initial }}"
+                               min="{{ form.min_lr.field.min_value|default:0.000001 }}"
+                               step="any">
+                        {% if form.min_lr.help_text %}
+                            <div class="form-text">{{ form.min_lr.help_text }}</div>
+                        {% endif %}
+                        {{ form.min_lr.errors }}
+                    </div>
+                    <div class="col-md-4">
+                        <label for="{{ form.lr_patience.id_for_label }}" class="form-label">LR Patience</label>
+                        <input type="number" 
+                               name="{{ form.lr_patience.html_name }}"
+                               class="form-control"
+                               id="{{ form.lr_patience.id_for_label }}"
+                               value="{{ form.lr_patience.value|default:form.lr_patience.field.initial }}"
+                               min="{{ form.lr_patience.field.min_value|default:1 }}"
+                               step="1">
+                        {% if form.lr_patience.help_text %}
+                            <div class="form-text">{{ form.lr_patience.help_text }}</div>
+                        {% endif %}
+                        {{ form.lr_patience.errors }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Checkpointing Configuration -->
+            <div id="checkpointing-config" style="display: {% if form.use_enhanced_training.value %}block{% else %}none{% endif %};" class="form-group">
+                <label class="form-label">
+                    <i class="fas fa-save me-1"></i>Checkpointing & Monitoring
+                </label>
+                <div class="row">
+                    <div class="col-md-4">
+                        <label for="{{ form.checkpoint_strategy.id_for_label }}" class="form-label">Checkpoint Strategy</label>
+                        {{ form.checkpoint_strategy }}
+                        {% if form.checkpoint_strategy.help_text %}
+                            <div class="form-text">{{ form.checkpoint_strategy.help_text }}</div>
+                        {% endif %}
+                        {{ form.checkpoint_strategy.errors }}
+                    </div>
+                    <div class="col-md-4">
+                        <label for="{{ form.max_checkpoints.id_for_label }}" class="form-label">Max Checkpoints</label>
+                        <input type="number" 
+                               name="{{ form.max_checkpoints.html_name }}"
+                               class="form-control"
+                               id="{{ form.max_checkpoints.id_for_label }}"
+                               value="{{ form.max_checkpoints.value|default:form.max_checkpoints.field.initial }}"
+                               min="{{ form.max_checkpoints.field.min_value|default:1 }}"
+                               max="{{ form.max_checkpoints.field.max_value|default:20 }}"
+                               step="1">
+                        {% if form.max_checkpoints.help_text %}
+                            <div class="form-text">{{ form.max_checkpoints.help_text }}</div>
+                        {% endif %}
+                        {{ form.max_checkpoints.errors }}
+                    </div>
+                    <div class="col-md-4">
+                        <label for="{{ form.monitor_metric.id_for_label }}" class="form-label">Monitor Metric</label>
+                        {{ form.monitor_metric }}
+                        {% if form.monitor_metric.help_text %}
+                            <div class="form-text">{{ form.monitor_metric.help_text }}</div>
+                        {% endif %}
+                        {{ form.monitor_metric.errors }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Advanced Training Options -->
+            <div class="toggle-group">
+                <div class="toggle-item">
+                    <div class="form-switch">
+                        <input type="checkbox" 
+                               name="{{ form.use_mixed_precision.html_name }}"
+                               class="form-check-input"
+                               id="{{ form.use_mixed_precision.id_for_label }}"
+                               {% if form.use_mixed_precision.value %}checked{% endif %}>
+                        <label class="form-check-label" for="{{ form.use_mixed_precision.id_for_label }}">
+                            <i class="fas fa-microchip me-1"></i>Mixed Precision Training
+                            <span class="badge rounded-pill" style="background: #ffc107; color: #212529;">GPU</span>
+                        </label>
+                    </div>
+                    <div class="form-text">{{ form.use_mixed_precision.help_text }}</div>
+                </div>
+
+                <div class="toggle-item">
+                    <div class="form-switch">
+                        <input type="checkbox" 
+                               name="{{ form.use_early_stopping.html_name }}"
+                               class="form-check-input"
+                               id="{{ form.use_early_stopping.id_for_label }}"
+                               {% if form.use_early_stopping.value %}checked{% endif %}
+                               onchange="toggleEarlyStoppingFields(this.checked)">
+                        <label class="form-check-label" for="{{ form.use_early_stopping.id_for_label }}">
+                            <i class="fas fa-stop-circle me-1"></i>Enable Early Stopping
+                        </label>
+                    </div>
+                    <div class="form-text">{{ form.use_early_stopping.help_text }}</div>
+                    
+                    <div id="early-stopping-fields" style="display: {% if form.use_early_stopping.value %}block{% else %}none{% endif %};" class="mt-3">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <label for="{{ form.early_stopping_patience.id_for_label }}" class="form-label">Patience</label>
+                                <input type="number" 
+                                       name="{{ form.early_stopping_patience.html_name }}"
+                                       class="form-control"
+                                       id="{{ form.early_stopping_patience.id_for_label }}"
+                                       value="{{ form.early_stopping_patience.value|default:form.early_stopping_patience.field.initial }}"
+                                       min="{{ form.early_stopping_patience.field.min_value|default:1 }}"
+                                       step="1">
+                                {% if form.early_stopping_patience.help_text %}
+                                    <div class="form-text">{{ form.early_stopping_patience.help_text }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-6">
+                                <label for="{{ form.early_stopping_min_delta.id_for_label }}" class="form-label">Min Delta</label>
+                                <input type="number" 
+                                       name="{{ form.early_stopping_min_delta.html_name }}"
+                                       class="form-control"
+                                       id="{{ form.early_stopping_min_delta.id_for_label }}"
+                                       value="{{ form.early_stopping_min_delta.value|default:form.early_stopping_min_delta.field.initial }}"
+                                       min="{{ form.early_stopping_min_delta.field.min_value|default:0 }}"
+                                       step="any">
+                                {% if form.early_stopping_min_delta.help_text %}
+                                    <div class="form-text">{{ form.early_stopping_min_delta.help_text }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="toggle-item">
+                    <div class="form-switch">
+                        <input type="checkbox" 
+                               name="{{ form.use_enhanced_training.html_name }}"
+                               class="form-check-input"
+                               id="{{ form.use_enhanced_training.id_for_label }}"
+                               {% if form.use_enhanced_training.value %}checked{% endif %}
+                               onchange="toggleEnhancedTrainingFeatures(this.checked)">
+                        <label class="form-check-label" for="{{ form.use_enhanced_training.id_for_label }}">
+                            <i class="fas fa-rocket me-1"></i>Enhanced Training Features
+                            <span class="badge rounded-pill" style="background: #28a745; color: white;">Recommended</span>
+                        </label>
+                    </div>
+                    <div class="form-text">{{ form.use_enhanced_training.help_text }}</div>
+                </div>
+
+                <div class="toggle-item">
+                    <div class="form-switch">
+                        <input type="checkbox" 
+                               name="{{ form.use_loss_scheduling.html_name }}"
+                               class="form-check-input"
+                               id="{{ form.use_loss_scheduling.id_for_label }}"
+                               {% if form.use_loss_scheduling.value %}checked{% endif %}
+                               onchange="toggleLossFunctionConfig(this.checked)">
+                        <label class="form-check-label" for="{{ form.use_loss_scheduling.id_for_label }}">
+                            <i class="fas fa-chart-area me-1"></i>Dynamic Loss Scheduling
+                        </label>
+                    </div>
+                    <div class="form-text">{{ form.use_loss_scheduling.help_text }}</div>
+                    
+                    <div id="loss-scheduling-fields" style="display: {% if form.use_loss_scheduling.value %}block{% else %}none{% endif %};" class="mt-3">
+                        <label for="{{ form.loss_scheduler_type.id_for_label }}" class="form-label">Scheduler Type</label>
+                        {{ form.loss_scheduler_type }}
+                        {% if form.loss_scheduler_type.help_text %}
+                            <div class="form-text">{{ form.loss_scheduler_type.help_text }}</div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 4: Data Augmentation -->
+        <div class="form-section" id="step-4">
+            <div class="section-header">
+                <div class="icon" style="background: linear-gradient(135deg, #6f42c1 0%, #e83e8c 100%); color: white;">
+                    <i class="fas fa-magic"></i>
+                </div>
+                <div>
+                    <h3>Data Augmentation</h3>
+                    <p>Enhance your dataset with various augmentation techniques</p>
+                </div>
+            </div>
+
+            <div class="augmentation-grid">
+                
+                <!-- Flip Augmentation -->
+                <div class="augmentation-card flip" id="flip-card">
+                    <div class="card-header">
+                        <h6 class="card-title">
+                            <i class="fas fa-arrows-alt-h"></i>Random Flip
+                        </h6>
+                        <div class="form-switch">
+                            <input type="checkbox" 
+                                   name="{{ form.use_random_flip.html_name }}"
+                                   class="form-check-input"
+                                   id="{{ form.use_random_flip.id_for_label }}"
+                                   {% if form.use_random_flip.value %}checked{% endif %}
+                                   onchange="toggleAugmentationCard('flip-card', this.checked)">
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small mb-2">Apply random horizontal/vertical flips</p>
+                        <div class="form-group">
+                            <label for="{{ form.flip_probability.id_for_label }}" class="form-label">Probability</label>
+                            {{ form.flip_probability }}
+                            {% if form.flip_probability.help_text %}
+                                <div class="form-text">{{ form.flip_probability.help_text }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Rotation Augmentation -->
+                <div class="augmentation-card rotate" id="rotate-card">
+                    <div class="card-header">
+                        <h6 class="card-title">
+                            <i class="fas fa-sync-alt"></i>Random Rotate
+                        </h6>
+                        <div class="form-switch">
+                            <input type="checkbox" 
+                                   name="{{ form.use_random_rotate.html_name }}"
+                                   class="form-check-input"
+                                   id="{{ form.use_random_rotate.id_for_label }}"
+                                   {% if form.use_random_rotate.value %}checked{% endif %}
+                                   onchange="toggleAugmentationCard('rotate-card', this.checked)">
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small mb-2">Apply random rotations to images</p>
+                        <div class="form-group">
+                            <label for="{{ form.rotation_range.id_for_label }}" class="form-label">Range (degrees)</label>
+                            {{ form.rotation_range }}
+                            {% if form.rotation_range.help_text %}
+                                <div class="form-text">{{ form.rotation_range.help_text }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Scale Augmentation -->
+                <div class="augmentation-card scale" id="scale-card">
+                    <div class="card-header">
+                        <h6 class="card-title">
+                            <i class="fas fa-expand-arrows-alt"></i>Random Scale
+                        </h6>
+                        <div class="form-switch">
+                            <input type="checkbox" 
+                                   name="{{ form.use_random_scale.html_name }}"
+                                   class="form-check-input"
+                                   id="{{ form.use_random_scale.id_for_label }}"
+                                   {% if form.use_random_scale.value %}checked{% endif %}
+                                   onchange="toggleAugmentationCard('scale-card', this.checked)">
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small mb-2">Apply random scaling to images</p>
+                        <div class="row">
+                            <div class="col-12 mb-2">
+                                <label for="{{ form.scale_range_min.id_for_label }}" class="form-label">Min Scale</label>
+                                <input type="number" 
+                                       name="{{ form.scale_range_min.html_name }}"
+                                       class="form-control form-control-sm"
+                                       id="{{ form.scale_range_min.id_for_label }}"
+                                       value="{{ form.scale_range_min.value|default:form.scale_range_min.field.initial }}"
+                                       min="{{ form.scale_range_min.field.min_value|default:0.1 }}"
+                                       max="{{ form.scale_range_min.field.max_value|default:2.0 }}"
+                                       step="0.1">
+                            </div>
+                            <div class="col-12">
+                                <label for="{{ form.scale_range_max.id_for_label }}" class="form-label">Max Scale</label>
+                                <input type="number" 
+                                       name="{{ form.scale_range_max.html_name }}"
+                                       class="form-control form-control-sm"
+                                       id="{{ form.scale_range_max.id_for_label }}"
+                                       value="{{ form.scale_range_max.value|default:form.scale_range_max.field.initial }}"
+                                       min="{{ form.scale_range_max.field.min_value|default:0.1 }}"
+                                       max="{{ form.scale_range_max.field.max_value|default:2.0 }}"
+                                       step="0.1">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Intensity Augmentation -->
+                <div class="augmentation-card contrast" id="intensity-card">
+                    <div class="card-header">
+                        <h6 class="card-title">
+                            <i class="fas fa-adjust"></i>Random Intensity
+                        </h6>
+                        <div class="form-switch">
+                            <input type="checkbox" 
+                                   name="{{ form.use_random_intensity.html_name }}"
+                                   class="form-check-input"
+                                   id="{{ form.use_random_intensity.id_for_label }}"
+                                   {% if form.use_random_intensity.value %}checked{% endif %}
+                                   onchange="toggleAugmentationCard('intensity-card', this.checked)">
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small mb-2">Adjust image intensity/brightness randomly</p>
+                        <div class="form-group">
+                            <label for="{{ form.intensity_range.id_for_label }}" class="form-label">
+                                Intensity Range <span id="intensity-range-value" class="text-muted">(0.0-1.0)</span>
+                            </label>
+                            {{ form.intensity_range }}
+                            {% if form.intensity_range.help_text %}
+                                <div class="form-text">{{ form.intensity_range.help_text }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Elastic Transform Augmentation -->
+                <div class="augmentation-card blur" id="elastic-card">
+                    <div class="card-header">
+                        <h6 class="card-title">
+                            <i class="fas fa-wave-square"></i>Elastic Transform
+                        </h6>
+                        <div class="form-switch">
+                            <input type="checkbox" 
+                                   name="{{ form.use_elastic_transform.html_name }}"
+                                   class="form-check-input"
+                                   id="{{ form.use_elastic_transform.id_for_label }}"
+                                   {% if form.use_elastic_transform.value %}checked{% endif %}
+                                   onchange="toggleAugmentationCard('elastic-card', this.checked)">
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small mb-2">Apply elastic deformation for medical image augmentation</p>
+                        <div class="row">
+                            <div class="col-12 mb-2">
+                                <label for="{{ form.elastic_alpha.id_for_label }}" class="form-label">Alpha</label>
+                                <input type="number" 
+                                       name="{{ form.elastic_alpha.html_name }}"
+                                       class="form-control form-control-sm"
+                                       id="{{ form.elastic_alpha.id_for_label }}"
+                                       value="{{ form.elastic_alpha.value|default:form.elastic_alpha.field.initial }}"
+                                       min="{{ form.elastic_alpha.field.min_value|default:0 }}"
+                                       max="{{ form.elastic_alpha.field.max_value|default:100 }}"
+                                       step="0.1">
+                                {% if form.elastic_alpha.help_text %}
+                                    <div class="form-text">{{ form.elastic_alpha.help_text }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-12">
+                                <label for="{{ form.elastic_sigma.id_for_label }}" class="form-label">Sigma</label>
+                                <input type="number" 
+                                       name="{{ form.elastic_sigma.html_name }}"
+                                       class="form-control form-control-sm"
+                                       id="{{ form.elastic_sigma.id_for_label }}"
+                                       value="{{ form.elastic_sigma.value|default:form.elastic_sigma.field.initial }}"
+                                       min="{{ form.elastic_sigma.field.min_value|default:0 }}"
+                                       max="{{ form.elastic_sigma.field.max_value|default:10 }}"
+                                       step="0.1">
+                                {% if form.elastic_sigma.help_text %}
+                                    <div class="form-text">{{ form.elastic_sigma.help_text }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gaussian Noise Augmentation -->
+                <div class="augmentation-card noise" id="noise-card">
+                    <div class="card-header">
+                        <h6 class="card-title">
+                            <i class="fas fa-random"></i>Gaussian Noise
+                        </h6>
+                        <div class="form-switch">
+                            <input type="checkbox" 
+                                   name="{{ form.use_gaussian_noise.html_name }}"
+                                   class="form-check-input"
+                                   id="{{ form.use_gaussian_noise.id_for_label }}"
+                                   {% if form.use_gaussian_noise.value %}checked{% endif %}
+                                   onchange="toggleAugmentationCard('noise-card', this.checked)">
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small mb-2">Add Gaussian noise to simulate real-world conditions</p>
+                        <div class="form-group">
+                            <label for="{{ form.noise_std.id_for_label }}" class="form-label">Noise Std</label>
+                            {{ form.noise_std }}
+                            {% if form.noise_std.help_text %}
+                                <div class="form-text">{{ form.noise_std.help_text }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 5: Review & Launch -->
+        <div class="form-section" id="step-5">
+            <div class="section-header">
+                <div class="icon" style="background: linear-gradient(135deg, #dc3545 0%, #fd7e14 100%); color: white;">
+                    <i class="fas fa-rocket"></i>
+                </div>
+                <div>
+                    <h3>Review & Launch</h3>
+                    <p>Review your configuration and start the training process</p>
+                </div>
+            </div>
+
+            <div class="alert alert-info">
+                <h6><i class="fas fa-info-circle me-2"></i>Ready to Launch</h6>
+                <p class="mb-0">Please review your configuration above. Once you click "Start Training", the process will begin.</p>
+            </div>
+
+            <div id="config-summary" class="form-group">
+                <h6><i class="fas fa-cog me-2"></i>Configuration Summary</h6>
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6 class="text-muted">Basic Settings</h6>
+                        <ul class="list-unstyled">
+                            <li><strong>Name:</strong> <span id="summary-name" class="text-primary">-</span></li>
+                            <li><strong>Model:</strong> <span id="summary-model">-</span></li>
+                            <li><strong>Dataset Path:</strong> <span id="summary-dataset">-</span></li>
+                            <li><strong>Resolution:</strong> <span id="summary-resolution">-</span></li>
+                            <li><strong>Crop Size:</strong> <span id="summary-crop-size">-</span></li>
+                            <li><strong>Device:</strong> <span id="summary-device">-</span></li>
+                        </ul>
+                        
+                        <h6 class="text-muted mt-3">Training Parameters</h6>
+                        <ul class="list-unstyled">
+                            <li><strong>Epochs:</strong> <span id="summary-epochs">-</span></li>
+                            <li><strong>Batch Size:</strong> <span id="summary-batch">-</span></li>
+                            <li><strong>Learning Rate:</strong> <span id="summary-lr">-</span></li>
+                            <li><strong>Optimizer:</strong> <span id="summary-optimizer">-</span></li>
+                            <li><strong>Validation Split:</strong> <span id="summary-validation">-</span></li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-muted">Advanced Settings</h6>
+                        <ul class="list-unstyled">
+                            <li><strong>Loss Function:</strong> <span id="summary-loss">-</span></li>
+                            <li><strong>Early Stopping:</strong> <span id="summary-early-stopping">-</span></li>
+                            <li><strong>Enhanced Training:</strong> <span id="summary-enhanced">-</span></li>
+                            <li><strong>Mixed Precision:</strong> <span id="summary-mixed-precision">-</span></li>
+                        </ul>
+                        
+                        <h6 class="text-muted mt-3">Data Augmentations</h6>
+                        <div id="summary-augmentations" class="border rounded p-2 bg-light">
+                            <small class="text-muted">None selected</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="text-center">
+                <button type="submit" class="btn btn-success" id="start-training-btn">
+                    <i class="fas fa-play me-2"></i>Start Training
+                </button>
+            </div>
+        </div>
+
+    </form>
 </div>
 
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    const templateSelect = document.getElementById('template-select');
-    const loadTemplateBtn = document.getElementById('load-template-btn');
-    
-    if (templateSelect && loadTemplateBtn) {
-        loadTemplateBtn.addEventListener('click', function() {
-            const templateId = templateSelect.value;
-            if (!templateId) {
-                alert('Please select a template first.');
-                return;
-            }
-            
-            // Show loading state
-            loadTemplateBtn.disabled = true;
-            loadTemplateBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
-            
-            // Fetch template data
-            fetch(`{% url 'ml_manager:get-template-data' 0 %}`.replace('0', templateId))
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        // Populate form fields with template data
-                        const templateData = data.data;
-                        
-                        for (const [fieldName, value] of Object.entries(templateData)) {
-                            const field = document.querySelector(`[name="${fieldName}"]`);
-                            if (field) {
-                                if (field.type === 'checkbox') {
-                                    field.checked = value;
-                                } else {
-                                    field.value = value;
-                                }
-                            }
-                        }
-                        
-                        // Update scheduler fields after loading template
-                        const schedulerSelect = document.querySelector('[name="lr_scheduler"]');
-                        if (schedulerSelect) {
-                            updateSchedulerFields(schedulerSelect.value);
-                        }
-                        
-                        // Show success message
-                        const alertDiv = document.createElement('div');
-                        alertDiv.className = 'alert alert-success alert-dismissible fade show';
-                        alertDiv.innerHTML = `
-                            Template loaded successfully!
-                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                        `;
-                        
-                        const form = document.getElementById('training-form');
-                        form.insertBefore(alertDiv, form.firstChild);
-                        
-                        // Auto-dismiss after 3 seconds
-                        setTimeout(() => {
-                            if (alertDiv.parentNode) {
-                                alertDiv.remove();
-                            }
-                        }, 3000);
-                        
-                    } else {
-                        alert('Error loading template: ' + data.message);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error loading template:', error);
-                    alert('Error loading template. Please try again.');
-                })
-                .finally(() => {
-                    // Reset button state
-                    loadTemplateBtn.disabled = false;
-                    loadTemplateBtn.innerHTML = '<i class="fas fa-download"></i> Load Template';
-                });
-        });
-    }
-    
-    // Handle URL parameter for pre-selecting template
-    const urlParams = new URLSearchParams(window.location.search);
-    const templateParam = urlParams.get('template');
-    if (templateParam && templateSelect) {
-        templateSelect.value = templateParam;
-        // Auto-load the template
-        loadTemplateBtn.click();
-    }
-    
-    // Initialize scheduler fields on page load
-    const schedulerSelect = document.querySelector('[name="lr_scheduler"]');
-    if (schedulerSelect) {
-        updateSchedulerFields(schedulerSelect.value);
-    }
-});
+// EMERGENCY: Immediately enable interactions in case of JavaScript errors
+document.body.classList.add('page-loaded');
+console.log('[EMERGENCY] Page interactions enabled immediately');
 
-// Function to set data path from dropdown
-function setDataPath(path) {
-    const dataPathField = document.querySelector('[name="data_path"]');
-    if (dataPathField) {
-        dataPathField.value = path;
+// Debug logging
+function log(message, ...args) {
+    console.log('[START TRAINING]', message, ...args);
+}
+
+// Force hide all augmentations immediately when script loads
+(function() {
+    // This runs immediately to prevent flash of visible content
+    const style = document.createElement('style');
+    style.textContent = `
+        .augmentation-card .card-body {
+            display: none !important;
+            opacity: 0 !important;
+            max-height: 0 !important;
+            overflow: hidden !important;
+        }
+    `;
+    document.head.appendChild(style);
+    log('Emergency hide style applied');
+})();
+
+let currentStep = 1;
+const totalSteps = 5;
+
+// Function to update configuration summary
+function updateConfigSummary() {
+    log('Updating configuration summary...');
+    
+    try {
+        // Get form values
+        const nameField = document.getElementById('{{ form.name.id_for_label }}');
+        const modelField = document.getElementById('{{ form.model_type.id_for_label }}');
+        const dataPathField = document.getElementById('{{ form.data_path.id_for_label }}');
+        const resolutionField = document.getElementById('{{ form.resolution.id_for_label }}');
+        const cropSizeField = document.getElementById('{{ form.crop_size.id_for_label }}');
+        const deviceField = document.getElementById('{{ form.device.id_for_label }}');
+        const epochsField = document.getElementById('{{ form.epochs.id_for_label }}');
+        const batchSizeField = document.getElementById('{{ form.batch_size.id_for_label }}');
+        const learningRateField = document.getElementById('{{ form.learning_rate.id_for_label }}');
+        const optimizerField = document.getElementById('{{ form.optimizer.id_for_label }}');
+        const validationField = document.getElementById('{{ form.validation_split.id_for_label }}');
+        const lossFunctionField = document.getElementById('{{ form.loss_function.id_for_label }}');
+        const earlyStoppingField = document.getElementById('{{ form.use_early_stopping.id_for_label }}');
+        const enhancedTrainingField = document.getElementById('{{ form.use_enhanced_training.id_for_label }}');
+        const mixedPrecisionField = document.getElementById('{{ form.use_mixed_precision.id_for_label }}');
+        
+        // Update basic settings
+        if (nameField) {
+            document.getElementById('summary-name').textContent = nameField.value || 'Not specified';
+        }
+        
+        if (modelField) {
+            const selectedOption = modelField.options[modelField.selectedIndex];
+            document.getElementById('summary-model').textContent = selectedOption ? selectedOption.text : 'Not selected';
+        }
+        
+        if (dataPathField) {
+            document.getElementById('summary-dataset').textContent = dataPathField.value || 'Not specified';
+        }
+        
+        if (resolutionField) {
+            document.getElementById('summary-resolution').textContent = resolutionField.value || 'Not specified';
+        }
+        
+        if (cropSizeField) {
+            document.getElementById('summary-crop-size').textContent = cropSizeField.value || 'Not specified';
+        }
+        
+        if (deviceField) {
+            const selectedOption = deviceField.options[deviceField.selectedIndex];
+            document.getElementById('summary-device').textContent = selectedOption ? selectedOption.text : 'Not selected';
+        }
+        
+        // Update training parameters
+        if (epochsField) {
+            document.getElementById('summary-epochs').textContent = epochsField.value || 'Not specified';
+        }
+        
+        if (batchSizeField) {
+            document.getElementById('summary-batch').textContent = batchSizeField.value || 'Not specified';
+        }
+        
+        if (learningRateField) {
+            document.getElementById('summary-lr').textContent = learningRateField.value || 'Not specified';
+        }
+        
+        if (optimizerField) {
+            const selectedOption = optimizerField.options[optimizerField.selectedIndex];
+            document.getElementById('summary-optimizer').textContent = selectedOption ? selectedOption.text : 'Not selected';
+        }
+        
+        if (validationField) {
+            document.getElementById('summary-validation').textContent = (validationField.value || 'Not specified') + '%';
+        }
+        
+        // Update advanced settings
+        if (lossFunctionField) {
+            const selectedOption = lossFunctionField.options[lossFunctionField.selectedIndex];
+            document.getElementById('summary-loss').textContent = selectedOption ? selectedOption.text : 'Not selected';
+        }
+        
+        if (earlyStoppingField) {
+            document.getElementById('summary-early-stopping').textContent = earlyStoppingField.checked ? 'Enabled' : 'Disabled';
+        }
+        
+        if (enhancedTrainingField) {
+            document.getElementById('summary-enhanced').textContent = enhancedTrainingField.checked ? 'Enabled' : 'Disabled';
+        }
+        
+        if (mixedPrecisionField) {
+            document.getElementById('summary-mixed-precision').textContent = mixedPrecisionField.checked ? 'Enabled' : 'Disabled';
+        }
+        
+        // Update augmentations summary with better formatting
+        const enabledAugmentations = [];
+        const augmentationCheckboxes = document.querySelectorAll('.augmentation-card input[type="checkbox"]:checked');
+        
+        augmentationCheckboxes.forEach(checkbox => {
+            const card = checkbox.closest('.augmentation-card');
+            if (card) {
+                const title = card.querySelector('.card-title');
+                if (title) {
+                    enabledAugmentations.push(title.textContent.trim());
+                }
+            }
+        });
+        
+        const augmentationsElement = document.getElementById('summary-augmentations');
+        if (enabledAugmentations.length > 0) {
+            const augmentationsList = enabledAugmentations.map(aug => 
+                `<span class="badge bg-primary me-1 mb-1">${aug}</span>`
+            ).join('');
+            augmentationsElement.innerHTML = augmentationsList;
+        } else {
+            augmentationsElement.innerHTML = '<small class="text-muted">None selected</small>';
+        }
+        
+        log('Configuration summary updated successfully');
+        
+    } catch (error) {
+        log('Error updating configuration summary:', error);
     }
 }
 
-// Function to update scheduler fields based on selected type
-function updateSchedulerFields(schedulerType) {
-    // Hide all scheduler parameter groups
-    const groups = document.querySelectorAll('.scheduler-group');
-    groups.forEach(group => {
-        group.style.display = 'none';
+// Simple show step function
+function showStep(stepNumber) {
+    log('showStep called with:', stepNumber, 'currentStep was:', currentStep);
+    
+    try {
+        // Validate step number
+        if (stepNumber < 1 || stepNumber > totalSteps) {
+            log('ERROR: Invalid step number:', stepNumber, 'valid range: 1-', totalSteps);
+            return;
+        }
+        
+        // Hide all sections
+        const sections = document.querySelectorAll('.form-section');
+        log('Found sections:', sections.length);
+        
+        sections.forEach((section, index) => {
+            if (section.classList.contains('active')) {
+                log('Hiding currently active section:', section.id);
+            }
+            section.classList.remove('active', 'section-visible');
+            section.style.display = 'none';
+        });
+        
+        // Show current section
+        const currentSection = document.getElementById(`step-${stepNumber}`);
+        if (currentSection) {
+            currentSection.style.display = 'block';
+            currentSection.classList.add('active', 'section-visible');
+            log('Successfully showing section:', currentSection.id);
+        } else {
+            log('ERROR: Section not found:', `step-${stepNumber}`);
+            return;
+        }
+        
+        // Update step navigation
+        const stepLinks = document.querySelectorAll('.step-link');
+        log('Updating', stepLinks.length, 'step links for step', stepNumber);
+        
+        stepLinks.forEach((link, index) => {
+            link.classList.remove('active', 'completed');
+            if (index + 1 < stepNumber) {
+                link.classList.add('completed');
+                log('Link', index + 1, 'marked as completed');
+            } else if (index + 1 === stepNumber) {
+                link.classList.add('active');
+                log('Link', index + 1, 'marked as active');
+            }
+        });
+        
+        // Update step arrow navigation
+        const stepPrevArrow = document.getElementById('step-prev-arrow');
+        const stepNextArrow = document.getElementById('step-next-arrow');
+        
+        // Update step arrow navigation
+        if (stepPrevArrow) {
+            stepPrevArrow.style.display = stepNumber === 1 ? 'none' : 'inline-block';
+        }
+        
+        if (stepNextArrow) {
+            stepNextArrow.style.display = stepNumber === totalSteps ? 'none' : 'inline-block';
+        }
+        
+        // Update current step display
+        const stepDisplay = document.getElementById('current-step-display');
+        if (stepDisplay) {
+            stepDisplay.textContent = stepNumber;
+        }
+        
+        // Update configuration summary when entering step 5
+        if (stepNumber === 5) {
+            log('📝 Entering Review & Launch step, updating configuration summary...');
+            setTimeout(() => {
+                updateConfigSummary();
+            }, 100); // Small delay to ensure DOM is updated
+        }
+        
+        log('showStep completed successfully for step:', stepNumber);
+        
+    } catch (error) {
+        log('ERROR in showStep:', error);
+    }
+}
+
+function nextStep() {
+    log('nextStep called. Current step:', currentStep, 'Total steps:', totalSteps);
+    if (currentStep < totalSteps) {
+        const newStep = currentStep + 1;
+        log('Moving from step', currentStep, 'to step', newStep);
+        currentStep = newStep;
+        showStep(currentStep);
+    } else {
+        log('Already at last step, cannot go next');
+    }
+}
+
+function previousStep() {
+    log('previousStep called. Current step:', currentStep);
+    if (currentStep > 1) {
+        const newStep = currentStep - 1;
+        log('Moving from step', currentStep, 'to step', newStep);
+        currentStep = newStep;
+        showStep(currentStep);
+    } else {
+        log('Already at first step, cannot go previous');
+    }
+}
+
+function goToStep(stepNumber) {
+    log('goToStep called with:', stepNumber);
+    currentStep = stepNumber;
+    showStep(currentStep);
+    return false; // Prevent default link behavior
+}
+
+function toggleEarlyStoppingFields(enabled) {
+    log('toggleEarlyStoppingFields:', enabled);
+    const fields = document.getElementById('early-stopping-fields');
+    if (fields) {
+        fields.style.display = enabled ? 'block' : 'none';
+    }
+}
+
+function toggleEnhancedTrainingFeatures(enabled) {
+    log('toggleEnhancedTrainingFeatures:', enabled);
+    const config = document.getElementById('checkpointing-config');
+    if (config) {
+        config.style.display = enabled ? 'block' : 'none';
+    }
+}
+
+function toggleLossFunctionConfig(enabled) {
+    log('toggleLossFunctionConfig:', enabled);
+    const config = document.getElementById('loss-function-config');
+    const fields = document.getElementById('loss-scheduling-fields');
+    
+    if (config) {
+        config.style.display = enabled ? 'block' : 'none';
+    }
+    if (fields) {
+        fields.style.display = enabled ? 'block' : 'none';
+    }
+}
+
+// Backward compatibility
+function toggleLossSchedulingFields(enabled) {
+    toggleLossFunctionConfig(enabled);
+}
+
+function toggleDiceBceWeights(lossFunction) {
+    log('toggleDiceBceWeights:', lossFunction);
+    const weights = document.getElementById('dice-bce-weights');
+    if (weights) {
+        const showWeights = lossFunction === 'combined' || 
+                           lossFunction === 'focal_segmentation' || 
+                           lossFunction === 'balanced_segmentation';
+        weights.style.display = showWeights ? 'block' : 'none';
+   
+    }
+}
+
+function updateWeights(changedWeight) {
+    log('updateWeights:', changedWeight);
+    const diceWeightField = document.getElementById('{{ form.dice_weight.id_for_label }}');
+    const bceWeightField = document.getElementById('{{ form.bce_weight.id_for_label }}');
+    
+    if (diceWeightField && bceWeightField) {
+        const diceValue = parseFloat(diceWeightField.value) || 0;
+        const bceValue = parseFloat(bceWeightField.value) || 0;
+        
+        // Ensure values are between 0 and 1
+        if (changedWeight === 'dice') {
+            const newDiceValue = Math.max(0, Math.min(1, diceValue));
+            const newBceValue = Math.max(0, Math.min(1, 1 - newDiceValue));
+            diceWeightField.value = newDiceValue.toFixed(1);
+            bceWeightField.value = newBceValue.toFixed(1);
+        } else if (changedWeight === 'bce') {
+            const newBceValue = Math.max(0, Math.min(1, bceValue));
+            const newDiceValue = Math.max(0, Math.min(1, 1 - newBceValue));
+            bceWeightField.value = newBceValue.toFixed(1);
+            diceWeightField.value = newDiceValue.toFixed(1);
+        }
+    }
+}
+
+function toggleAugmentationCard(cardId, enabled) {
+    log('toggleAugmentationCard:', cardId, enabled);
+    const card = document.getElementById(cardId);
+    if (card) {
+        // Use CSS classes for better control
+        if (enabled) {
+            card.classList.add('enabled');
+            card.style.borderColor = getCardColor(cardId);
+            card.style.backgroundColor = getCardBackgroundColor(cardId);
+        } else {
+            card.classList.remove('enabled');
+            card.style.borderColor = '#e9ecef';
+            card.style.backgroundColor = 'white';
+        }
+        
+        log('Card', cardId, 'enabled:', enabled, 'has enabled class:', card.classList.contains('enabled'));
+    }
+}
+
+function getCardColor(cardId) {
+    const colors = {
+        'flip-card': '#007bff',
+        'rotate-card': '#28a745', 
+        'scale-card': '#fd7e14',
+        'intensity-card': '#e83e8c',
+        'elastic-card': '#20c997',
+        'noise-card': '#6c757d'
+    };
+    return colors[cardId] || '#007bff';
+}
+
+function getCardBackgroundColor(cardId) {
+    const colors = {
+        'flip-card': 'rgba(0, 123, 255, 0.05)',
+        'rotate-card': 'rgba(40, 167, 69, 0.05)',
+        'scale-card': 'rgba(255, 193, 7, 0.05)',
+        'intensity-card': 'rgba(232, 62, 140, 0.05)',
+        'elastic-card': 'rgba(32, 201, 151, 0.05)',
+        'noise-card': 'rgba(108, 117, 125, 0.05)'
+    };
+    return colors[cardId] || 'rgba(0, 123, 255, 0.05)';
+}
+
+// Debugging function for augmentation states
+function debugAugmentationStates() {
+    log('=== DEBUGGING AUGMENTATION STATES ===');
+    const augmentationCheckboxes = document.querySelectorAll('.augmentation-card input[type="checkbox"]');
+    
+    augmentationCheckboxes.forEach(checkbox => {
+        const card = checkbox.closest('.augmentation-card');
+        if (card) {
+            const cardBody = card.querySelector('.card-body');
+            log(`Card: ${card.id}`);
+            log(`- Checkbox checked: ${checkbox.checked}`);
+            log(`- Card has enabled class: ${card.classList.contains('enabled')}`);
+            log(`- Card body display: ${cardBody ? getComputedStyle(cardBody).display : 'not found'}`);
+            log(`- Card body visible: ${cardBody ? cardBody.offsetHeight > 0 : 'not found'}`);
+            log('---');
+        }
+    });
+    log('=== END DEBUG ===');
+}
+
+// Force show all augmentations (for testing)
+function forceShowAllAugmentations() {
+    log('=== FORCE SHOWING ALL AUGMENTATIONS ===');
+    const augmentationCards = document.querySelectorAll('.augmentation-card');
+    
+    augmentationCards.forEach(card => {
+        const cardBody = card.querySelector('.card-body');
+        const checkbox = card.querySelector('input[type="checkbox"]');
+        
+        if (cardBody && checkbox) {
+            // Force enable
+            checkbox.checked = true;
+            card.classList.add('enabled');
+            cardBody.style.display = 'block';
+            cardBody.style.visibility = 'visible';
+            card.style.borderColor = getCardColor(card.id);
+            card.style.backgroundColor = getCardBackgroundColor(card.id);
+            
+            log(`Forced show: ${card.id}`);
+        }
+    });
+    log('=== END FORCE SHOW ===');
+}
+
+function forceHideAllAugmentations() {
+    log('Forcing all augmentations to hide');
+    const augmentationCards = document.querySelectorAll('.augmentation-card');
+    augmentationCards.forEach(card => {
+        card.classList.remove('enabled');
+        const checkbox = card.querySelector('input[type="checkbox"]');
+        if (checkbox) {
+            checkbox.checked = false;
+        }
+    });
+    log('All augmentations forced to hide');
+}
+
+// Make this function global for testing
+window.forceShowAllAugmentations = forceShowAllAugmentations;
+
+// Debug helper functions available in console
+window.debugNavigation = function() {
+    log('=== NAVIGATION DEBUG ===');
+    log('Current step:', currentStep);
+    log('Total steps:', totalSteps);
+    
+    // Check all sections
+    for (let i = 1; i <= totalSteps; i++) {
+        const section = document.getElementById(`step-${i}`);
+        if (section) {
+            log(`Step ${i}:`, {
+                exists: true,
+                display: section.style.display,
+                hasActive: section.classList.contains('active'),
+                hasVisible: section.classList.contains('section-visible')
+            });
+        } else {
+            log(`Step ${i}: NOT FOUND`);
+        }
+    }
+    
+    // Check navigation links
+    const links = document.querySelectorAll('.step-link');
+    log('Step links:', links.length);
+    links.forEach((link, index) => {
+        log(`Link ${index + 1}:`, {
+            dataStep: link.getAttribute('data-step'),
+            hasActive: link.classList.contains('active'),
+            hasCompleted: link.classList.contains('completed')
+        });
     });
     
-    // Scheduler descriptions
-    const descriptions = {
-        'none': {
-            text: 'No learning rate scheduling. The learning rate remains constant throughout training.',
-            status: 'Fixed LR',
-            color: 'secondary'
-        },
-        'plateau': {
-            text: 'Reduces learning rate when validation loss stops improving. Monitors plateau and reduces LR by a factor after patience epochs.',
-            status: 'Adaptive',
-            color: 'warning'
-        },
-        'step': {
-            text: 'Reduces learning rate at fixed epoch intervals. LR is multiplied by gamma every step_size epochs.',
-            status: 'Step-wise',
-            color: 'success'
-        },
-        'exponential': {
-            text: 'Exponentially decays the learning rate each epoch. LR is multiplied by gamma every epoch.',
-            status: 'Exponential',
-            color: 'danger'
-        },
-        'cosine': {
-            text: 'Cosine annealing scheduler that varies learning rate following a cosine function. Provides smooth decay.',
-            status: 'Cosine',
-            color: 'info'
-        },
-        'adaptive': {
-            text: 'Custom adaptive scheduler that automatically adjusts learning rate based on training dynamics.',
-            status: 'Custom',
-            color: 'primary'
-        }
-    };
-    
-    // Update description and status
-    const infoText = document.getElementById('scheduler-info-text');
-    const statusBadge = document.getElementById('scheduler-status');
-    
-    if (descriptions[schedulerType]) {
-        infoText.textContent = descriptions[schedulerType].text;
-        statusBadge.textContent = descriptions[schedulerType].status;
-        statusBadge.className = `badge bg-${descriptions[schedulerType].color} ms-2`;
-    }
-    
-    // Show relevant parameter groups
-    switch (schedulerType) {
-        case 'plateau':
-            document.getElementById('plateau-params').style.display = 'block';
-            break;
-        case 'step':
-            document.getElementById('step-params').style.display = 'block';
-            break;
-        case 'exponential':
-            document.getElementById('exponential-params').style.display = 'block';
-            break;
-        case 'cosine':
-            // Cosine scheduler typically doesn't need additional parameters beyond min_lr
-            break;
-        case 'adaptive':
-            // Custom adaptive might use various parameters
-            document.getElementById('plateau-params').style.display = 'block';
-            break;
-    }
-}
+    log('=== END DEBUG ===');
+};
 
-// Early Stopping Toggle Function
-function toggleEarlyStoppingFields(enabled) {
-    const paramsDiv = document.getElementById('early-stopping-params');
-    const statusBadge = document.getElementById('early-stopping-status');
-    
-    if (enabled) {
-        paramsDiv.style.display = 'block';
-        statusBadge.textContent = 'Enabled';
-        statusBadge.className = 'badge bg-success ms-2';
-    } else {
-        paramsDiv.style.display = 'none';
-        statusBadge.textContent = 'Disabled';
-        statusBadge.className = 'badge bg-secondary ms-2';
-    }
-}
+window.testNavigation = function(step) {
+    log('Testing navigation to step:', step);
+    goToStep(step);
+};
 
-// Initialize early stopping state on page load
+// Initialize when page loads
 document.addEventListener('DOMContentLoaded', function() {
-    const earlyStoppingCheckbox = document.querySelector('input[name="use_early_stopping"]');
-    if (earlyStoppingCheckbox) {
-        toggleEarlyStoppingFields(earlyStoppingCheckbox.checked);
+    try {
+        log('DOM loaded, starting initialization...');
+        
+        // Initialize basic functionality
+        showStep(1);
+        
+        // Initialize all toggle states first
+        const enhancedTrainingCheckbox = document.getElementById('{{ form.use_enhanced_training.id_for_label }}');
+        if (enhancedTrainingCheckbox) {
+            log('Found enhanced training checkbox, checked:', enhancedTrainingCheckbox.checked);
+            toggleEnhancedTrainingFeatures(enhancedTrainingCheckbox.checked);
+        }
+        
+        const lossSchedulingCheckbox = document.getElementById('{{ form.use_loss_scheduling.id_for_label }}');
+        if (lossSchedulingCheckbox) {
+            log('Found loss scheduling checkbox, checked:', lossSchedulingCheckbox.checked);
+            toggleLossFunctionConfig(lossSchedulingCheckbox.checked);
+        }
+        
+        const earlyStoppingCheckbox = document.getElementById('{{ form.use_early_stopping.id_for_label }}');
+        if (earlyStoppingCheckbox) {
+            log('Found early stopping checkbox, checked:', earlyStoppingCheckbox.checked);
+            toggleEarlyStoppingFields(earlyStoppingCheckbox.checked);
+        }
+        
+        // Initialize Dice/BCE weights
+        const lossFunctionSelect = document.getElementById('{{ form.loss_function.id_for_label }}');
+        if (lossFunctionSelect) {
+            log('Found loss function select');
+            toggleDiceBceWeights(lossFunctionSelect.value);
+        }
+        
+        // Initialize augmentation checkboxes
+        const augmentationCheckboxes = document.querySelectorAll('.augmentation-card input[type="checkbox"]');
+        log('Found augmentation checkboxes:', augmentationCheckboxes.length);
+        
+        augmentationCheckboxes.forEach(checkbox => {
+            const card = checkbox.closest('.augmentation-card');
+            if (card) {
+                log('Initializing augmentation card:', card.id, 'checked:', checkbox.checked);
+                toggleAugmentationCard(card.id, checkbox.checked);
+            }
+        });
+        
+        // Setup step navigation
+        const stepLinks = document.querySelectorAll('.step-link');
+        log('Found step links:', stepLinks.length);
+        
+        stepLinks.forEach((link, index) => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                const stepNumber = parseInt(link.getAttribute('data-step')) || (index + 1);
+                log('Step link clicked, going to step:', stepNumber);
+                currentStep = stepNumber;
+                showStep(currentStep);
+            });
+        });
+        
+        // Setup step arrow navigation
+        const stepPrevArrow = document.getElementById('step-prev-arrow');
+        const stepNextArrow = document.getElementById('step-next-arrow');
+        
+        // Setup step arrow navigation
+        if (stepPrevArrow) {
+            stepPrevArrow.addEventListener('click', function(e) {
+                e.preventDefault();
+                log('Step previous arrow clicked');
+                previousStep();
+            });
+        }
+        
+        if (stepNextArrow) {
+            stepNextArrow.addEventListener('click', function(e) {
+                e.preventDefault();
+                log('Step next arrow clicked');
+                nextStep();
+            });
+        }
+        
+        log('Initialization completed successfully');
+        
+        // Add form validation feedback
+        const submitButton = document.getElementById('start-training-btn');
+        const trainingForm = document.getElementById('training-form');
+        
+        if (submitButton && trainingForm) {
+            // Add form submit handler
+            trainingForm.addEventListener('submit', function(e) {
+                log('Form submit event triggered');
+                
+                // Don't prevent submission, just log it
+                const formData = new FormData(trainingForm);
+                log('Form data being submitted:');
+                for (let [key, value] of formData.entries()) {
+                    log(`  ${key}: ${value}`);
+                }
+            });
+            
+            // TEMPORARY: Remove submit button handler entirely for debugging
+            // submitButton.addEventListener('click', function(e) {
+            //     log('Submit button clicked');
+            //     
+            //     // TEMPORARY: Skip validation and submit directly
+            //     log('Skipping validation - forcing form submission');
+            //     
+            //     // Add loading state and let the form submit normally
+            //     submitButton.disabled = true;
+            //     submitButton.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Starting Training...';
+            //     
+            //     // Don't prevent default - let the form submit normally
+            // });
+            
+            log('Submit button handler DISABLED for debugging - form should submit naturally');
+        }
+        
+    } catch (error) {
+        log('ERROR during initialization:', error);
     }
+    
+    // Ensure interactions are enabled
+    document.body.classList.add('page-loaded');
 });
 </script>
-
 {% endblock %}

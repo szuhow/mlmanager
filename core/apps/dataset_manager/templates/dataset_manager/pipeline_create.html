@@ -1,0 +1,193 @@
+{% extends "dataset_manager/base.html" %}
+{% load static %}
+
+{% block title %}Create Pipeline - Dataset Manager{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        <i class="fas fa-plus-circle"></i>
+                        Create New Pipeline
+                    </h3>
+                    <div class="card-tools">
+                        <a href="{% url 'dataset_manager:pipeline_list' %}" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left"></i> Back to Pipelines
+                        </a>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <form method="post" class="needs-validation" novalidate>
+                        {% csrf_token %}
+                        
+                        <div class="row">
+                            <div class="col-md-8">
+                                <!-- Basic Information -->
+                                <div class="card mb-4">
+                                    <div class="card-header">
+                                        <h5>Basic Information</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row">
+                                            <div class="col-md-8">
+                                                <div class="form-group">
+                                                    <label for="{{ form.name.id_for_label }}">Pipeline Name *</label>
+                                                    {{ form.name }}
+                                                    {% if form.name.errors %}
+                                                        <div class="invalid-feedback d-block">
+                                                            {{ form.name.errors.0 }}
+                                                        </div>
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <div class="form-group">
+                                                    <label for="{{ form.version.id_for_label }}">Version</label>
+                                                    {{ form.version }}
+                                                    {% if form.version.errors %}
+                                                        <div class="invalid-feedback d-block">
+                                                            {{ form.version.errors.0 }}
+                                                        </div>
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="form-group">
+                                            <label for="{{ form.description.id_for_label }}">Description</label>
+                                            {{ form.description }}
+                                            {% if form.description.errors %}
+                                                <div class="invalid-feedback d-block">
+                                                    {{ form.description.errors.0 }}
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                        
+                                        <div class="form-group">
+                                            <label for="{{ form.output_format.id_for_label }}">Output Format</label>
+                                            {{ form.output_format }}
+                                            {% if form.output_format.errors %}
+                                                <div class="invalid-feedback d-block">
+                                                    {{ form.output_format.errors.0 }}
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Configuration -->
+                                <div class="card mb-4">
+                                    <div class="card-header">
+                                        <h5>Configuration</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="form-group">
+                                            <label for="{{ form.input_formats.id_for_label }}">Input Formats</label>
+                                            {{ form.input_formats }}
+                                            <small class="form-text text-muted">{{ form.input_formats.help_text }}</small>
+                                            {% if form.input_formats.errors %}
+                                                <div class="invalid-feedback d-block">
+                                                    {{ form.input_formats.errors.0 }}
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                        
+                                        <div class="form-group">
+                                            <label for="{{ form.default_parameters.id_for_label }}">Default Parameters</label>
+                                            {{ form.default_parameters }}
+                                            <small class="form-text text-muted">{{ form.default_parameters.help_text }}</small>
+                                            {% if form.default_parameters.errors %}
+                                                <div class="invalid-feedback d-block">
+                                                    {{ form.default_parameters.errors.0 }}
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                        
+                                        <div class="form-group">
+                                            <label for="{{ form.required_parameters.id_for_label }}">Required Parameters</label>
+                                            {{ form.required_parameters }}
+                                            <small class="form-text text-muted">{{ form.required_parameters.help_text }}</small>
+                                            {% if form.required_parameters.errors %}
+                                                <div class="invalid-feedback d-block">
+                                                    {{ form.required_parameters.errors.0 }}
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-4">
+                                <!-- Settings -->
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h5>Settings</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="form-check mb-3">
+                                            {{ form.is_template }}
+                                            <label class="form-check-label" for="{{ form.is_template.id_for_label }}">
+                                                Available as Template
+                                            </label>
+                                            <small class="form-text text-muted">
+                                                Allow other users to use this as a template
+                                            </small>
+                                        </div>
+                                        
+                                        <div class="form-check">
+                                            {{ form.is_public }}
+                                            <label class="form-check-label" for="{{ form.is_public.id_for_label }}">
+                                                Public Pipeline
+                                            </label>
+                                            <small class="form-text text-muted">
+                                                Make this pipeline visible to all users
+                                            </small>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Actions -->
+                                <div class="card mt-4">
+                                    <div class="card-body">
+                                        <button type="submit" class="btn btn-primary btn-block">
+                                            <i class="fas fa-save"></i> Create Pipeline
+                                        </button>
+                                        <a href="{% url 'dataset_manager:pipeline_list' %}" class="btn btn-secondary btn-block">
+                                            <i class="fas fa-times"></i> Cancel
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Hidden fields -->
+                        {{ form.pipeline_graph }}
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Basic form validation
+(function() {
+    'use strict';
+    window.addEventListener('load', function() {
+        var forms = document.getElementsByClassName('needs-validation');
+        var validation = Array.prototype.filter.call(forms, function(form) {
+            form.addEventListener('submit', function(event) {
+                if (form.checkValidity() === false) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+                form.classList.add('was-validated');
+            }, false);
+        });
+    }, false);
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,189 @@
+{% extends "dataset_manager/base.html" %}
+{% load static %}
+
+{% block title %}Create Schema - Dataset Manager{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        <i class="fas fa-plus-circle"></i>
+                        Create New Annotation Schema
+                    </h3>
+                    <div class="card-tools">
+                        <a href="{% url 'dataset_manager:schema_list' %}" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left"></i> Back to Schemas
+                        </a>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <form method="post" class="needs-validation" novalidate>
+                        {% csrf_token %}
+                        
+                        <div class="row">
+                            <div class="col-md-8">
+                                <!-- Basic Information -->
+                                <div class="card mb-4">
+                                    <div class="card-header">
+                                        <h5>Basic Information</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row">
+                                            <div class="col-md-8">
+                                                <div class="form-group">
+                                                    <label for="{{ form.name.id_for_label }}">Schema Name *</label>
+                                                    {{ form.name }}
+                                                    {% if form.name.errors %}
+                                                        <div class="invalid-feedback d-block">
+                                                            {{ form.name.errors.0 }}
+                                                        </div>
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <div class="form-group">
+                                                    <label for="{{ form.type.id_for_label }}">Schema Type *</label>
+                                                    {{ form.type }}
+                                                    {% if form.type.errors %}
+                                                        <div class="invalid-feedback d-block">
+                                                            {{ form.type.errors.0 }}
+                                                        </div>
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="form-group">
+                                            <label for="{{ form.description.id_for_label }}">Description</label>
+                                            {{ form.description }}
+                                            {% if form.description.errors %}
+                                                <div class="invalid-feedback d-block">
+                                                    {{ form.description.errors.0 }}
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Schema Definition -->
+                                <div class="card mb-4">
+                                    <div class="card-header">
+                                        <h5>Schema Definition</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="form-group">
+                                            <label for="{{ form.schema_definition.id_for_label }}">Schema Definition (JSON)</label>
+                                            {{ form.schema_definition }}
+                                            <small class="form-text text-muted">{{ form.schema_definition.help_text }}</small>
+                                            {% if form.schema_definition.errors %}
+                                                <div class="invalid-feedback d-block">
+                                                    {{ form.schema_definition.errors.0 }}
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                        
+                                        <div class="form-group">
+                                            <label for="{{ form.validation_rules.id_for_label }}">Validation Rules (JSON)</label>
+                                            {{ form.validation_rules }}
+                                            <small class="form-text text-muted">{{ form.validation_rules.help_text }}</small>
+                                            {% if form.validation_rules.errors %}
+                                                <div class="invalid-feedback d-block">
+                                                    {{ form.validation_rules.errors.0 }}
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                        
+                                        <div class="form-group">
+                                            <label for="{{ form.example_annotation.id_for_label }}">Example Annotation (JSON)</label>
+                                            {{ form.example_annotation }}
+                                            <small class="form-text text-muted">{{ form.example_annotation.help_text }}</small>
+                                            {% if form.example_annotation.errors %}
+                                                <div class="invalid-feedback d-block">
+                                                    {{ form.example_annotation.errors.0 }}
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-4">
+                                <!-- Settings -->
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h5>Settings</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="form-check">
+                                            {{ form.is_public }}
+                                            <label class="form-check-label" for="{{ form.is_public.id_for_label }}">
+                                                Public Schema
+                                            </label>
+                                            <small class="form-text text-muted">
+                                                Make this schema available to all users
+                                            </small>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Actions -->
+                                <div class="card mt-4">
+                                    <div class="card-body">
+                                        <button type="submit" class="btn btn-primary btn-block">
+                                            <i class="fas fa-save"></i> Create Schema
+                                        </button>
+                                        <a href="{% url 'dataset_manager:schema_list' %}" class="btn btn-secondary btn-block">
+                                            <i class="fas fa-times"></i> Cancel
+                                        </a>
+                                    </div>
+                                </div>
+                                
+                                <!-- Help -->
+                                <div class="card mt-4">
+                                    <div class="card-header">
+                                        <h6>Schema Examples</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <small>
+                                            <strong>Classification:</strong><br>
+                                            <code>{"class": "string"}</code><br><br>
+                                            
+                                            <strong>Segmentation:</strong><br>
+                                            <code>{"masks": "array"}</code><br><br>
+                                            
+                                            <strong>Detection:</strong><br>
+                                            <code>{"boxes": "array", "labels": "array"}</code>
+                                        </small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Basic form validation
+(function() {
+    'use strict';
+    window.addEventListener('load', function() {
+        var forms = document.getElementsByClassName('needs-validation');
+        var validation = Array.prototype.filter.call(forms, function(form) {
+            form.addEventListener('submit', function(event) {
+                if (form.checkValidity() === false) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+                form.classList.add('was-validated');
+            }, false);
+        });
+    }, false);
+})();
+</script>
+{% endblock %}

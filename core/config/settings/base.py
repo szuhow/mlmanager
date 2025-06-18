@@ -168,5 +168,10 @@ LOGGING = {
             'level': 'WARNING',
             'propagate': False,
         },
+        'django.server': {
+            'handlers': ['console'] if get_env_variable('DISABLE_HTTP_LOGGING', 'false').lower() == 'false' else [],
+            'level': 'WARNING' if get_env_variable('DISABLE_HTTP_LOGGING', 'false').lower() == 'true' else 'INFO',
+            'propagate': False,
+        },
     },
 }

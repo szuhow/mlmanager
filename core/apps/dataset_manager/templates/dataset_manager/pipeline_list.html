@@ -1,0 +1,209 @@
+{% extends "dataset_manager/base.html" %}
+{% load static %}
+
+{% block title %}Pipelines - Dataset Manager{% endblock %}
+
+{% block extra_css %}
+<style>
+    .pipeline-card {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+        background: white;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .pipeline-status {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: bold;
+        text-transform: uppercase;
+    }
+    .status-active { background: #d4edda; color: #155724; }
+    .status-inactive { background: #f8d7da; color: #721c24; }
+    .status-draft { background: #fff3cd; color: #856404; }
+    .filter-bar {
+        background: #f8f9fa;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+    }
+    .node-count {
+        background: #e3f2fd;
+        color: #1565c0;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h1><i class="fas fa-project-diagram"></i> Data Pipelines</h1>
+                <a href="{% url 'dataset_manager:pipeline_create' %}" class="btn btn-primary">
+                    <i class="fas fa-plus"></i> Create Pipeline
+                </a>
+            </div>
+
+            <!-- Filter Bar -->
+            <div class="filter-bar">
+                <form method="get" class="row">
+                    <div class="col-md-4">
+                        <label for="search" class="form-label">Search</label>
+                        <input type="text" name="search" id="search" class="form-control" 
+                               value="{{ request.GET.search }}" placeholder="Search pipelines...">
+                    </div>
+                    <div class="col-md-3">
+                        <label for="status" class="form-label">Status</label>
+                        <select name="status" id="status" class="form-select">
+                            <option value="">All Status</option>
+                            <option value="active" {% if request.GET.status == 'active' %}selected{% endif %}>Active</option>
+                            <option value="inactive" {% if request.GET.status == 'inactive' %}selected{% endif %}>Inactive</option>
+                            <option value="draft" {% if request.GET.status == 'draft' %}selected{% endif %}>Draft</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button type="submit" class="btn btn-outline-primary me-2">
+                            <i class="fas fa-filter"></i> Filter
+                        </button>
+                        <a href="{% url 'dataset_manager:pipeline_list' %}" class="btn btn-outline-secondary">
+                            <i class="fas fa-times"></i> Clear
+                        </a>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Pipeline List -->
+            {% if pipelines %}
+                <div class="row">
+                    {% for pipeline in pipelines %}
+                    <div class="col-md-6 col-lg-4">
+                        <div class="pipeline-card">
+                            <div class="d-flex justify-content-between align-items-start mb-3">
+                                <h5 class="card-title mb-0">{{ pipeline.name }}</h5>
+                                <span class="pipeline-status status-{{ pipeline.status }}">
+                                    {{ pipeline.status }}
+                                </span>
+                            </div>
+                            
+                            <p class="text-muted mb-3">
+                                <small>{{ pipeline.description|truncatewords:15 }}</small>
+                            </p>
+                            
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <span class="node-count">
+                                    <i class="fas fa-sitemap"></i> {{ pipeline.node_count|default:0 }} nodes
+                                </span>
+                                <small class="text-muted">
+                                    v{{ pipeline.version }}
+                                </small>
+                            </div>
+                            
+                            <div class="row text-center mb-3">
+                                <div class="col-4">
+                                    <strong>{{ pipeline.execution_count|default:0 }}</strong>
+                                    <br><small class="text-muted">Runs</small>
+                                </div>
+                                <div class="col-4">
+                                    <strong>{{ pipeline.success_rate|default:0 }}%</strong>
+                                    <br><small class="text-muted">Success</small>
+                                </div>
+                                <div class="col-4">
+                                    <strong>{{ pipeline.avg_duration|default:0 }}s</strong>
+                                    <br><small class="text-muted">Avg Time</small>
+                                </div>
+                            </div>
+                            
+                            <div class="d-flex justify-content-between align-items-center">
+                                <small class="text-muted">
+                                    Created {{ pipeline.created_at|timesince }} ago
+                                </small>
+                                <div class="btn-group">
+                                    <a href="{% url 'dataset_manager:pipeline_detail' pipeline.pk %}" 
+                                       class="btn btn-sm btn-outline-primary">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
+                                    {% if pipeline.status == 'active' %}
+                                    <a href="{% url 'dataset_manager:pipeline_execute' pipeline.pk %}" 
+                                       class="btn btn-sm btn-success">
+                                        <i class="fas fa-play"></i> Run
+                                    </a>
+                                    {% endif %}
+                                    <div class="btn-group">
+                                        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" 
+                                                type="button" data-bs-toggle="dropdown">
+                                            <i class="fas fa-ellipsis-v"></i>
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            {% if pipeline.created_by == request.user %}
+                                            <li><a class="dropdown-item" href="{% url 'dataset_manager:pipeline_edit' pipeline.pk %}">
+                                                <i class="fas fa-edit"></i> Edit
+                                            </a></li>
+                                            <li><a class="dropdown-item" href="{% url 'dataset_manager:pipeline_clone' pipeline.pk %}">
+                                                <i class="fas fa-copy"></i> Clone
+                                            </a></li>
+                                            <li><hr class="dropdown-divider"></li>
+                                            {% endif %}
+                                            <li><a class="dropdown-item" href="{% url 'dataset_manager:execution_list' %}?pipeline={{ pipeline.pk }}">
+                                                <i class="fas fa-history"></i> View Executions
+                                            </a></li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <!-- Pagination -->
+                {% if is_paginated %}
+                <nav aria-label="Pipeline pagination">
+                    <ul class="pagination justify-content-center">
+                        {% if page_obj.has_previous %}
+                            <li class="page-item">
+                                <a class="page-link" href="?page=1{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}">First</a>
+                            </li>
+                            <li class="page-item">
+                                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}">Previous</a>
+                            </li>
+                        {% endif %}
+
+                        <li class="page-item active">
+                            <span class="page-link">
+                                Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
+                            </span>
+                        </li>
+
+                        {% if page_obj.has_next %}
+                            <li class="page-item">
+                                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}">Next</a>
+                            </li>
+                            <li class="page-item">
+                                <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}">Last</a>
+                            </li>
+                        {% endif %}
+                    </ul>
+                </nav>
+                {% endif %}
+            {% else %}
+                <div class="text-center py-5">
+                    <i class="fas fa-project-diagram fa-3x text-muted mb-3"></i>
+                    <h4>No pipelines found</h4>
+                    <p class="text-muted">Create your first data processing pipeline.</p>
+                    <a href="{% url 'dataset_manager:pipeline_create' %}" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Create Pipeline
+                    </a>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

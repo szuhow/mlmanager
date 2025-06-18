@@ -24,6 +24,7 @@ services:
     environment:
       - PYTHONPATH=/app
       - DJANGO_SETTINGS_MODULE=core.config.settings.development
+      - DISABLE_HTTP_LOGGING=false
       - ENVIRONMENT=development
       - PYTHONUNBUFFERED=1
       - MLFLOW_TRACKING_URI=http://mlflow:5000

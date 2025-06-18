@@ -141,7 +141,7 @@
                                     <span class="metric-value" id="train-loss">{{ model.train_loss|floatformat:4 }}</span>
                                 </div>
                                 <div class="metric-item">
-                                    {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+                                    {% if model.training_data_info and model.training_data_info.dataset_type == 'arcade_classification' %}
                                     <span class="metric-label">Training Accuracy:</span>
                                     {% else %}
                                     <span class="metric-label">Training Dice:</span>
@@ -155,7 +155,7 @@
                                     <span class="metric-value" id="val-loss">{{ model.val_loss|floatformat:4 }}</span>
                                 </div>
                                 <div class="metric-item">
-                                    {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+                                    {% if model.training_data_info and model.training_data_info.dataset_type == 'arcade_classification' %}
                                     <span class="metric-label">Validation Accuracy:</span>
                                     {% else %}
                                     <span class="metric-label">Validation Dice:</span>
@@ -163,7 +163,7 @@
                                     <span class="metric-value" id="val-dice">{{ model.val_dice|floatformat:4 }}</span>
                                 </div>
                                 <div class="metric-item">
-                                    {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+                                    {% if model.training_data_info and model.training_data_info.dataset_type == 'arcade_classification' %}
                                     <span class="metric-label">Best Validation Accuracy:</span>
                                     {% else %}
                                     <span class="metric-label">Best Validation Dice:</span>
@@ -207,7 +207,7 @@
                     {% if model.best_val_dice %}
                     <div class="training-metrics">
                         <div class="metric-item">
-                            {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+                            {% if model.training_data_info and model.training_data_info.dataset_type == 'arcade_classification' %}
                             <span class="metric-label">Final Validation Accuracy:</span>
                             {% else %}
                             <span class="metric-label">Final Validation Dice:</span>
@@ -259,11 +259,11 @@
                         
                         <dt class="col-sm-4">Dataset Size</dt>
                         <dd class="col-sm-8">
-                            {% if model.training_data_info.total_samples %}
-                                <strong>{{ model.training_data_info.total_samples }}</strong> samples
-                                {% if model.training_data_info.training_samples %}
+                            {% if model.training_data_info and model.training_data_info.batch_size %}
+                                <strong>{{ model.training_data_info.batch_size }}</strong> samples
+                                {% if model.training_data_info.training_samples|default:False %}
                                     <br><small class="text-muted">
-                                        Train: {{ model.training_data_info.training_samples }}, 
+                                        Train: {{ model.training_data_info.training_samples|default:"Unknown" }}, 
                                         Val: {{ model.training_data_info.validation_samples|default:"Unknown" }}
                                     </small>
                                 {% endif %}

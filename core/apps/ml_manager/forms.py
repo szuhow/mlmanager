@@ -158,7 +158,7 @@ class TrainingForm(forms.Form):
     )
     
     batch_size = forms.IntegerField(min_value=1, initial=32, help_text="Number of samples per batch")
-    epochs = forms.IntegerField(min_value=1, initial=100, help_text="Number of training epochs")
+    epochs = forms.IntegerField(min_value=1, initial=10, help_text="Number of training epochs")
     learning_rate = forms.FloatField(min_value=0.0, initial=0.001, help_text="Learning rate")
     validation_split = forms.FloatField(min_value=0.0, max_value=1.0, initial=0.2, help_text="Validation set size (0-1)")
     
@@ -313,6 +313,117 @@ class TrainingForm(forms.Form):
     noise_std = forms.FloatField(min_value=0.0, max_value=0.1, initial=0.01, required=False, help_text="Standard deviation of Gaussian noise")
     
     num_workers = forms.IntegerField(min_value=0, initial=4, help_text="Number of data loading workers")
+    
+    # Enhanced Training Features
+    LOSS_FUNCTION_CHOICES = [
+        ('bce', 'Binary Cross Entropy'),
+        ('dice', 'Dice Loss'),
+        ('combined', 'Combined Dice + BCE (Recommended)'),
+        ('focal', 'Focal Loss'),
+        ('focal_segmentation', 'Focal Segmentation (Dice + Focal BCE)'),
+        ('balanced_segmentation', 'Balanced Segmentation'),
+        ('dice_focused', 'Dice Focused'),
+        ('jaccard_based', 'Jaccard Based'),
+    ]
+    
+    loss_function = forms.ChoiceField(
+        choices=LOSS_FUNCTION_CHOICES,
+        initial='dice',
+        required=True,
+        help_text="Loss function for training. Dice Loss is recommended for segmentation."
+    )
+    
+    # Loss function weights (for combined losses)
+    dice_weight = forms.FloatField(
+        min_value=0.0, 
+        max_value=1.0, 
+        initial=0.7, 
+        required=False,
+        widget=forms.NumberInput(attrs={'step': '0.1', 'class': 'form-control'}),
+        help_text="Weight for Dice loss component (0.0-1.0). Higher values focus more on shape accuracy."
+    )
+    
+    bce_weight = forms.FloatField(
+        min_value=0.0, 
+        max_value=1.0, 
+        initial=0.3, 
+        required=False,
+        widget=forms.NumberInput(attrs={'step': '0.1', 'class': 'form-control'}),
+        help_text="Weight for BCE loss component (0.0-1.0). Higher values focus more on pixel accuracy."
+    )
+    
+    # Loss scheduling
+    use_loss_scheduling = forms.BooleanField(
+        initial=False, 
+        required=False,
+        help_text="Enable dynamic loss weight adjustment during training"
+    )
+    
+    LOSS_SCHEDULER_CHOICES = [
+        ('adaptive', 'Adaptive (Adjust based on performance)'),
+        ('cosine', 'Cosine Annealing'),
+        ('step', 'Step-based'),
+        ('performance', 'Performance-based'),
+    ]
+    
+    loss_scheduler_type = forms.ChoiceField(
+        choices=LOSS_SCHEDULER_CHOICES,
+        initial='adaptive',
+        required=False,
+        help_text="Type of loss weight scheduling to use"
+    )
+    
+    # Enhanced Checkpointing
+    CHECKPOINT_STRATEGY_CHOICES = [
+        ('best', 'Best Model Only (Recommended)'),
+        ('epoch', 'Every Epoch'),
+        ('interval', 'Every N Epochs'),
+        ('all', 'Best + Regular Checkpoints'),
+        ('adaptive', 'Adaptive Strategy'),
+        ('performance_based', 'Performance Based'),
+    ]
+    
+    checkpoint_strategy = forms.ChoiceField(
+        choices=CHECKPOINT_STRATEGY_CHOICES,
+        initial='best',
+        required=True,
+        help_text="Checkpoint saving strategy. 'Best' saves only when performance improves."
+    )
+    
+    max_checkpoints = forms.IntegerField(
+        min_value=1, 
+        max_value=20, 
+        initial=5, 
+        required=True,
+        help_text="Maximum number of checkpoints to keep. Older checkpoints are automatically removed."
+    )
+    
+    MONITOR_METRIC_CHOICES = [
+        ('val_dice', 'Validation Dice Score (Recommended)'),
+        ('val_loss', 'Validation Loss'),
+        ('val_accuracy', 'Validation Accuracy'),
+        ('val_iou', 'Validation IoU'),
+    ]
+    
+    monitor_metric = forms.ChoiceField(
+        choices=MONITOR_METRIC_CHOICES,
+        initial='val_dice',
+        required=True,
+        help_text="Metric to monitor for best model selection"
+    )
+    
+    # Advanced Training Options
+    use_enhanced_training = forms.BooleanField(
+        initial=True,
+        required=False,
+        help_text="Enable enhanced training features (checkpointing, loss scheduling, detailed monitoring)"
+    )
+    
+    use_mixed_precision = forms.BooleanField(
+        initial=False,
+        required=False,
+        help_text="Enable mixed precision training for faster training and lower memory usage (requires compatible GPU)"
+    )
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

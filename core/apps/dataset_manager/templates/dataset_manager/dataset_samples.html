@@ -1,0 +1,343 @@
+{% extends "dataset_manager/base.html" %}
+{% load static %}
+
+{% block title %}{{ dataset.name }} - Samples - Dataset Manager{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        <i class="fas fa-images"></i>
+                        Dataset Samples: {{ dataset.name }}
+                    </h3>
+                    <div class="card-tools">
+                        <a href="{% url 'dataset_manager:dataset_detail' dataset_id=dataset.id %}" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left"></i> Back to Dataset
+                        </a>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <!-- Filter Controls -->
+                    <div class="row mb-4">
+                        <div class="col-md-3">
+                            <label for="filterType">Filter by Type:</label>
+                            <select id="filterType" class="form-control">
+                                <option value="">All Types</option>
+                                <option value="image">Images</option>
+                                <option value="annotation">Annotations</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label for="filterClass">Filter by Class:</label>
+                            <select id="filterClass" class="form-control">
+                                <option value="">All Classes</option>
+                                {% for class_name in available_classes %}
+                                <option value="{{ class_name }}">{{ class_name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label for="searchSample">Search:</label>
+                            <input type="text" id="searchSample" class="form-control" placeholder="Search samples...">
+                        </div>
+                        <div class="col-md-3 d-flex align-items-end">
+                            <button id="refreshSamples" class="btn btn-info">
+                                <i class="fas fa-refresh"></i> Refresh
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Statistics -->
+                    <div class="row mb-4">
+                        <div class="col-md-3">
+                            <div class="info-box bg-info">
+                                <span class="info-box-icon"><i class="fas fa-images"></i></span>
+                                <div class="info-box-content">
+                                    <span class="info-box-text">Total Samples</span>
+                                    <span class="info-box-number">{{ dataset.total_samples|default:"0" }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="info-box bg-success">
+                                <span class="info-box-icon"><i class="fas fa-tags"></i></span>
+                                <div class="info-box-content">
+                                    <span class="info-box-text">Annotated</span>
+                                    <span class="info-box-number">{{ annotated_count|default:"0" }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="info-box bg-warning">
+                                <span class="info-box-icon"><i class="fas fa-question"></i></span>
+                                <div class="info-box-content">
+                                    <span class="info-box-text">Unannotated</span>
+                                    <span class="info-box-number">{{ unannotated_count|default:"0" }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="info-box bg-secondary">
+                                <span class="info-box-icon"><i class="fas fa-list"></i></span>
+                                <div class="info-box-content">
+                                    <span class="info-box-text">Classes</span>
+                                    <span class="info-box-number">{{ total_classes|default:"0" }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Samples Grid -->
+                    {% if samples %}
+                    <div class="row" id="samplesGrid">
+                        {% for sample in samples %}
+                        <div class="col-md-4 col-lg-3 mb-4 sample-item" data-type="{{ sample.file_type }}" data-class="{{ sample.sample_class }}">
+                            <div class="card sample-card">
+                                <div class="card-header">
+                                    <h6 class="mb-0">
+                                        <i class="fas fa-{% if 'image' in sample.file_type %}image{% else %}file-alt{% endif %}"></i>
+                                        {{ sample.file_name|truncatechars:20 }}
+                                    </h6>
+                                    {% if sample.sample_class %}
+                                    <span class="badge badge-primary">{{ sample.sample_class }}</span>
+                                    {% endif %}
+                                </div>
+                                <div class="card-body p-2">
+                                    {% if 'image' in sample.file_type and sample.file_path %}
+                                    <div class="sample-preview">
+                                        <img src="{{ sample.file_path }}" alt="{{ sample.file_name }}" 
+                                             class="img-fluid rounded sample-image" 
+                                             style="max-height: 150px; width: 100%; object-fit: cover;"
+                                             onerror="this.src='{% static 'img/no-image.png' %}'">
+                                    </div>
+                                    {% else %}
+                                    <div class="sample-preview text-center p-3">
+                                        <i class="fas fa-file-alt fa-3x text-muted"></i>
+                                        <p class="text-muted mt-2">{{ sample.file_type|title }}</p>
+                                    </div>
+                                    {% endif %}
+                                    
+                                    <div class="sample-info mt-2">
+                                        <small class="text-muted">
+                                            <strong>Type:</strong> {{ sample.file_type|title }}<br>
+                                            {% if sample.file_size_bytes %}
+                                            <strong>Size:</strong> {{ sample.file_size_bytes|filesizeformat }}<br>
+                                            {% endif %}
+                                            {% if sample.quality_score %}
+                                            <strong>Quality:</strong> {{ sample.quality_score|floatformat:2 }}<br>
+                                            {% endif %}
+                                            <strong>Created:</strong> {{ sample.created_at|date:"Y-m-d H:i" }}
+                                        </small>
+                                    </div>
+                                </div>
+                                <div class="card-footer p-2">
+                                    <div class="btn-group btn-group-sm w-100">
+                                        <button class="btn btn-info btn-sm" onclick="viewSample({{ sample.id }})">
+                                            <i class="fas fa-eye"></i> View
+                                        </button>
+                                        {% if 'image' in sample.file_type %}
+                                        <button class="btn btn-warning btn-sm" onclick="annotateSample({{ sample.id }})">
+                                            <i class="fas fa-edit"></i> Annotate
+                                        </button>
+                                        {% endif %}
+                                        <button class="btn btn-secondary btn-sm" onclick="downloadSample({{ sample.id }})">
+                                            <i class="fas fa-download"></i> Download
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <!-- Pagination -->
+                    {% if is_paginated %}
+                    <div class="row">
+                        <div class="col-12">
+                            <nav aria-label="Samples pagination">
+                                <ul class="pagination justify-content-center">
+                                    {% if page_obj.has_previous %}
+                                        <li class="page-item">
+                                            <a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a>
+                                        </li>
+                                    {% endif %}
+                                    
+                                    {% for num in page_obj.paginator.page_range %}
+                                        {% if page_obj.number == num %}
+                                            <li class="page-item active">
+                                                <span class="page-link">{{ num }}</span>
+                                            </li>
+                                        {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                                            <li class="page-item">
+                                                <a class="page-link" href="?page={{ num }}">{{ num }}</a>
+                                            </li>
+                                        {% endif %}
+                                    {% endfor %}
+                                    
+                                    {% if page_obj.has_next %}
+                                        <li class="page-item">
+                                            <a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a>
+                                        </li>
+                                    {% endif %}
+                                </ul>
+                            </nav>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% else %}
+                    <!-- No Samples -->
+                    <div class="text-center py-5">
+                        <i class="fas fa-images fa-5x text-muted mb-3"></i>
+                        <h4 class="text-muted">No Samples Found</h4>
+                        <p class="text-muted">This dataset doesn't contain any samples yet.</p>
+                        {% if dataset.status != 'ready' %}
+                        <p class="text-info">
+                            <i class="fas fa-info-circle"></i>
+                            Dataset is being processed. Samples will appear once processing is complete.
+                        </p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Sample View Modal -->
+<div class="modal fade" id="sampleViewModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Sample Details</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body" id="sampleViewContent">
+                <!-- Sample content will be loaded here -->
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Filter functionality
+$('#filterType, #filterClass').on('change', function() {
+    filterSamples();
+});
+
+$('#searchSample').on('input', function() {
+    filterSamples();
+});
+
+function filterSamples() {
+    const typeFilter = $('#filterType').val();
+    const classFilter = $('#filterClass').val();
+    const searchFilter = $('#searchSample').val().toLowerCase();
+    
+    $('.sample-item').each(function() {
+        const $item = $(this);
+        const itemType = $item.data('type');
+        const itemClass = $item.data('class');
+        const itemText = $item.text().toLowerCase();
+        
+        let show = true;
+        
+        if (typeFilter && itemType !== typeFilter) show = false;
+        if (classFilter && itemClass !== classFilter) show = false;
+        if (searchFilter && !itemText.includes(searchFilter)) show = false;
+        
+        $item.toggle(show);
+    });
+}
+
+// Sample actions
+function viewSample(sampleId) {
+    $.get(`/datasets/samples/${sampleId}/`, function(data) {
+        $('#sampleViewContent').html(data);
+        $('#sampleViewModal').modal('show');
+    }).fail(function() {
+        alert('Error loading sample details');
+    });
+}
+
+function annotateSample(sampleId) {
+    // Redirect to annotation tool
+    window.location.href = `/datasets/samples/${sampleId}/annotate/`;
+}
+
+function downloadSample(sampleId) {
+    window.location.href = `/datasets/samples/${sampleId}/download/`;
+}
+
+// Refresh samples
+$('#refreshSamples').on('click', function() {
+    location.reload();
+});
+
+// Image lazy loading
+$(document).ready(function() {
+    $('.sample-image').on('load', function() {
+        $(this).addClass('loaded');
+    });
+});
+</script>
+
+<style>
+.sample-card {
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.sample-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.sample-image {
+    transition: opacity 0.3s;
+    opacity: 0;
+}
+
+.sample-image.loaded {
+    opacity: 1;
+}
+
+.info-box {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border-radius: 5px;
+    color: white;
+    margin-bottom: 10px;
+}
+
+.info-box-icon {
+    font-size: 2rem;
+    margin-right: 15px;
+}
+
+.info-box-content {
+    flex: 1;
+}
+
+.info-box-text {
+    display: block;
+    font-size: 0.9rem;
+    opacity: 0.8;
+}
+
+.info-box-number {
+    display: block;
+    font-size: 1.5rem;
+    font-weight: bold;
+}
+</style>
+{% endblock %}

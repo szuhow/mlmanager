@@ -20,17 +20,30 @@ from django.shortcuts import redirect
 from django.contrib.auth import views as auth_views
 from django.conf import settings
 from django.conf.urls.static import static
+from django.http import HttpResponse
+from django.views.generic import RedirectView
 
 def redirect_to_ml(request):
     return redirect('ml_manager:model-list')
 
+def favicon_view(request):
+    return HttpResponse(status=204)  # No Content for favicon
+
 urlpatterns = [
     path('', redirect_to_ml, name='home'),
     path('admin/', admin.site.urls),
-    path('ml/', include('core.apps.ml_manager.urls')),
-    path('datasets/', include('core.apps.dataset_manager.urls')),
+    path('ml/', include(('core.apps.ml_manager.urls', 'ml_manager'), namespace='ml_manager')),
+    path('datasets/', include(('core.apps.dataset_manager.urls', 'dataset_manager'), namespace='dataset_manager')),
+    
+    # API endpoints
+    path('api/ml/', include(('core.apps.ml_manager.api_urls', 'ml_manager_api'), namespace='ml_manager_api')),
+    
+    # Authentication
     path('accounts/login/', auth_views.LoginView.as_view(template_name='ml_manager/login.html'), name='login'),
     path('accounts/logout/', auth_views.LogoutView.as_view(next_page='home'), name='logout'),
+    
+    # Favicon
+    path('favicon.ico', favicon_view, name='favicon'),
 ]
 
 # Serve media files in development

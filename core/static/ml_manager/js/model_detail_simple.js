@@ -294,7 +294,7 @@ class ModelDetailManager {
         if (this.updateInterval) return;
         
         // Use faster interval for pending→training transitions
-        const intervalMs = this.lastKnownStatus === 'pending' ? 1000 : this.updateIntervalMs;
+        const intervalMs = this.lastKnownStatus === 'pending' ? 500 : this.updateIntervalMs;
         
         this.log(`🔄 Starting updates with interval: <strong>${intervalMs}ms</strong>`);
         this.updateProgress();
@@ -306,18 +306,68 @@ class ModelDetailManager {
         
         // If we're in pending state, check more frequently initially
         if (this.lastKnownStatus === 'pending') {
-            this.log(`⚡ Using fast polling for pending status`);
-            setTimeout(() => {
-                if (this.updateInterval && this.lastKnownStatus !== 'pending') {
-                    // Switch to normal interval once we're out of pending
-                    this.log(`🔄 Switching to normal polling interval`);
-                    clearInterval(this.updateInterval);
-                    this.updateInterval = setInterval(() => {
-                        this.updateProgress();
-                    }, this.updateIntervalMs);
+            this.log(`⚡ Using ultra-fast polling for pending status (500ms)`);
+            // Dynamic interval adjustment
+            let checks = 0;
+            const pendingChecker = setInterval(() => {
+                checks++;
+                if (this.lastKnownStatus !== 'pending' || checks > 120) { // Stop after 1 minute
+                    clearInterval(pendingChecker);
+                    if (this.lastKnownStatus !== 'pending') {
+                        this.log(`🔄 Pending→${this.lastKnownStatus} transition detected, switching to normal polling`);
+                        this.restartWithNormalInterval();
+                    }
                 }
-            }, 30000); // Check after 30 seconds
+            }, 500);
         }
+    }
+    
+    updateStatusIndicators(status) {
+        this.log(`🔄 Updating status indicators to: ${status}`);
+        
+        // Update status badges
+        const statusBadges = document.querySelectorAll('.badge');
+        statusBadges.forEach(badge => {
+            if (badge.textContent.toLowerCase().includes('pending') || 
+                badge.textContent.toLowerCase().includes('training') ||
+                badge.textContent.toLowerCase().includes('completed') ||
+                badge.textContent.toLowerCase().includes('failed')) {
+                
+                // Update badge text and class
+                badge.textContent = status.toUpperCase();
+                badge.className = 'badge ' + this.getStatusBadgeClass(status);
+            }
+        });
+        
+        // Update any status text elements
+        const statusElements = document.querySelectorAll('.status-text, [data-status]');
+        statusElements.forEach(element => {
+            element.textContent = status;
+            element.setAttribute('data-status', status);
+        });
+    }
+    
+    getStatusBadgeClass(status) {
+        const statusClasses = {
+            'pending': 'bg-warning',
+            'training': 'bg-primary',
+            'completed': 'bg-success',
+            'failed': 'bg-danger',
+            'cancelled': 'bg-secondary'
+        };
+        return statusClasses[status.toLowerCase()] || 'bg-secondary';
+    }
+    
+    restartWithNormalInterval() {
+        if (this.updateInterval) {
+            clearInterval(this.updateInterval);
+            this.updateInterval = null;
+        }
+        
+        this.log(`🔄 Restarting with normal interval: ${this.updateIntervalMs}ms`);
+        this.updateInterval = setInterval(() => {
+            this.updateProgress();
+        }, this.updateIntervalMs);
     }
     
     stopUpdates() {
@@ -356,7 +406,7 @@ class ModelDetailManager {
     
     updateProgress() {
         this.setLoadingIndicator();
-        this.log(`📡 Fetching progress for model <strong>${this.modelId}</strong>`);
+        this.log(`📡 Fetching progress for model <strong>${this.modelId}</strong> (last status: ${this.lastKnownStatus})`);
         
         fetch(`/ml/model/${this.modelId}/progress/`)
             .then(response => {
@@ -369,7 +419,8 @@ class ModelDetailManager {
             .then(data => {
                 const statusInfo = data.model_status ? `Status = <strong>${data.model_status}</strong>` : 'No status';
                 const transitionInfo = data.status_transition ? `, Transition: <strong>${data.status_transition}</strong>` : '';
-                this.log(`📦 Progress data received: ${statusInfo}${transitionInfo}`);
+                const pendingInfo = this.lastKnownStatus === 'pending' ? ' [PENDING→?]' : '';
+                this.log(`📦 Progress data received: ${statusInfo}${transitionInfo}${pendingInfo}`);
                 
                 if (data.status === 'success') {
                     this.handleSuccessfulUpdate(data);
@@ -403,11 +454,25 @@ class ModelDetailManager {
         // Detect status changes with improved logic
         if (currentModelStatus !== previousStatus) {
             this.log(`📊 Status transition: <strong>${previousStatus}</strong> → <strong>${currentModelStatus}</strong>`);
+            
+            // Special handling for pending→training transition
+            if (previousStatus === 'pending' && currentModelStatus === 'training') {
+                this.log(`🚀 PENDING→TRAINING transition detected! Switching to normal polling.`);
+                this.log(`📊 Training has started successfully! Current epoch: ${data.progress?.current_epoch || 0}`);
+                this.restartWithNormalInterval();
+                
+                // Show notification
+                this.showTrainingStartedNotification();
+            }
+            
             this.lastKnownStatus = currentModelStatus;
             this.statusTransitionDetected = true;
             
             // Update page title to reflect status
             document.title = `${currentModelStatus.toUpperCase()} - Model ${this.modelId}`;
+            
+            // Force update indicators
+            this.updateStatusIndicators(currentModelStatus);
         }
         
         // Log API status change detection
@@ -448,6 +513,32 @@ class ModelDetailManager {
                 location.reload();
             }, 2000);
         }
+    }
+    
+    showTrainingStartedNotification() {
+        // Create a success notification
+        const notification = document.createElement('div');
+        notification.className = 'alert alert-success alert-dismissible fade show position-fixed';
+        notification.style.cssText = `
+            top: 20px;
+            right: 20px;
+            z-index: 9999;
+            max-width: 400px;
+        `;
+        notification.innerHTML = `
+            <strong><i class="fas fa-rocket me-2"></i>Training Started!</strong>
+            <br>Your model training has begun successfully.
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, 5000);
     }
     
     showCompletionNotification(status) {

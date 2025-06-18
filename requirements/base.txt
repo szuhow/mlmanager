@@ -13,6 +13,7 @@ monai>=1.3.0,<2.0.0
 plotly>=5.18.0,<6.0.01
 Pillow>=10.0.0,<11.0.0
 psutil>=5.9.0,<6.0.0  # System monitoring
+pandas>=1.5.0,<2.0.0
 
 # Dataset Manager dependencies
 opencv-python-headless>=4.8.0,<5.0.0  # Headless version for Docker

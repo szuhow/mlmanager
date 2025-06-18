@@ -69,6 +69,9 @@ class MLModel(models.Model):
     val_dice = models.FloatField(default=0.0)
     best_val_dice = models.FloatField(default=0.0)
     stop_requested = models.BooleanField(default=False)
+    
+    # Training logs field (for backward compatibility and query support)
+    training_logs = models.TextField(blank=True, null=True, help_text="Training logs and error messages")
 
     class Meta:
         ordering = ['-created_at']
@@ -156,6 +159,63 @@ class MLModel(models.Model):
             'best_val_dice': self.best_val_dice,
             'status': self.status
         }
+
+    def delete(self, *args, **kwargs):
+        """Override delete to clean up associated files and MLflow data"""
+        import os
+        import shutil
+        from django.conf import settings
+        
+        cleanup_paths = []
+        
+        # 1. Clean up MLflow run and artifacts
+        if self.mlflow_run_id:
+            try:
+                import mlflow
+                # Try to delete MLflow run
+                mlflow.delete_run(self.mlflow_run_id)
+                print(f"🗑️ Deleted MLflow run: {self.mlflow_run_id}")
+            except Exception as e:
+                print(f"⚠️  Could not delete MLflow run {self.mlflow_run_id}: {e}")
+            
+            # Add MLflow artifacts directory to cleanup
+            mlflow_artifacts_path = os.path.join(settings.BASE_DIR, 'data', 'mlflow', self.mlflow_run_id)
+            if os.path.exists(mlflow_artifacts_path):
+                cleanup_paths.append(mlflow_artifacts_path)
+        
+        # 2. Clean up model directory
+        if self.model_directory and os.path.exists(self.model_directory):
+            cleanup_paths.append(self.model_directory)
+        
+        # 3. Clean up individual files
+        file_fields = ['model_weights_path', 'model_config_path']
+        for field_name in file_fields:
+            file_path = getattr(self, field_name, None)
+            if file_path and os.path.exists(file_path):
+                cleanup_paths.append(file_path)
+        
+        # 4. Clean up organized models directory
+        if hasattr(settings, 'ORGANIZED_MODELS_DIR'):
+            organized_path = os.path.join(settings.ORGANIZED_MODELS_DIR, f"model_{self.id}")
+            if os.path.exists(organized_path):
+                cleanup_paths.append(organized_path)
+        
+        # Perform the actual deletion from database first
+        super().delete(*args, **kwargs)
+        
+        # Then clean up files
+        for path in cleanup_paths:
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+                    print(f"🗑️ Deleted file: {path}")
+                elif os.path.isdir(path):
+                    shutil.rmtree(path)
+                    print(f"🗑️ Deleted directory: {path}")
+            except Exception as e:
+                print(f"⚠️  Could not delete {path}: {e}")
+        
+        print(f"✅ Model {self.name} (ID: {self.id}) and associated files deleted")
 
 class Prediction(models.Model):
     model = models.ForeignKey(MLModel, on_delete=models.CASCADE)

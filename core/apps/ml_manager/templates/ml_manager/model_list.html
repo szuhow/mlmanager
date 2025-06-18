@@ -48,17 +48,56 @@
         font-size: 0.9rem;
         padding: 0.5rem 1rem;
     }
-    .progress {
-        height: 1.5rem;
-        border-radius: 0.5rem;
+    
+    /* Enhanced Model List Checkbox Styles */
+    .model-checkbox {
+        width: 1.3rem !important;
+        height: 1.3rem !important;
+        border: 2px solid #007bff !important;
+        background-color: #fff !important;
+        cursor: pointer !important;
+        border-radius: 0.25rem !important;
+        transition: all 0.2s ease !important;
     }
-    .progress-bar {
-        font-size: 0.8rem;
-        font-weight: 600;
+    
+    .model-checkbox:hover {
+        border-color: #0056b3 !important;
+        box-shadow: 0 0 0 0.1rem rgba(0, 123, 255, 0.25) !important;
+        transform: scale(1.1) !important;
     }
-    .performance-badge {
-        font-size: 0.9rem;
-        padding: 0.5rem 1rem;
+    
+    .model-checkbox:checked {
+        background-color: #007bff !important;
+        border-color: #007bff !important;
+        background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3e%3cpath fill='none' stroke='%23fff' stroke-linecap='round' stroke-linejoin='round' stroke-width='3' d='M6 10l3 3l6-6'/%3e%3c/svg%3e") !important;
+    }
+    
+    .model-checkbox:focus {
+        border-color: #86b7fe !important;
+        outline: 0 !important;
+        box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25) !important;
+    }
+    
+    /* Checkbox cell styling */
+    .table td:first-child {
+        width: 50px;
+        text-align: center;
+        padding: 0.75rem 0.5rem;
+    }
+    
+    /* Bulk actions improvements */
+    .bulk-actions {
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 20px;
+        transition: all 0.3s ease;
+    }
+    
+    .bulk-actions.show {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        transform: translateY(-2px);
     }
     
     /* CUSTOM DROPDOWN - COMPLETELY SEPARATE FROM BOOTSTRAP */
@@ -308,6 +347,88 @@
             z-index: 99995;
         }
     }
+
+    /* Enhanced Checkbox Styles - Global */
+    .checkbox-container-header {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 0.25rem;
+    }
+
+    .checkbox-enhanced {
+        width: 18px !important;
+        height: 18px !important;
+        border: 2px solid #dee2e6 !important;
+        border-radius: 4px !important;
+        background-color: #fff !important;
+        cursor: pointer !important;
+        transition: all 0.2s ease !important;
+        position: relative !important;
+    }
+
+    .checkbox-enhanced:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+
+    .checkbox-enhanced:hover {
+        border-color: #0d6efd !important;
+        box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25) !important;
+    }
+
+    .checkbox-enhanced:focus {
+        border-color: #0d6efd !important;
+        box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25) !important;
+        outline: none !important;
+    }
+
+    /* Force checkbox visibility and prevent hiding */
+    .checkbox-enhanced,
+    .form-check-input {
+        opacity: 1 !important;
+        visibility: visible !important;
+        display: block !important;
+        position: relative !important;
+        z-index: 10 !important;
+    }
+
+    /* Extra checkbox styling for better visibility */
+    .checkbox-enhanced::before,
+    .form-check-input::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 100% !important;
+        height: 100% !important;
+        border: 2px solid #007bff !important;
+        border-radius: 3px !important;
+        background: white !important;
+    }
+
+    .checkbox-enhanced:checked::before,
+    .form-check-input:checked::before {
+        background: #007bff !important;
+    }
+
+    .checkbox-enhanced:checked::after,
+    .form-check-input:checked::after {
+        content: '✓' !important;
+        position: absolute !important;
+        top: 50% !important;
+        left: 50% !important;
+        transform: translate(-50%, -50%) !important;
+        color: white !important;
+        font-weight: bold !important;
+        font-size: 12px !important;
+    }
+
+    /* Model row checkbox container */
+    .model-checkbox-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 0.5rem;
+    }
     
     /* Webkit-specific fixes */
     @media screen and (-webkit-min-device-pixel-ratio: 0) {
@@ -324,6 +445,14 @@
         .actions-cell {
             -webkit-transform: translateZ(0);
             position: relative !important;
+        }
+
+        /* Model row checkbox container */
+        .model-checkbox-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 0.5rem;
         }
     }
 </style>
@@ -415,7 +544,9 @@
                         <thead>
                             <tr>
                                 <th style="width: 40px;">
-                                    <input type="checkbox" id="select-all-checkbox" class="form-check-input">
+                                    <div class="checkbox-container-header">
+                                        <input type="checkbox" id="select-all-checkbox" class="form-check-input checkbox-enhanced">
+                                    </div>
                                 </th>
                                 <th>Name</th>
                                 <th>Status</th>
@@ -427,9 +558,11 @@
                         </thead>
                         <tbody>
                             {% for model in models %}
-                            <tr data-model-id="{{ model.pk }}" data-model-status="{{ model.status }}" data-dataset-type="{{ model.training_data_info.training_config.parameters.dataset_type|default:'segmentation' }}">
+                            <tr data-model-id="{{ model.pk }}" data-model-status="{{ model.status }}" data-dataset-type="{{ model.training_data_info.dataset_type|default:'segmentation' }}">
                                 <td>
-                                    <input type="checkbox" class="form-check-input model-checkbox" value="{{ model.pk }}">
+                                    <div class="model-checkbox-container">
+                                        <input type="checkbox" class="form-check-input model-checkbox checkbox-enhanced" value="{{ model.pk }}">
+                                    </div>
                                 </td>
                                 <td>
                                     <div class="model-name">{{ model.name }}</div>
@@ -445,7 +578,7 @@
                                 <td>
                                     {% if model.status == 'training' %}
                                         <div class="progress" style="width: 120px;">
-                                            <div class="progress-bar" role="progressbar" style="width: {{ model.progress_percentage }}%">
+                                            <div class="progress-bar" role="progressbar" style="width: {{ model.progress_percentage|default:0 }}%">
                                                 {{ model.current_epoch }}/{{ model.total_epochs }}
                                             </div>
                                         </div>
@@ -454,9 +587,9 @@
                                     {% endif %}
                                 </td>
                                 <td class="performance-cell">
-                                    {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
-                                        {% if model.performance_metrics.val_accuracy > 0 %}
-                                            <span class="badge performance-badge bg-info">{{ model.performance_metrics.val_accuracy|floatformat:3 }}</span>
+                                    {% if model.training_data_info and model.training_data_info.dataset_type == 'arcade_classification' %}
+                                        {% if model.performance_metrics.val_accuracy|default:0 > 0 %}
+                                            <span class="badge performance-badge bg-info">{{ model.performance_metrics.val_accuracy|default:0|floatformat:3 }}</span>
                                         {% else %}
                                             <span class="text-muted">-</span>
                                         {% endif %}
@@ -906,9 +1039,10 @@ document.addEventListener('DOMContentLoaded', function() {
     function scheduleNextUpdate() {
         if (!isAutoRefreshEnabled) return;
         
-        // Check if we have pending models to determine update frequency
+        // Check if we have pending or loading models to determine update frequency
         const pendingRows = document.querySelectorAll('tr[data-model-status="pending"]:not([data-model-deleted="true"])');
-        const newInterval = pendingRows.length > 0 ? fastUpdateInterval : normalUpdateInterval;
+        const loadingRows = document.querySelectorAll('tr[data-model-status="loading"]:not([data-model-deleted="true"])');
+        const newInterval = (pendingRows.length > 0 || loadingRows.length > 0) ? fastUpdateInterval : normalUpdateInterval;
         
         if (newInterval !== currentUpdateInterval) {
             currentUpdateInterval = newInterval;
@@ -935,9 +1069,10 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateActiveModels() {
         const trainingRows = document.querySelectorAll('tr[data-model-status="training"]:not([data-model-deleted="true"])');
         const pendingRows = document.querySelectorAll('tr[data-model-status="pending"]:not([data-model-deleted="true"])');
-        const allActiveRows = [...trainingRows, ...pendingRows];
+        const loadingRows = document.querySelectorAll('tr[data-model-status="loading"]:not([data-model-deleted="true"])');
+        const allActiveRows = [...trainingRows, ...pendingRows, ...loadingRows];
         
-        console.log(`Updating ${trainingRows.length} training and ${pendingRows.length} pending models`);
+        console.log(`Updating ${trainingRows.length} training, ${pendingRows.length} pending, and ${loadingRows.length} loading models`);
         
         if (allActiveRows.length === 0) {
             console.log('No active models found, stopping auto-refresh');
@@ -968,7 +1103,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         return;
                     }
                     
-                    // Check for status changes, especially pending -> training
+                    // Check for status changes, especially pending -> training and loading -> training
                     const currentStatus = row.dataset.modelStatus;
                     if (data.model_status && data.model_status !== currentStatus) {
                         console.log(`Status change detected: ${currentStatus} -> ${data.model_status} for model ${modelId}`);
@@ -978,6 +1113,15 @@ document.addEventListener('DOMContentLoaded', function() {
                             showStatusChangeNotification(
                                 'Training Started', 
                                 `Model ${row.querySelector('.model-name')?.textContent || modelId} has started training`,
+                                'success'
+                            );
+                        }
+                        
+                        // Show notification for loading -> training transition
+                        if (currentStatus === 'loading' && data.model_status === 'training') {
+                            showStatusChangeNotification(
+                                'Training Active', 
+                                `Model ${row.querySelector('.model-name')?.textContent || modelId} dataset loaded, training now active`,
                                 'success'
                             );
                         }
@@ -1014,7 +1158,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         const isClassification = datasetType === 'arcade_classification';
                         const metricLabel = isClassification ? 'Accuracy' : 'Dice';
                         const metricValue = isClassification ? 
-                            (data.metrics.val_accuracy || 0) : 
+                            (data.metrics.val_accuracy || data.metrics.best_val_accuracy || 0) : 
                             (data.metrics.val_dice || 0);
                         
                         metricsCell.innerHTML = `
@@ -1033,7 +1177,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         
                         let metricValue = 0;
                         if (isClassification) {
-                            metricValue = data.metrics.val_accuracy || data.metrics.best_val_accuracy || 0;
+                            metricValue = data.metrics.val_accuracy || data.metrics.best_val_accuracy || data.metrics.val_dice || 0;
                         } else {
                             metricValue = data.metrics.val_dice || data.metrics.best_val_dice || 0;
                         }
@@ -1102,7 +1246,7 @@ document.addEventListener('DOMContentLoaded', function() {
         indicator.style.cssText = 'top: 20px; right: 20px; z-index: 1060; min-width: 320px;';
         
         const intervalText = currentUpdateInterval === fastUpdateInterval ? 
-            `${currentUpdateInterval/1000}s (fast mode for pending models)` : 
+            `${currentUpdateInterval/1000}s (fast mode for pending/loading models)` : 
             `${currentUpdateInterval/1000}s`;
             
         indicator.innerHTML = `
@@ -1119,7 +1263,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const intervalText = document.getElementById('refresh-interval-text');
         if (indicator && intervalText) {
             const newText = currentUpdateInterval === fastUpdateInterval ? 
-                `${currentUpdateInterval/1000}s (fast mode for pending models)` : 
+                `${currentUpdateInterval/1000}s (fast mode for pending/loading models)` : 
                 `${currentUpdateInterval/1000}s`;
             intervalText.textContent = `Updating progress every ${newText}`;
         }
@@ -1191,13 +1335,14 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Auto-start if training or pending models exist
+    // Auto-start if training, pending, or loading models exist
     const trainingModels = document.querySelectorAll('tr[data-model-status="training"]');
     const pendingModels = document.querySelectorAll('tr[data-model-status="pending"]');
-    const totalActiveModels = trainingModels.length + pendingModels.length;
+    const loadingModels = document.querySelectorAll('tr[data-model-status="loading"]');
+    const totalActiveModels = trainingModels.length + pendingModels.length + loadingModels.length;
     
     if (totalActiveModels > 0) {
-        console.log(`Found ${trainingModels.length} training and ${pendingModels.length} pending models, starting auto-refresh`);
+        console.log(`Found ${trainingModels.length} training, ${pendingModels.length} pending, and ${loadingModels.length} loading models, starting auto-refresh`);
         startAutoRefresh();
         if (toggleButton) {
             toggleButton.innerHTML = '<i class="fas fa-pause"></i> Stop Live Updates';

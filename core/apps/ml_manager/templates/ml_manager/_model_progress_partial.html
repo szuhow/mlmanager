@@ -1,17 +1,17 @@
 <div class="progress mb-3" id="progressBarContainer">
     <div class="progress-bar" id="progressBar" role="progressbar" 
-         style="width: {{ progress_percentage }}%"
+         style="width: {{ model.progress_percentage|default:0 }}%"
          aria-valuenow="{{ model.current_epoch }}" 
          aria-valuemin="0" 
          aria-valuemax="{{ model.total_epochs }}">
-        {{ progress_percentage }}%
+        {{ model.progress_percentage|default:0 }}%
     </div>
 </div>
 <p>Epoch: <span id="currentEpoch">{{ model.current_epoch }}</span> / <span id="totalEpochs">{{ model.total_epochs }}</span></p>
 <div class="row">
     <div class="col-md-6">
         <p>Train Loss: <span id="trainLoss">{{ model.train_loss|floatformat:4 }}</span></p>
-        {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+        {% if model.training_data_info and model.training_data_info.dataset_type == 'arcade_classification' %}
         <p>Train Accuracy: <span id="trainDice">{{ model.train_dice|floatformat:4 }}</span></p>
         {% else %}
         <p>Train Dice: <span id="trainDice">{{ model.train_dice|floatformat:4 }}</span></p>
@@ -19,14 +19,14 @@
     </div>
     <div class="col-md-6">
         <p>Val Loss: <span id="valLoss">{{ model.val_loss|floatformat:4 }}</span></p>
-        {% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+        {% if model.training_data_info and model.training_data_info.dataset_type == 'arcade_classification' %}
         <p>Val Accuracy: <span id="valDice">{{ model.val_dice|floatformat:4 }}</span></p>
         {% else %}
         <p>Val Dice: <span id="valDice">{{ model.val_dice|floatformat:4 }}</span></p>
         {% endif %}
     </div>
 </div>
-{% if model.training_data_info.training_config.parameters.dataset_type == 'arcade_classification' %}
+{% if model.training_data_info and model.training_data_info.dataset_type == 'arcade_classification' %}
 <p>Best Val Accuracy: <span id="bestValDice">{{ model.best_val_dice|floatformat:4 }}</span></p>
 {% else %}
 <p>Best Val Dice: <span id="bestValDice">{{ model.best_val_dice|floatformat:4 }}</span></p>

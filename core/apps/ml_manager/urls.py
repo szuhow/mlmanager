@@ -1,12 +1,9 @@
-from django.urls import path, include
+from django.urls import path
 from . import views
 
 app_name = 'ml_manager'
 
 urlpatterns = [
-    # API URLs
-    path('api/', include('core.apps.ml_manager.api.urls')),
-    
     # Web interface URLs
     path('', views.ModelListView.as_view(), name='model-list'),
     path('model/<int:pk>/', views.ModelDetailView.as_view(), name='model-detail'),

@@ -231,7 +231,7 @@
                                 <label class="form-label">Wybierz schemat adnotacji:</label>
                                 <select class="form-select" id="annotationSchema" name="annotation_schema">
                                     <option value="">Wybierz istniejący schemat</option>
-                                    {% for schema in available_schemas %}
+                                    {% for schema in schemas %}
                                     <option value="{{ schema.id }}" data-type="{{ schema.type }}">
                                         {{ schema.name }} ({{ schema.get_type_display }})
                                     </option>
@@ -792,18 +792,60 @@ function simulateFormatDetection() {
             </div>
         `);
         
-        // Update stats
-        $('#imageCount').text('1,247');
-        $('#annotationCount').text('3,892');
-        $('#classCount').text('12');
-        $('#totalSize').text('1.2 GB');
-        
-        // Show detected classes
-        const detectedClasses = ['person', 'car', 'bicycle', 'dog', 'cat', 'bird', 'traffic_light', 'stop_sign'];
-        const classesHtml = detectedClasses.map(cls => 
-            `<span class="badge bg-primary me-1 mb-1">${cls}</span>`
-        ).join('');
-        $('#detectedClasses').html(classesHtml);
+        // Update stats with real data from server
+        const fileInput = $('#fileInput')[0];
+        if (fileInput.files.length > 0) {
+            const formData = new FormData();
+            formData.append('dataset_file', fileInput.files[0]);
+            formData.append('csrfmiddlewaretoken', $('[name=csrfmiddlewaretoken]').val());
+            
+            $.ajax({
+                url: '{% url "dataset_manager:analyze_dataset_ajax" %}',
+                type: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                success: function(response) {
+                    if (response.status === 'success') {
+                        const analysis = response.analysis;
+                        $('#imageCount').text(analysis.image_count.toLocaleString());
+                        $('#annotationCount').text(analysis.annotation_count.toLocaleString());
+                        $('#classCount').text(analysis.class_count);
+                        $('#totalSize').text(analysis.total_size_formatted);
+                        
+                        // Show detected classes
+                        if (analysis.detected_classes && analysis.detected_classes.length > 0) {
+                            const classesHtml = analysis.detected_classes.map(cls => 
+                                `<span class="badge bg-primary me-1 mb-1">${cls}</span>`
+                            ).join('');
+                            $('#detectedClasses').html(classesHtml);
+                        } else {
+                            $('#detectedClasses').html('<span class="text-muted">No classes detected</span>');
+                        }
+                        
+                        // Auto-select format if detected
+                        if (analysis.format && analysis.format !== 'unknown') {
+                            $(`.format-card[data-format="${analysis.format}"]`).addClass('selected');
+                        }
+                    }
+                },
+                error: function() {
+                    // Fallback to default values if analysis fails
+                    $('#imageCount').text('0');
+                    $('#annotationCount').text('0');
+                    $('#classCount').text('0');
+                    $('#totalSize').text('0 B');
+                    $('#detectedClasses').html('<span class="text-muted">Analysis failed</span>');
+                }
+            });
+        } else {
+            // No file selected, use default values
+            $('#imageCount').text('0');
+            $('#annotationCount').text('0');
+            $('#classCount').text('0');
+            $('#totalSize').text('0 B');
+            $('#detectedClasses').html('<span class="text-muted">No file selected</span>');
+        }
     }, 2000);
 }
 

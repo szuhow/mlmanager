@@ -1,0 +1,192 @@
+{% extends "dataset_manager/base.html" %}
+{% load static %}
+
+{% block title %}Schemas - Dataset Manager{% endblock %}
+
+{% block extra_css %}
+<style>
+    .schema-card {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+        background: white;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .schema-type {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: bold;
+        text-transform: uppercase;
+        background: #e3f2fd;
+        color: #1565c0;
+    }
+    .filter-bar {
+        background: #f8f9fa;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+    }
+    .class-count {
+        background: #f8f9fa;
+        padding: 8px 12px;
+        border-radius: 4px;
+        display: inline-block;
+        margin: 2px;
+        font-size: 12px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h1><i class="fas fa-code-branch"></i> Annotation Schemas</h1>
+                <a href="{% url 'dataset_manager:schema_create' %}" class="btn btn-primary">
+                    <i class="fas fa-plus"></i> Create Schema
+                </a>
+            </div>
+
+            <!-- Filter Bar -->
+            <div class="filter-bar">
+                <form method="get" class="row">
+                    <div class="col-md-4">
+                        <label for="search" class="form-label">Search</label>
+                        <input type="text" name="search" id="search" class="form-control" 
+                               value="{{ request.GET.search }}" placeholder="Search schemas...">
+                    </div>
+                    <div class="col-md-3">
+                        <label for="type" class="form-label">Type</label>
+                        <select name="type" id="type" class="form-select">
+                            <option value="">All Types</option>
+                            <option value="classification" {% if request.GET.type == 'classification' %}selected{% endif %}>Classification</option>
+                            <option value="detection" {% if request.GET.type == 'detection' %}selected{% endif %}>Detection</option>
+                            <option value="segmentation" {% if request.GET.type == 'segmentation' %}selected{% endif %}>Segmentation</option>
+                            <option value="keypoint" {% if request.GET.type == 'keypoint' %}selected{% endif %}>Keypoint</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button type="submit" class="btn btn-outline-primary me-2">
+                            <i class="fas fa-filter"></i> Filter
+                        </button>
+                        <a href="{% url 'dataset_manager:schema_list' %}" class="btn btn-outline-secondary">
+                            <i class="fas fa-times"></i> Clear
+                        </a>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Schema List -->
+            {% if schemas %}
+                <div class="row">
+                    {% for schema in schemas %}
+                    <div class="col-md-6 col-lg-4">
+                        <div class="schema-card">
+                            <div class="d-flex justify-content-between align-items-start mb-3">
+                                <h5 class="card-title mb-0">{{ schema.name }}</h5>
+                                <span class="schema-type">
+                                    {{ schema.schema_type }}
+                                </span>
+                            </div>
+                            
+                            <p class="text-muted mb-3">
+                                <small>{{ schema.description|truncatewords:15 }}</small>
+                            </p>
+                            
+                            {% if schema.classes %}
+                            <div class="mb-3">
+                                <strong class="d-block mb-2">Classes ({{ schema.classes|length }}):</strong>
+                                {% for class_name in schema.classes|slice:":5" %}
+                                    <span class="class-count">{{ class_name }}</span>
+                                {% endfor %}
+                                {% if schema.classes|length > 5 %}
+                                    <span class="class-count">+{{ schema.classes|length|add:"-5" }} more</span>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                            
+                            <div class="row text-center mb-3">
+                                <div class="col-6">
+                                    <strong>{{ schema.version }}</strong>
+                                    <br><small class="text-muted">Version</small>
+                                </div>
+                                <div class="col-6">
+                                    <strong>{{ schema.is_public|yesno:"Public,Private" }}</strong>
+                                    <br><small class="text-muted">Visibility</small>
+                                </div>
+                            </div>
+                            
+                            <div class="d-flex justify-content-between align-items-center">
+                                <small class="text-muted">
+                                    Created {{ schema.created_at|timesince }} ago
+                                </small>
+                                <div class="btn-group">
+                                    <a href="{% url 'dataset_manager:schema_detail' schema.pk %}" 
+                                       class="btn btn-sm btn-outline-primary">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
+                                    <a href="{% url 'dataset_manager:schema_preview' schema.pk %}" 
+                                       class="btn btn-sm btn-outline-info">
+                                        <i class="fas fa-code"></i> Preview
+                                    </a>
+                                    {% if schema.created_by == request.user %}
+                                    <a href="{% url 'dataset_manager:schema_edit' schema.pk %}" 
+                                       class="btn btn-sm btn-outline-warning">
+                                        <i class="fas fa-edit"></i> Edit
+                                    </a>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <!-- Pagination -->
+                {% if is_paginated %}
+                <nav aria-label="Schema pagination">
+                    <ul class="pagination justify-content-center">
+                        {% if page_obj.has_previous %}
+                            <li class="page-item">
+                                <a class="page-link" href="?page=1{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.type %}&type={{ request.GET.type }}{% endif %}">First</a>
+                            </li>
+                            <li class="page-item">
+                                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.type %}&type={{ request.GET.type }}{% endif %}">Previous</a>
+                            </li>
+                        {% endif %}
+
+                        <li class="page-item active">
+                            <span class="page-link">
+                                Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
+                            </span>
+                        </li>
+
+                        {% if page_obj.has_next %}
+                            <li class="page-item">
+                                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.type %}&type={{ request.GET.type }}{% endif %}">Next</a>
+                            </li>
+                            <li class="page-item">
+                                <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.type %}&type={{ request.GET.type }}{% endif %}">Last</a>
+                            </li>
+                        {% endif %}
+                    </ul>
+                </nav>
+                {% endif %}
+            {% else %}
+                <div class="text-center py-5">
+                    <i class="fas fa-code-branch fa-3x text-muted mb-3"></i>
+                    <h4>No schemas found</h4>
+                    <p class="text-muted">Create your first annotation schema to define data structure.</p>
+                    <a href="{% url 'dataset_manager:schema_create' %}" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Create Schema
+                    </a>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

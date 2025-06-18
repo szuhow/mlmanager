@@ -114,10 +114,22 @@ class TrainingCallback:
     
     def on_training_end(self, logs=None):
         """Called when training is complete"""
-        self.model.status = 'completed'
+        # Check if training was stopped by user request
+        if self.model.stop_requested:
+            self.model.status = 'stopped'
+        else:
+            self.model.status = 'completed'
+        
         if logs:
             self.model.performance_metrics.update(logs)
-            self.model.save()
+        self.model.save()
+    
+    def on_training_stopped(self, logs=None):
+        """Called when training is stopped by user request"""
+        self.model.status = 'stopped'
+        if logs:
+            self.model.performance_metrics.update(logs)
+        self.model.save()
     
     def on_training_failed(self, exception):
         """Called if training fails"""
