@@ -1,0 +1,156 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Enhanced ML Manager: Start All Services",
+            "type": "shell",
+            "command": "make",
+            "args": ["enhanced-start"],
+            "group": "build",
+            "isBackground": false,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Enhanced ML Manager: Stop All Services",
+            "type": "shell",
+            "command": "make",
+            "args": ["enhanced-stop"],
+            "group": "build",
+            "isBackground": false,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Enhanced ML Manager: Show Logs",
+            "type": "shell",
+            "command": "make",
+            "args": ["enhanced-logs"],
+            "group": "build",
+            "isBackground": true,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Enhanced ML Manager: Django Logs",
+            "type": "shell",
+            "command": "make",
+            "args": ["enhanced-logs-django"],
+            "group": "build",
+            "isBackground": true,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Enhanced ML Manager: Restart Services",
+            "type": "shell",
+            "command": "make",
+            "args": ["enhanced-restart"],
+            "group": "build",
+            "isBackground": false,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Django: Run Server (Local)",
+            "type": "shell",
+            "command": "cd core && python manage.py runserver",
+            "group": "build",
+            "isBackground": true,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Django: Migrate Database",
+            "type": "shell",
+            "command": "docker",
+            "args": ["compose", "-f", "docker-compose.enhanced.yml", "exec", "django", "python", "manage.py", "migrate"],
+            "group": "build",
+            "isBackground": false,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Django: Create Superuser",
+            "type": "shell",
+            "command": "docker",
+            "args": ["compose", "-f", "docker-compose.enhanced.yml", "exec", "django", "python", "manage.py", "createsuperuser"],
+            "group": "build",
+            "isBackground": false,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Clean Python Cache",
+            "type": "shell",
+            "command": "find",
+            "args": [".", "-type", "d", "-name", "__pycache__", "-exec", "rm", "-rf", "{}", "+", "2>/dev/null", "||", "true"],
+            "group": "build",
+            "isBackground": false,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Example Task: Hello World",
+            "type": "shell",
+            "command": "echo",
+            "args": ["🎉 Hello from Enhanced ML Manager! 🚀"],
+            "group": "test",
+            "isBackground": false,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

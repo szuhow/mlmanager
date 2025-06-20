@@ -62,12 +62,14 @@ class TrainingCallback:
     
     def on_training_start(self):
         """Called when training starts - updates status to loading"""
+        logging.info(f"[CALLBACK] Training start: Setting model {self.model_id} status to 'loading'")
         self.model.status = 'loading'
         self.model.save()
         return True
     
     def on_dataset_loaded(self):
         """Called when dataset loading is complete - updates status to training"""
+        logging.info(f"[CALLBACK] Dataset loaded: Setting model {self.model_id} status to 'training'")
         self.model.status = 'training'
         self.model.save()
         return True
@@ -83,10 +85,12 @@ class TrainingCallback:
         self.model.refresh_from_db()  # Refresh to get latest stop_requested value
         self.model.current_epoch = epoch + 1  # Convert 0-based to 1-based for UI
         self.model.total_epochs = total_epochs
+        logging.info(f"[CALLBACK] Epoch {epoch + 1}/{total_epochs} started - updating model {self.model_id}")
         self.model.save()
         
         # Check if training should be stopped
         if self.model.stop_requested:
+            logging.info(f"[CALLBACK] Stop requested for model {self.model_id}")
             return False
         return True
     
@@ -122,6 +126,10 @@ class TrainingCallback:
         
         if logs:
             self.model.performance_metrics.update(logs)
+        
+        # Save training logs to MLflow as artifacts
+        self._save_logs_to_mlflow()
+        
         self.model.save()
     
     def on_training_stopped(self, logs=None):
@@ -129,6 +137,10 @@ class TrainingCallback:
         self.model.status = 'stopped'
         if logs:
             self.model.performance_metrics.update(logs)
+        
+        # Save training logs to MLflow as artifacts
+        self._save_logs_to_mlflow()
+        
         self.model.save()
     
     def on_training_failed(self, exception):
@@ -137,7 +149,70 @@ class TrainingCallback:
         if not self.model.performance_metrics:
             self.model.performance_metrics = {}
         self.model.performance_metrics['error'] = str(exception)
+        
+        # Save training logs to MLflow as artifacts even on failure
+        self._save_logs_to_mlflow()
+        
         self.model.save()
+    
+    def _save_logs_to_mlflow(self):
+        """Save training logs and other artifacts to MLflow"""
+        try:
+            # Save training log file if it exists
+            log_paths = [
+                log_file,  # Main training log from callback setup
+                base_dir / 'data' / 'logs' / 'training.log',  # Global training log
+                base_dir / 'data' / 'logs' / f'model_{self.model_id}' / f'training_{self.model_id}*.log'  # Model specific logs
+            ]
+            
+            for log_path in log_paths:
+                if '*' in str(log_path):
+                    # Handle glob patterns
+                    import glob
+                    matching_files = glob.glob(str(log_path))
+                    for file_path in matching_files:
+                        if Path(file_path).exists():
+                            try:
+                                mlflow.log_artifact(file_path, "logs")
+                                logging.info(f"[CALLBACK] Saved log file to MLflow: {file_path}")
+                            except Exception as e:
+                                logging.warning(f"[CALLBACK] Failed to save log file {file_path} to MLflow: {e}")
+                else:
+                    if Path(log_path).exists():
+                        try:
+                            mlflow.log_artifact(str(log_path), "logs")
+                            logging.info(f"[CALLBACK] Saved log file to MLflow: {log_path}")
+                        except Exception as e:
+                            logging.warning(f"[CALLBACK] Failed to save log file {log_path} to MLflow: {e}")
+            
+            # Save model checkpoints directory if it exists
+            checkpoint_dir = base_dir / 'data' / 'models' / f'model_{self.model_id}'
+            if checkpoint_dir.exists():
+                try:
+                    mlflow.log_artifacts(str(checkpoint_dir), "checkpoints")
+                    logging.info(f"[CALLBACK] Saved model checkpoints to MLflow: {checkpoint_dir}")
+                except Exception as e:
+                    logging.warning(f"[CALLBACK] Failed to save checkpoints to MLflow: {e}")
+            
+            # Save performance metrics as a JSON file
+            if hasattr(self.model, 'performance_metrics') and self.model.performance_metrics:
+                metrics_file = base_dir / 'data' / 'temp' / f'metrics_model_{self.model_id}.json'
+                metrics_file.parent.mkdir(parents=True, exist_ok=True)
+                
+                import json
+                with open(metrics_file, 'w') as f:
+                    json.dump(self.model.performance_metrics, f, indent=2)
+                
+                try:
+                    mlflow.log_artifact(str(metrics_file), "metrics")
+                    logging.info(f"[CALLBACK] Saved performance metrics to MLflow: {metrics_file}")
+                    # Clean up temporary file
+                    metrics_file.unlink()
+                except Exception as e:
+                    logging.warning(f"[CALLBACK] Failed to save metrics file to MLflow: {e}")
+                    
+        except Exception as e:
+            logging.error(f"[CALLBACK] Error saving artifacts to MLflow: {e}")
     
     def update_registry_info(self, registry_model_name, registry_model_version, is_registered=True):
         """Update the model with MLflow Registry information"""
@@ -252,15 +327,23 @@ class TrainingCallback:
     
     def on_batch_start(self, batch_idx, total_batches):
         """Called at the start of each batch"""
-        self.model.refresh_from_db()
-        self.model.current_batch = batch_idx + 1  # Convert 0-based to 1-based for UI
-        self.model.total_batches_per_epoch = total_batches
-        self.model.save()
-        
-        # Check if training should be stopped
-        if self.model.stop_requested:
+        try:
+            # Always refresh from database to get latest stop_requested state
+            self.model.refresh_from_db()
+            self.model.current_batch = batch_idx + 1  # Convert 0-based to 1-based for UI
+            self.model.total_batches_per_epoch = total_batches
+            self.model.save()
+            
+            # Check if training should be stopped
+            if self.model.stop_requested:
+                logging.info(f"[CALLBACK] Stop requested for model {self.model.id}, terminating training")
+                return False
+            return True
+        except Exception as e:
+            # Model might have been deleted
+            logging.warning(f"[CALLBACK] Error accessing model {self.model_id}, might be deleted: {e}")
+            logging.info(f"[CALLBACK] Terminating training due to model access error")
             return False
-        return True
     
     def on_batch_end(self, batch_idx, batch_logs=None):
         """Called at the end of each batch with optional metrics"""

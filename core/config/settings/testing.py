@@ -114,10 +114,6 @@ SECURE_BROWSER_XSS_FILTER = False
 SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False
 
-# Celery settings for testing (use eager execution)
-CELERY_TASK_ALWAYS_EAGER = True
-CELERY_TASK_EAGER_PROPAGATES = True
-
 # Testing performance settings
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB

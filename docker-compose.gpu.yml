@@ -1,0 +1,26 @@
+# GPU-enabled Docker Compose with enhanced memory configuration
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up
+
+services:
+  django:
+    deploy:
+      resources:
+        limits:
+          memory: 16G  # Limit to 16GB RAM (adjust based on your system)
+        reservations:
+          memory: 4G   # Reserve minimum 4GB
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      # GPU-related environment variables
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0  # Use first GPU, change to 0,1 for multiple GPUs
+      # Memory optimization
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+      - OMP_NUM_THREADS=4  # Increase for GPU usage
+      - MKL_NUM_THREADS=4
+    shm_size: 8gb  # Increased shared memory for GPU training
+    # Optional: Give container privileged access for better GPU performance
+    # privileged: true

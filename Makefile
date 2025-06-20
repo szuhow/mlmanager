@@ -1,52 +1,162 @@
-.PHONY: setup start stop restart logs shell rebuild clean django-setup quick help
+.PHONY: setup start stop restart logs shell rebuild clean django-setup quick help enhanced-start enhanced-stop enhanced-logs enhanced-status
 
+# Enhanced ML Manager commands
+.DEFAULT_GOAL := help
 
 ifneq (,$(wildcard .env))
     include .env
     export $(shell sed 's/=.*//' .env)
 endif
 
-train:
+# ==============================================
+# Enhanced ML Manager Docker Commands
+# ==============================================
+
+enhanced-setup: ## Setup Enhanced ML Manager environment
+	@echo "🚀 Setting up Enhanced ML Manager..."
+	@cp .env.enhanced.example .env || true
+	@echo "✅ Environment file created. Please edit .env if needed."
+	@docker network create enhanced-ml-network 2>/dev/null || true
+	@echo "✅ Docker network created."
+
+enhanced-start: ## Start Enhanced ML Manager with all services
+	@echo "🚀 Starting Enhanced ML Manager..."
+	@docker compose -f docker-compose.enhanced.yml up -d
+	@echo "⏳ Waiting for services to be ready..."
+	@sleep 10
+	@echo "🏥 Health check:"
+	@make enhanced-status
+	@echo ""
+	@echo "🎉 Enhanced ML Manager is ready!"
+	@echo "📊 Django App: http://localhost:8000"
+	@echo "📈 MLflow: http://localhost:5000"
+
+enhanced-stop: ## Stop Enhanced ML Manager services
+	@echo "🛑 Stopping Enhanced ML Manager..."
+	@docker compose -f docker-compose.enhanced.yml down
+	@echo "✅ All services stopped."
+
+enhanced-restart: ## Restart Enhanced ML Manager services
+	@echo "🔄 Restarting Enhanced ML Manager..."
+	@make enhanced-stop
+	@sleep 5
+	@make enhanced-start
+
+enhanced-logs: ## Show logs from all Enhanced ML Manager services
+	@docker compose -f docker-compose.enhanced.yml logs -f
+
+enhanced-logs-django: ## Show Django logs
+	@docker compose -f docker-compose.enhanced.yml logs -f django
+
+enhanced-status: ## Check status of Enhanced ML Manager services
+	@echo "📊 Service Status:"
+	@docker compose -f docker-compose.enhanced.yml ps
+	@echo ""
+	@echo "🔍 Health Checks:"
+	@echo -n "Django: "
+	@curl -s http://localhost:8000 >/dev/null && echo "✅ OK" || echo "❌ Failed"
+	@echo -n "MLflow: "
+	@curl -s http://localhost:5000 >/dev/null && echo "✅ OK" || echo "❌ Failed"
+
+enhanced-shell: ## Open shell in Django container
+	@docker exec -it web bash
+
+enhanced-rebuild: ## Rebuild Enhanced ML Manager containers
+	@echo "🔨 Rebuilding Enhanced ML Manager containers..."
+	@docker-compose -f docker-compose.enhanced.yml build --no-cache
+	@echo "✅ Containers rebuilt."
+
+enhanced-clean: ## Clean up Enhanced ML Manager containers and volumes
+	@echo "🧹 Cleaning up Enhanced ML Manager..."
+	@docker-compose -f docker-compose.enhanced.yml down -v --remove-orphans
+	@docker system prune -f
+	@echo "✅ Cleanup completed."
+
+enhanced-migrate: ## Run Django migrations in container
+	@echo "🔄 Running Django migrations..."
+	@docker exec web python core/manage.py migrate
+	@echo "✅ Migrations completed."
+
+enhanced-collectstatic: ## Collect static files in container
+	@echo "📦 Collecting static files..."
+	@docker exec web python core/manage.py collectstatic --noinput
+	@echo "✅ Static files collected."
+
+enhanced-createuser: ## Create Django superuser in container
+	@echo "👤 Creating Django superuser..."
+	@docker exec -it web python core/manage.py createsuperuser
+
+enhanced-test: ## Run tests in container
+	@echo "🧪 Running tests..."
+	@docker exec web python core/manage.py test
+	@echo "✅ Tests completed."
+
+enhanced-backup: ## Backup Enhanced ML Manager data
+	@echo "💾 Creating backup..."
+	@mkdir -p backups
+	@docker exec web tar czf - /app/data | cat > backups/enhanced-ml-backup-$(shell date +%Y%m%d-%H%M%S).tar.gz
+	@echo "✅ Backup created in backups/ directory."
+
+enhanced-monitor: ## Monitor Enhanced ML Manager services
+	@echo "📊 Monitoring Enhanced ML Manager..."
+	@echo "Press Ctrl+C to stop monitoring"
+	@while true; do \
+		clear; \
+		echo "=== Enhanced ML Manager Status ==="; \
+		echo ""; \
+		make enhanced-status; \
+		echo ""; \
+		echo "=== Resource Usage ==="; \
+		docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" web mlflow; \
+		sleep 5; \
+	done
+
+# ==============================================
+# Legacy Commands (kept for compatibility)
+# ==============================================
+
+train: ## Run ML training (legacy)
 	mkdir -p runs
 	@echo $(DATASET_PATH)
 	@echo $(MLFLOW_BACKEND)
 	python ml/training/train.py --path '$(DATASET_PATH)' --epochs "[10]" --shuffle True --lr 0.01 --batch_size [32] --bce_weight "[0.1]" --quarterres 
-metrics:
+
+metrics: ## Show training metrics with TensorBoard
 	tensorboard --logdir runs
 	
-predict:
+predict: ## Run inference (legacy)
 	python ml/inference/predict.py --image_path '$(IMAGE_PATH)' --epoch 6
 	
-setup:
+setup: ## Legacy setup
 	@chmod +x scripts/development/*.sh
 	@./scripts/development/setup.sh
 
-quick:
+quick: ## Legacy quick setup
 	@chmod +x scripts/development/*.sh
 	@./scripts/development/quick-setup.sh
 
-start:
+start: ## Legacy start
 	@./scripts/development/dev.sh start
 
-stop:
+stop: ## Legacy stop
 	@./scripts/development/dev.sh stop
 
-restart:
+restart: ## Legacy restart
 	@./scripts/development/dev.sh restart
 
-logs:
+logs: ## Legacy logs
 	@./scripts/development/dev.sh logs
 
-shell:
+shell: ## Legacy shell
 	@./scripts/development/dev.sh shell
 
-rebuild:
+rebuild: ## Legacy rebuild
 	@./scripts/development/dev.sh rebuild
 
-clean:
+clean: ## Legacy clean
 	@./scripts/development/dev.sh clean
 
-django-setup:
+django-setup: ## Legacy Django setup
 	@./scripts/development/django-setup.sh setup
 
 django-migrate:
@@ -84,98 +194,25 @@ restructure-tests:
 restructure-requirements:
 	@./scripts/development/gradual-restructure.sh requirements
 
-help:
+# ==============================================
+# Help
+# ==============================================
+
+help: ## Show this help message
+	@echo "Enhanced ML Manager - Docker Commands"
+	@echo "====================================="
+	@echo ""
+	@echo "🚀 Quick Start:"
+	@echo "  make enhanced-setup    # Setup environment"
+	@echo "  make enhanced-start    # Start all services"
+	@echo "  make enhanced-status   # Check service status"
+	@echo ""
 	@echo "Available commands:"
-	@echo "  quick          - Complete quick setup"
-	@echo "  setup          - Initial infrastructure setup"
-	@echo "  start/stop     - Start/stop services"
-	@echo "  logs           - View logs"
-	@echo "  shell          - Django container shell"
-	@echo "  django-setup       - Setup Django (migrations + superuser)"
-	@echo "  django-migrate     - Create and apply migrations + static files"
-	@echo "  django-migrate-only - Apply existing migrations only"
-	@echo "  django-makemigrations - Create new migrations only"
-	@echo "  django-user        - Create superuser only"
-	@echo "  django-shell       - Django shell"
-	@echo "  test           - Run all tests"
-	@echo "  test-unit      - Run unit tests"
-	@echo "  test-integration - Run integration tests"
-	@echo "  test-e2e       - Run end-to-end tests"
-	@echo "  restructure    - Reorganize project structure (preview)"
-	@echo "  gradual-restructure - Gradual, safe restructuring"
-	@echo "  restructure-tests - Reorganize tests only"
-
-# Test commands
-test:
-	@python -m pytest tests/ -v
-
-test-unit:
-	@python -m pytest tests/unit/ -v
-
-test-integration:
-	@python -m pytest tests/integration/ -v
-
-test-e2e:
-	@python -m pytest tests/e2e/ -v
-
-test-fixtures:
-	@python -m pytest tests/fixtures/ -v
-
-# Environment-specific commands
-dev:
-	docker-compose -f config/docker/docker-compose.dev.yml up
-
-dev-build:
-	docker-compose -f config/docker/docker-compose.dev.yml up --build
-
-prod:
-	docker-compose -f config/docker/docker-compose.prod.yml up
-
-prod-build:
-	docker-compose -f config/docker/docker-compose.prod.yml up --build
-
-# Data management
-clean-data:
-	@echo "Cleaning temporary data..."
-	rm -rf data/temp/*
-	@echo "Temporary data cleaned."
-
-backup-data:
-	@echo "Creating data backup..."
-	tar -czf data-backup-$(shell date +%Y%m%d-%H%M%S).tar.gz data/
-	@echo "Data backup created."
-
-# Infrastructure management
-monitoring:
-	docker-compose -f infrastructure/monitoring/docker-compose.monitoring.yml up
-
-monitoring-stop:
-	docker-compose -f infrastructure/monitoring/docker-compose.monitoring.yml down
-
-backup:
-	@./infrastructure/backup/backup.sh
-
-backup-restore:
-	@echo "Available backups:"
-	@ls -la data/backups/
-	@echo "Use: docker exec web python core/manage.py loaddata <backup_file>"
-
-# Network management
-network-create:
-	docker-compose -f infrastructure/networking/networks.yml up --no-start
-
-network-remove:
-	docker-compose -f infrastructure/networking/networks.yml down
-
-# Security scanning
-security-scan:
-	@echo "Running security scan..."
-	docker run --rm -v $(PWD):/app securecodewarrior/docker-security-scan
-
-download-arcade-dataset:
-	@echo "Downloading arcade dataset..."
-	mkdir -p data/arcade
-	curl -L https://zenodo.org/records/8386059/files/arcade_challenge_datasets.zip -o data/datasets/arcade-challange-datasets.zip
-	unzip data/datasets/arcade-challange-datasets.zip -d data/datasets/
-	rm data/datasets/arcade-challange-datasets.zip
-	@echo "Arcade dataset downloaded and extracted."
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "🌐 Service URLs:"
+	@echo "  Django App: http://localhost:8000"
+	@echo "  MLflow:     http://localhost:5000"
+	@echo ""
+	@echo "📚 Documentation:"
+	@echo "  docs/ENHANCED_ML_MANAGER_IMPLEMENTATION.md"

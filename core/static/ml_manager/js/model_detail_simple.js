@@ -165,7 +165,18 @@ class ModelDetailManager {
         const modelStatus = document.querySelector('[data-model-status]');
         const statusValue = modelStatus?.dataset.modelStatus;
         
-        this.log(`📊 Current model status: <strong>${statusValue}</strong>`);
+        // Enhanced debugging
+        this.log(`� Model status element found: <strong>${!!modelStatus}</strong>`);
+        if (modelStatus) {
+            this.log(`�📊 Current model status: <strong>${statusValue}</strong>`);
+            this.log(`🏷️ Element dataset: ${JSON.stringify(modelStatus.dataset)}`);
+        } else {
+            this.log(`❌ No element with [data-model-status] found`);
+            // Try alternative selectors
+            const allDataElements = document.querySelectorAll('[data-model-id], [data-status]');
+            this.log(`🔍 Found ${allDataElements.length} elements with data attributes`);
+        }
+        
         this.lastKnownStatus = statusValue; // Store initial status
         
         // Start updates for training, pending, or loading states (covers recently started training)
@@ -325,26 +336,55 @@ class ModelDetailManager {
     updateStatusIndicators(status) {
         this.log(`🔄 Updating status indicators to: ${status}`);
         
-        // Update status badges
-        const statusBadges = document.querySelectorAll('.badge');
+        // Update ALL status badges (both in logs button and model info)
+        const statusBadges = document.querySelectorAll('.badge, .status-badge');
+        let badgesUpdated = 0;
         statusBadges.forEach(badge => {
-            if (badge.textContent.toLowerCase().includes('pending') || 
-                badge.textContent.toLowerCase().includes('training') ||
-                badge.textContent.toLowerCase().includes('completed') ||
-                badge.textContent.toLowerCase().includes('failed')) {
+            const text = badge.textContent.toLowerCase().trim();
+            if (text.includes('pending') || text.includes('training') ||
+                text.includes('completed') || text.includes('failed') ||
+                text.includes('loading') || text.includes('live') ||
+                text.includes('complete')) {
                 
-                // Update badge text and class
-                badge.textContent = status.toUpperCase();
-                badge.className = 'badge ' + this.getStatusBadgeClass(status);
+                // Update badge text and Bootstrap classes
+                const oldText = badge.textContent;
+                const oldClasses = badge.className;
+                
+                // Remove old status classes
+                badge.classList.remove('bg-warning', 'bg-success', 'bg-danger', 'bg-info', 'bg-secondary');
+                
+                // Set new text and class based on status
+                if (status === 'training' || status === 'loading') {
+                    badge.textContent = status === 'training' ? 'Live' : 'Loading';
+                    badge.classList.add('bg-warning');
+                } else if (status === 'completed') {
+                    badge.textContent = 'Complete';
+                    badge.classList.add('bg-success');
+                } else if (status === 'failed') {
+                    badge.textContent = 'Failed';
+                    badge.classList.add('bg-danger');
+                } else if (status === 'pending') {
+                    badge.textContent = 'Pending';
+                    badge.classList.add('bg-info');
+                } else {
+                    badge.textContent = status.toUpperCase();
+                    badge.classList.add('bg-secondary');
+                }
+                
+                this.log(`🏷️ Updated badge: "${oldText}" → "${badge.textContent}" (${oldClasses} → ${badge.className})`);
+                badgesUpdated++;
             }
         });
         
-        // Update any status text elements
-        const statusElements = document.querySelectorAll('.status-text, [data-status]');
-        statusElements.forEach(element => {
-            element.textContent = status;
-            element.setAttribute('data-status', status);
-        });
+        // Update data-model-status attribute if it exists
+        const modelStatusElement = document.querySelector('[data-model-status]');
+        if (modelStatusElement) {
+            const oldStatus = modelStatusElement.dataset.modelStatus;
+            modelStatusElement.dataset.modelStatus = status;
+            this.log(`🎯 Updated data-model-status: "${oldStatus}" → "${status}"`);
+        }
+        
+        this.log(`✅ Status indicators update complete: ${badgesUpdated} badges updated`);
     }
     
     getStatusBadgeClass(status) {

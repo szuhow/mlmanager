@@ -101,7 +101,7 @@ except ImportError:
     AddChannelTransform = EnsureChannelFirstd
     EnsureChannelTransform = EnsureChannelFirstd
     EnsureChannelTransform = EnsureChannelFirstd
-from monai.transforms import Compose, LoadImaged, ScaleIntensityd, ToTensord, RandCropByPosNegLabeld, RandFlipd, RandRotate90d, RandScaleIntensityd, Lambdad, Resized
+from monai.transforms import Compose, LoadImaged, ScaleIntensityd, ToTensord, RandCropByPosNegLabeld, RandFlipd, RandRotate90d, RandScaleIntensityd, Lambdad, Resized, RandSpatialCropd
 from monai.losses import DiceLoss as MonaiDiceLoss
 from monai.metrics import DiceMetric
 
@@ -179,7 +179,7 @@ def save_enhanced_training_curves(epoch_history, model_dir, epoch):
         axes[0, 0].set_xlabel('Epoch')
         axes[0, 0].set_ylabel('Loss')
         axes[0, 0].legend()
-        axes[0, 0].grid(True, alpha=0.3)
+        # axes[0, 0].grid(True, alpha=0.3)  # Usuń siatkę z wykresów
         
         # Dice score curves
         axes[0, 1].plot(epochs, train_dices, 'b-', label='Training Dice', linewidth=2)
@@ -188,7 +188,7 @@ def save_enhanced_training_curves(epoch_history, model_dir, epoch):
         axes[0, 1].set_xlabel('Epoch')
         axes[0, 1].set_ylabel('Dice Score')
         axes[0, 1].legend()
-        axes[0, 1].grid(True, alpha=0.3)
+        # axes[0, 1].grid(True, alpha=0.3)  # Usuń siatkę z wykresów
         
         # Loss difference (overfitting indicator)
         loss_diff = [v - t for v, t in zip(val_losses, train_losses)]
@@ -196,7 +196,7 @@ def save_enhanced_training_curves(epoch_history, model_dir, epoch):
         axes[0, 2].set_title('Validation - Training Loss')
         axes[0, 2].set_xlabel('Epoch')
         axes[0, 2].set_ylabel('Loss Difference')
-        axes[0, 2].grid(True, alpha=0.3)
+        # axes[0, 2].grid(True, alpha=0.3)  # Usuń siatkę z wykresów
         axes[0, 2].axhline(y=0, color='k', linestyle='--', alpha=0.5)
         
         # Dice difference
@@ -205,7 +205,7 @@ def save_enhanced_training_curves(epoch_history, model_dir, epoch):
         axes[1, 0].set_title('Validation - Training Dice')
         axes[1, 0].set_xlabel('Epoch')
         axes[1, 0].set_ylabel('Dice Difference')
-        axes[1, 0].grid(True, alpha=0.3)
+        # axes[1, 0].grid(True, alpha=0.3)  # Usuń siatkę z wykresów
         axes[1, 0].axhline(y=0, color='k', linestyle='--', alpha=0.5)
         
         # Best metrics summary
@@ -243,7 +243,7 @@ def save_enhanced_training_curves(epoch_history, model_dir, epoch):
             axes[1, 2].set_xlabel('Epoch')
             axes[1, 2].set_ylabel('Dice Score')
             axes[1, 2].legend()
-            axes[1, 2].grid(True, alpha=0.3)
+            # axes[1, 2].grid(True, alpha=0.3)  # Usuń siatkę z wykresów
         else:
             axes[1, 2].axis('off')
         
@@ -578,7 +578,7 @@ def ensure_single_channel(x):
     else:
         return x
 
-def get_monai_transforms(params, for_training=True):
+def get_monai_transforms(params, for_training=True, dataset_type=None):
     """Get MONAI transforms with configurable augmentations"""
     transforms = [
         LoadImaged(keys=["image", "label"]),
@@ -599,18 +599,31 @@ def get_monai_transforms(params, for_training=True):
             transforms.append(RandScaleIntensityd(keys=["image"], factors=(0.8, 1.2), prob=0.5))
         
         crop_size = params.get('crop_size', 128)
-        # Use RandCropByPosNegLabeld for better segmentation cropping
-        # Set num_samples=1 to maintain batch size consistency
-        transforms.append(RandCropByPosNegLabeld(
-            keys=["image", "label"], 
-            label_key="label",
-            spatial_size=[crop_size, crop_size],
-            pos=1,
-            neg=1,
-            num_samples=1,  # Changed from 4 to 1 to maintain batch size
-            image_key="image",
-            image_threshold=0
-        ))
+        
+        # Use RandCropByPosNegLabeld only when explicitly enabled via checkbox
+        use_pos_neg_crop = params.get('use_pos_neg_cropping', False)
+        
+        if use_pos_neg_crop:
+            # Use RandCropByPosNegLabeld for advanced segmentation cropping
+            # Set num_samples=1 to maintain batch size consistency
+            transforms.append(RandCropByPosNegLabeld(
+                keys=["image", "label"], 
+                label_key="label",
+                spatial_size=[crop_size, crop_size],
+                pos=1,
+                neg=1,
+                num_samples=1,  # Changed from 4 to 1 to maintain batch size
+                image_key="image",
+                image_threshold=0
+            ))
+        else:
+            # For regular cropping, use standard random crop
+            transforms.append(RandSpatialCropd(
+                keys=["image", "label"],
+                roi_size=[crop_size, crop_size],
+                random_center=True,
+                random_size=False
+            ))
         
         if params.get('use_random_flip', True):
             transforms.append(RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0))
@@ -706,7 +719,7 @@ def save_training_curves(epoch, metrics, logger, model_dir=None):
         logger.warning(f"Could not save training curves: {e}")
         return None
 
-def save_sample_predictions(model, val_loader, device, epoch, model_dir=None, class_info=None):
+def save_sample_predictions(model, val_loader, device, epoch, model_dir=None, class_info=None, threshold=0.5):
     """Save sample predictions from validation set with enhanced error handling
     
     Enhanced error handling includes:
@@ -716,6 +729,9 @@ def save_sample_predictions(model, val_loader, device, epoch, model_dir=None, cl
     - Fallback error image creation when prediction generation fails
     - File size validation to ensure valid PNG output
     - Classification visualization support
+    
+    Args:
+        threshold: Binary segmentation threshold for hard predictions
     """
     logger.info(f"[PREDICTIONS] Starting to save sample predictions for epoch {epoch+1}")
     
@@ -855,21 +871,34 @@ def save_sample_predictions(model, val_loader, device, epoch, model_dir=None, cl
                 # Segmentation task - use existing logic
                 # Apply appropriate post-processing based on number of output channels
                 num_output_channels = outputs.shape[1]
+                logger.info(f"[PREDICTIONS] Output shape: {outputs.shape}, channels: {num_output_channels}")
+                logger.info(f"[PREDICTIONS] Raw output range: [{outputs.min().item():.4f}, {outputs.max().item():.4f}]")
+                
                 if num_output_channels == 1:
                     # Binary segmentation
-                    outputs = torch.sigmoid(outputs)
-                    outputs = (outputs > 0.5).float()
+                    outputs_raw = outputs.clone()  # Keep raw logits for debugging
+                    outputs_soft = torch.sigmoid(outputs)  # Soft predictions (probabilities)
+                    outputs_hard = (outputs_soft > threshold).float()  # Hard predictions (binary)
+                    
+                    logger.info(f"[PREDICTIONS] Raw logits range: [{outputs_raw.min().item():.4f}, {outputs_raw.max().item():.4f}]")
+                    logger.info(f"[PREDICTIONS] Soft predictions range: [{outputs_soft.min().item():.4f}, {outputs_soft.max().item():.4f}]")
+                    logger.info(f"[PREDICTIONS] Hard predictions range: [{outputs_hard.min().item():.4f}, {outputs_hard.max().item():.4f}]")
+                    logger.info(f"[PREDICTIONS] Unique values after threshold: {torch.unique(outputs_hard).cpu().numpy()}")
                     logger.info(f"[PREDICTIONS] Applied binary segmentation post-processing (sigmoid + threshold)")
+                    
                     use_colormap = False
+                    # Use hard predictions for visualization, keep soft for analysis
+                    outputs_for_viz = outputs_hard
                 else:
                     # Multi-class semantic segmentation
                     outputs = torch.softmax(outputs, dim=1)
-                    outputs = torch.argmax(outputs, dim=1, keepdim=True).float()
+                    outputs_for_viz = torch.argmax(outputs, dim=1, keepdim=True).float()
                     logger.info(f"[PREDICTIONS] Applied multi-class segmentation post-processing (softmax + argmax) for {num_output_channels} classes")
                     use_colormap = True
+                    outputs_soft = None  # No soft predictions for multi-class
             
             # Create figure with proper settings
-            fig, axes = plt.subplots(3, 4, figsize=(15, 10))
+            fig, axes = plt.subplots(4, 4, figsize=(15, 12))  # Add 4th row for soft predictions
             plt.suptitle(f'Sample Predictions - Epoch {epoch+1} (Full Images)', fontsize=16)
             
             # Create custom colormap for semantic segmentation
@@ -938,25 +967,39 @@ def save_sample_predictions(model, val_loader, device, epoch, model_dir=None, cl
                     axes[1, i].set_title(f'Ground Truth #{i+1}')
                 axes[1, i].axis('off')
                 
-                # Prediction - use appropriate visualization
+                # Hard Prediction - use appropriate visualization
                 if use_colormap:
                     # For multi-class segmentation, use custom color mapping
-                    pred_data = outputs[i, 0].cpu().numpy()
+                    pred_data = outputs_for_viz[i, 0].cpu().numpy()
                     unique_pred_classes = np.unique(pred_data)
                     logger.info(f"[PREDICTIONS] Predicted classes for sample {i+1}: {unique_pred_classes}")
                     axes[2, i].imshow(pred_data, cmap=cmap, vmin=0, vmax=num_output_channels-1)
-                    axes[2, i].set_title(f'Prediction #{i+1} ({len(unique_pred_classes)} classes)')
+                    axes[2, i].set_title(f'Hard Pred #{i+1} ({len(unique_pred_classes)} classes)')
                 else:
                     # For binary segmentation, use grayscale
-                    axes[2, i].imshow(outputs[i, 0].cpu().numpy(), cmap='gray')
-                    axes[2, i].set_title(f'Prediction #{i+1}')
+                    pred_data = outputs_for_viz[i, 0].cpu().numpy()
+                    logger.info(f"[PREDICTIONS] Binary hard pred sample {i+1} range: [{pred_data.min():.4f}, {pred_data.max():.4f}]")
+                    logger.info(f"[PREDICTIONS] Binary hard pred sample {i+1} unique values: {np.unique(pred_data)}")
+                    axes[2, i].imshow(pred_data, cmap='gray', vmin=0, vmax=1)  # Force range 0-1
+                    axes[2, i].set_title(f'Hard Pred #{i+1}')
                 axes[2, i].axis('off')
+                
+                # Soft Prediction (only for binary segmentation)
+                if not use_colormap and outputs_soft is not None:
+                    soft_data = outputs_soft[i, 0].cpu().numpy()
+                    logger.info(f"[PREDICTIONS] Binary soft pred sample {i+1} range: [{soft_data.min():.4f}, {soft_data.max():.4f}]")
+                    axes[3, i].imshow(soft_data, cmap='gray', vmin=0, vmax=1)  # Force range 0-1
+                    axes[3, i].set_title(f'Soft Pred #{i+1}')
+                else:
+                    axes[3, i].axis('off')  # Hide for multi-class
+                axes[3, i].axis('off')
             
             # Hide unused subplots if we have fewer than 4 samples
             for i in range(num_samples, 4):
                 axes[0, i].axis('off')
                 axes[1, i].axis('off')
                 axes[2, i].axis('off')
+                axes[3, i].axis('off')
             
             plt.tight_layout()
             
@@ -1051,7 +1094,7 @@ def save_config(args, model_dir=None):
         json.dump(config, f, indent=4)
     return out_path
 
-def get_monai_datasets(data_path, val_split=0.2, transform_params=None):
+def get_monai_datasets(data_path, val_split=0.2, transform_params=None, dataset_type=None):
     import glob
     # Use default params if none provided
     if transform_params is None:
@@ -1109,8 +1152,8 @@ def get_monai_datasets(data_path, val_split=0.2, transform_params=None):
         logger.info(f"[DATASET] Label file extensions: {sorted(label_exts)}")
     
     # Create separate transforms for training and validation
-    train_transforms = get_monai_transforms(transform_params, for_training=True)
-    val_transforms = get_monai_transforms(transform_params, for_training=False)
+    train_transforms = get_monai_transforms(transform_params, for_training=True, dataset_type=dataset_type)
+    val_transforms = get_monai_transforms(transform_params, for_training=False, dataset_type=dataset_type)
     
     train_ds = CacheDataset(data=train_files, transform=train_transforms, cache_rate=1.0)
     val_ds = CacheDataset(data=val_files, transform=val_transforms, cache_rate=1.0)
@@ -1187,7 +1230,7 @@ def get_datasets_with_auto_detection(data_path, validation_split, transform_para
             return get_arcade_datasets(data_path, validation_split, transform_params, args, forced_type=dataset_type_override)
         elif dataset_type_override == 'coronary':
             logger.info("[DATASET] Using MONAI dataset loader (forced)")
-            return get_monai_datasets(data_path, validation_split, transform_params)
+            return get_monai_datasets(data_path, validation_split, transform_params, dataset_type_override)
         else:
             logger.warning(f"[DATASET] Unknown dataset type '{dataset_type_override}', falling back to auto-detection")
     
@@ -1199,7 +1242,7 @@ def get_datasets_with_auto_detection(data_path, validation_split, transform_para
         return get_arcade_datasets(data_path, validation_split, transform_params, args)
     elif dataset_type in ["coronary_standard", "monai_style"]:
         logger.info("[DATASET] Using MONAI dataset loader")
-        return get_monai_datasets(data_path, validation_split, transform_params)
+        return get_monai_datasets(data_path, validation_split, transform_params, dataset_type)
     else:
         logger.error(f"[DATASET] Unsupported dataset type: {dataset_type}")
         raise ValueError(f"Unsupported dataset structure in {data_path}")
@@ -1250,15 +1293,13 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
             task = 'binary_segmentation'
     logger.info(f"[ARCADE] Using task: {task}")
     
-    # Common transforms - use crop_size from transform_params to match training expectations
-    res = getattr(args, 'resolution', '512')
+    # Common transforms - use crop_size for consistent spatial resolution
     crop_size = transform_params.get('crop_size', 128)
     
-    # For ARCADE datasets, use the crop_size as the target resolution to match MONAI training expectations
+    # Use crop_size as the target resolution for both training and validation consistency
     # This ensures spatial consistency between training (where model sees crop_size x crop_size) and validation
-    size = crop_size  # Use crop_size instead of resolution for spatial consistency
-    
-    logger.info(f"[ARCADE] Using resolution {size}x{size} to match training crop size")
+    size = crop_size
+    logger.info(f"[ARCADE] Using target size {size}x{size} for spatial consistency")
     
     if task in ['binary_segmentation','semantic_segmentation']:
         img_tr = tv_transforms.Compose([tv_transforms.Resize((size,size)), tv_transforms.ToTensor(), tv_transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])])
@@ -1473,8 +1514,10 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
         raise
     
     # Wrap in DataLoaders
-    train_loader = TorchDataLoader(train_ds, batch_size=args.batch_size, shuffle=True,  num_workers=getattr(args,'num_workers',2))
-    val_loader   = TorchDataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=getattr(args,'num_workers',2))
+    # Use conservative num_workers for Docker environment to avoid shared memory issues
+    num_workers = min(getattr(args,'num_workers',1), 1)  # Conservative: max 1 worker
+    train_loader = TorchDataLoader(train_ds, batch_size=args.batch_size, shuffle=True,  num_workers=num_workers)
+    val_loader   = TorchDataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
     logger.info(f"[ARCADE] Loaders: {task} train={len(train_ds)}, val={len(val_ds)}")
     return train_loader, val_loader
 
@@ -1528,7 +1571,8 @@ def parse_args():
     parser.add_argument('--random-rotate', action='store_true', help='Enable random rotation augmentation')
     parser.add_argument('--random-scale', action='store_true', help='Enable random scaling augmentation')
     parser.add_argument('--random-intensity', action='store_true', help='Enable random intensity scaling')
-    parser.add_argument('--crop-size', type=int, default=128, help='Size of random crop')
+    parser.add_argument('--crop-size', type=int, default=128, help='Size of random crop and target resolution')
+    parser.add_argument('--threshold', type=float, default=0.5, help='Binary segmentation threshold for hard predictions')
     parser.add_argument('--num-workers', type=int, default=2, help='Number of data loading workers (reduced for Docker)')
     
     # Learning rate scheduler parameters
@@ -1602,9 +1646,6 @@ def parse_args():
     parser.add_argument('--output-dir', type=str, help='Directory to save predictions')
     parser.add_argument('--device', type=str, default='cuda', help='Device to run inference on')
     parser.add_argument('--weights-path', type=str, help='Optional path to a .pth file for inference')
-    parser.add_argument('--resolution', type=str, default='original', 
-                       choices=['original', '128', '256', '384', '512'],
-                       help='Input image resolution for processing')
     args, unknown = parser.parse_known_args()
     if args.save_training_template:
         template = {
@@ -1959,9 +2000,9 @@ def train_model(args):
     mlflow.log_param("validation_split", args.validation_split)
     mlflow.log_param("num_workers", getattr(args, 'num_workers', 2))
     
-    # Log device and resolution parameters
+    # Log device and processing parameters
     mlflow.log_param("device", getattr(args, 'device', 'auto'))
-    mlflow.log_param("resolution", getattr(args, 'resolution', '256'))
+    mlflow.log_param("threshold", args.threshold)
     
     # Log augmentation parameters
     mlflow.log_param("random_flip", getattr(args, 'random_flip', False))
@@ -2041,7 +2082,8 @@ def train_model(args):
             else:
                 # MONAI Datasets - need to create DataLoaders
                 train_ds, val_ds = dataset_loaders
-                num_workers = min(getattr(args, 'num_workers', 2), 2)
+                # Use conservative num_workers to avoid shared memory issues in Docker
+                num_workers = min(getattr(args, 'num_workers', 1), 1)  # Conservative: max 1 worker
                 train_loader = MonaiDataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers)
                 val_loader = MonaiDataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
                 train_samples = len(train_ds)
@@ -2051,8 +2093,9 @@ def train_model(args):
             logger.error(f"[DATASET] Failed to load datasets: {e}")
             # Fallback to original MONAI method
             logger.info("[DATASET] Falling back to MONAI dataset loader...")
-            train_ds, val_ds = get_monai_datasets(args.data_path, args.validation_split, transform_params)
-            num_workers = min(getattr(args, 'num_workers', 2), 2)
+            train_ds, val_ds = get_monai_datasets(args.data_path, args.validation_split, transform_params, dataset_type=getattr(args, 'dataset_type', None))
+            # Use conservative num_workers to avoid shared memory issues in Docker  
+            num_workers = min(getattr(args, 'num_workers', 1), 1)  # Conservative: max 1 worker
             train_loader = MonaiDataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers)
             val_loader = MonaiDataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
             train_samples = len(train_ds)
@@ -2080,8 +2123,8 @@ def train_model(args):
                 'validation_split': args.validation_split,
                 'transform_params': transform_params,
                 'batch_size': args.batch_size,
-                'resolution': getattr(args, 'resolution', '256'),
                 'crop_size': getattr(args, 'crop_size', 128),
+                'threshold': getattr(args, 'threshold', 0.5),
                 'dataset_type': getattr(args, 'dataset_type', 'auto'),
                 'num_workers': getattr(args, 'num_workers', 4)
             }
@@ -2357,6 +2400,7 @@ def train_model(args):
                 logger.warning(f"[MODEL VALIDATION] This may cause training issues - check model configuration")
 
         # Configure loss function based on detected class information and args
+        logger.info(f"[LOSS CONFIG] Received loss function argument: {args.loss_function}")
         if ENHANCED_UTILS_AVAILABLE:
             logger.info(f"[LOSS CONFIG] Using enhanced loss configuration")
             
@@ -2365,8 +2409,8 @@ def train_model(args):
                 # Classification task
                 logger.info(f"[LOSS CONFIG] Using classification loss for artery classification")
                 loss_function = create_loss_function('crossentropy')
-            elif args.loss_type == 'mixed':
-                # Mixed Dice + BCE loss
+            elif args.loss_function == 'combined':
+                # Mixed Dice + BCE loss (combined mode)
                 logger.info(f"[LOSS CONFIG] Using mixed loss: {args.dice_weight:.1%} Dice + {args.bce_weight:.1%} BCE")
                 loss_function = create_loss_function(
                     'mixed',
@@ -2374,21 +2418,43 @@ def train_model(args):
                     bce_weight=args.bce_weight,
                     smooth=args.loss_smooth
                 )
-            elif args.loss_type == 'dice':
+            elif args.loss_function == 'dice':
                 # Pure Dice loss
                 logger.info(f"[LOSS CONFIG] Using Dice loss")
                 if class_info and class_info['class_type'] == 'semantic_onehot' and class_info['max_channels'] > 1:
+                    logger.info(f"[LOSS CONFIG] Using multi-class Dice loss for {class_info['max_channels']} classes")
                     loss_function = create_loss_function('dice', sigmoid=False, softmax=True)
                 else:
                     loss_function = create_loss_function('dice', sigmoid=True, smooth=args.loss_smooth)
-            elif args.loss_type == 'bce':
+                    logger.info(f"[LOSS CONFIG] Using binary Dice loss")
+            elif args.loss_function == 'bce':
                 # Pure BCE loss
                 logger.info(f"[LOSS CONFIG] Using Binary Cross Entropy loss")
                 loss_function = create_loss_function('bce')
+            elif args.loss_function == 'focal':
+                # Focal loss
+                logger.info(f"[LOSS CONFIG] Using Focal loss")
+                loss_function = create_loss_function('focal')
+            elif args.loss_function == 'focal_segmentation':
+                # Focal segmentation (Dice + Focal BCE)
+                logger.info(f"[LOSS CONFIG] Using Focal Segmentation loss")
+                loss_function = create_loss_function('focal_segmentation')
+            elif args.loss_function == 'balanced_segmentation':
+                # Balanced segmentation
+                logger.info(f"[LOSS CONFIG] Using Balanced Segmentation loss")
+                loss_function = create_loss_function('balanced_segmentation')
+            elif args.loss_function == 'dice_focused':
+                # Dice focused
+                logger.info(f"[LOSS CONFIG] Using Dice Focused loss")
+                loss_function = create_loss_function('dice_focused')
+            elif args.loss_function == 'jaccard_based':
+                # Jaccard based
+                logger.info(f"[LOSS CONFIG] Using Jaccard Based loss")
+                loss_function = create_loss_function('jaccard_based')
             else:
-                # Default to mixed loss
-                logger.info(f"[LOSS CONFIG] Defaulting to mixed loss: 70% Dice + 30% BCE")
-                loss_function = create_loss_function('mixed')
+                # Default to dice loss for single selection
+                logger.info(f"[LOSS CONFIG] Using default Dice loss")
+                loss_function = create_loss_function('dice', sigmoid=True, smooth=args.loss_smooth)
         else:
             # Fallback to original configuration if enhanced utils not available
             logger.info(f"[LOSS CONFIG] Using standard loss configuration (enhanced utils not available)")
@@ -2728,9 +2794,17 @@ def train_model(args):
                         batch_dice = batch_accuracy  # Use accuracy as the metric
                     else:
                         # Segmentation task - calculate dice score
-                        val_outputs = torch.sigmoid(outputs)
-                        val_outputs = (val_outputs > 0.5).float()
-                        dice_metric(y_pred=val_outputs, y=labels)
+                        # Apply proper thresholding for binary segmentation
+                        if outputs.shape[1] == 1:
+                            val_outputs_soft = torch.sigmoid(outputs)
+                            val_outputs_hard = (val_outputs_soft > args.threshold).float()
+                            dice_metric(y_pred=val_outputs_hard, y=labels)
+                        else:
+                            # Multi-class - apply softmax and argmax
+                            val_outputs = torch.softmax(outputs, dim=1)
+                            val_outputs = torch.argmax(val_outputs, dim=1, keepdim=True).float()
+                            dice_metric(y_pred=val_outputs, y=labels)
+                        
                         batch_dice = dice_metric.aggregate().item()
                         dice_metric.reset()
                     train_dice += batch_dice
@@ -2958,9 +3032,11 @@ def train_model(args):
                         # Segmentation task - apply appropriate post-processing
                         num_output_channels = val_outputs.shape[1]
                         if num_output_channels == 1:
-                            # Binary segmentation
-                            val_outputs = torch.sigmoid(val_outputs)
-                            val_outputs = (val_outputs > 0.5).float()
+                            # Binary segmentation - apply sigmoid then threshold
+                            val_outputs_soft = torch.sigmoid(val_outputs)
+                            val_outputs_hard = (val_outputs_soft > args.threshold).float()
+                            # Use hard predictions for metric calculation
+                            val_outputs = val_outputs_hard
                         else:
                             # Multi-class semantic segmentation
                             val_outputs = torch.softmax(val_outputs, dim=1)
@@ -3057,7 +3133,7 @@ def train_model(args):
                 
                 # Save sample predictions every epoch (not just every 5 epochs)
                 try:
-                    pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir, class_info=class_info)
+                    pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir, class_info=class_info, threshold=args.threshold)
                     if pred_file and os.path.exists(pred_file):
                         epoch_artifacts['predictions'] = pred_file
                         mlflow.log_artifact(pred_file, artifact_path=f"predictions/epoch_{epoch+1:03d}")
@@ -3134,7 +3210,7 @@ def train_model(args):
                 logger.warning(f"[MLFLOW] Enhanced artifact logging failed, falling back to basic logging: {e}")
                 
                 # Fallback to original artifact logging - Generate predictions every epoch
-                pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir, class_info=class_info)
+                pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir, class_info=class_info, threshold=args.threshold)
                 if pred_file:
                     mlflow.log_artifact(pred_file, artifact_path=f"predictions/epoch_{epoch+1:03d}")
                     logger.info(f"[MLFLOW] Fallback: Successfully logged prediction samples for epoch {epoch+1}")
@@ -3263,6 +3339,36 @@ def train_model(args):
                 
                 logger.info(f"Saved new best model with val_dice: {val_dice:.4f} at {best_model_path}")
                 logger.info(f"[MLFLOW] Best model artifacts logged to checkpoints/best_model/epoch_{epoch+1:03d}")
+            
+            # Save epoch checkpoint (for inference selection)
+            epoch_checkpoint_dir = os.path.join(model_dir, "checkpoints", f"epoch_{epoch+1:03d}")
+            os.makedirs(epoch_checkpoint_dir, exist_ok=True)
+            epoch_checkpoint_path = os.path.join(epoch_checkpoint_dir, "model.pth")
+            
+            epoch_checkpoint = {
+                'model_state_dict': model.state_dict(),
+                'epoch': epoch + 1,
+                'train_loss': epoch_loss,
+                'train_dice': train_dice,
+                'val_loss': val_loss,
+                'val_dice': val_dice,
+                'learning_rate': optimizer.param_groups[0]['lr'],
+                'is_best': val_dice > best_val_dice,
+                'model_metadata': {
+                    'model_type': 'classification' if class_info and class_info.get('class_type') == 'classification' else 'segmentation',
+                    'task_type': class_info.get('task_type') if class_info else 'segmentation',
+                    'input_channels': class_info.get('input_channels', 3) if class_info else 3,
+                    'num_classes': class_info.get('num_classes', 1) if class_info else 1,
+                    'model_architecture': getattr(args, 'model_architecture', 'unet'),
+                    'crop_size': getattr(args, 'crop_size', 256)
+                }
+            }
+            
+            torch.save(epoch_checkpoint, epoch_checkpoint_path)
+            logger.info(f"[CHECKPOINT] Saved epoch {epoch+1} checkpoint: {epoch_checkpoint_path}")
+            
+            # Log to MLflow
+            mlflow.log_artifact(epoch_checkpoint_path, artifact_path=f"checkpoints/epoch_{epoch+1:03d}")
             
             # --- ZAPIS ŚCIEŻEK DO WIZUALIZACJI DLA GUI ---
             try:
@@ -3402,9 +3508,18 @@ def train_model(args):
                         input_example = sample_images[:1].detach().cpu().numpy()
                         try:
                             # Try to create signature with model inference
+                            model_output = model(sample_images[:1].to(device))
+                            # Apply appropriate post-processing based on model output channels
+                            if model_output.shape[1] == 1:
+                                # Binary segmentation - apply sigmoid
+                                processed_output = torch.sigmoid(model_output)
+                            else:
+                                # Multi-class - apply softmax
+                                processed_output = torch.softmax(model_output, dim=1)
+                            
                             signature = mlflow.models.infer_signature(
                                 input_example,
-                                torch.sigmoid(model(sample_images[:1].to(device))).detach().cpu().numpy()
+                                processed_output.detach().cpu().numpy()
                             )
                             mlflow.pytorch.log_model(
                                 model,
@@ -3447,9 +3562,18 @@ def train_model(args):
                     input_example = sample_images[:1].detach().cpu().numpy()
                     try:
                         # Try with signature first
+                        model_output = model(sample_images[:1].to(device))
+                        # Apply appropriate post-processing based on model output channels
+                        if model_output.shape[1] == 1:
+                            # Binary segmentation - apply sigmoid
+                            processed_output = torch.sigmoid(model_output)
+                        else:
+                            # Multi-class - apply softmax
+                            processed_output = torch.softmax(model_output, dim=1)
+                        
                         signature = mlflow.models.infer_signature(
                             input_example,
-                            torch.sigmoid(model(sample_images[:1].to(device))).detach().cpu().numpy()
+                            processed_output.detach().cpu().numpy()
                         )
                         mlflow.pytorch.log_model(
                             model,
@@ -3673,8 +3797,8 @@ def train_model(args):
         logger.info(f"   📚 Learning Rate: {args.learning_rate}")
         logger.info(f"   🎯 Loss Function: {loss_function.__class__.__name__}")
         logger.info(f"   🔄 Optimizer: {getattr(args, 'optimizer', 'adam').upper()}")
-        logger.info(f"   📐 Resolution: {getattr(args, 'resolution', '256')}px")
-        logger.info(f"   ✂️  Crop Size: {getattr(args, 'crop_size', '128')}px")
+        logger.info(f"   📐 Target Size: {getattr(args, 'crop_size', '128')}px")
+        logger.info(f"   🎚️  Threshold: {getattr(args, 'threshold', 0.5)}")
         
         # Data Range Analysis Summary (if data was analyzed)
         logger.info(f"🔍 DATA CHARACTERISTICS SUMMARY:")
@@ -3838,7 +3962,7 @@ def get_display_oriented_image(input_file, target_size=(256, 256)):
     
     return img_array
 
-def run_inference(model_path, input_path, output_dir, device="cuda", weights_path=None, model_type="unet", resolution="original"):
+def run_inference(model_path, input_path, output_dir, device="cuda", weights_path=None, model_type="unet", crop_size=128, threshold=0.5):
     """Run inference on input images using a trained model
     
     Args:
@@ -3848,7 +3972,8 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
         device: Device to run inference on
         weights_path: Optional path to a .pth file to load weights from
         model_type: Type of model architecture to use
-        resolution: Target resolution for input images ('original', '128', '256', '384', '512')
+        crop_size: Target size for input images (128, 256, 384, 512)
+        threshold: Binary segmentation threshold for hard predictions
     """
     logger = logging.getLogger(__name__)
     device = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -3865,13 +3990,8 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
         model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
     
-    # Get transforms based on resolution choice
-    if resolution == "original":
-        transforms = get_inference_transforms(use_original_size=True)
-    else:
-        # Convert string resolution to integer tuple
-        res_int = int(resolution)
-        transforms = get_inference_transforms(image_size=(res_int, res_int), use_original_size=False)
+    # Get transforms based on crop_size
+    transforms = get_inference_transforms(image_size=(crop_size, crop_size), use_original_size=False)
     
     if os.path.isdir(input_path):
         input_files = [os.path.join(input_path, f) for f in os.listdir(input_path)
@@ -3892,8 +4012,8 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
             num_output_channels = output.shape[1]
             if num_output_channels == 1:
                 # Binary segmentation
-                output = torch.sigmoid(output)
-                pred = (output > 0.5).float()
+                output_soft = torch.sigmoid(output)  # Soft predictions
+                pred = (output_soft > threshold).float()   # Hard predictions
                 logger.info(f"Applied binary segmentation post-processing (sigmoid + threshold)")
             else:
                 # Multi-class semantic segmentation
@@ -3957,10 +4077,10 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
                         'prediction_timestamp': time.time(),
                         'device_used': str(device),
                         'model_type': model_type,
-                        'resolution': resolution,
+                        'crop_size': crop_size,
                         'input_shape': img.shape,
                         'output_shape': pred.shape,
-                        'prediction_threshold': 0.5,
+                        'prediction_threshold': threshold,
                         'files_generated': {
                             'comparison': os.path.basename(output_filename),
                             'input_only': os.path.basename(input_only_filename),
@@ -4014,7 +4134,8 @@ def inference_mode(args):
             device=args.device,
             weights_path=getattr(args, 'weights_path', None),
             model_type=getattr(args, 'model_type', 'unet'),
-            resolution=getattr(args, 'resolution', 'original')
+            crop_size=getattr(args, 'crop_size', 128),
+            threshold=getattr(args, 'threshold', 0.5)
         )
         
         # Log inference summary if MLflow run is active
@@ -4046,7 +4167,8 @@ def inference_mode(args):
                 'processing_rate': input_count / inference_duration if inference_duration > 0 else 0,
                 'device_used': args.device,
                 'model_type': getattr(args, 'model_type', 'unet'),
-                'resolution': getattr(args, 'resolution', 'original')
+                'crop_size': getattr(args, 'crop_size', 128),
+                'threshold': getattr(args, 'threshold', 0.5)
             }
             
             summary_file = os.path.join(args.output_dir, 'inference_summary.json')

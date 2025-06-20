@@ -1021,9 +1021,10 @@ document.addEventListener('DOMContentLoaded', function() {
     // Enhanced auto-refresh functionality for training and pending models
     let autoRefreshInterval;
     let isAutoRefreshEnabled = false;
-    let currentUpdateInterval = 3000; // Default 3 seconds
-    let fastUpdateInterval = 1500; // 1.5 seconds for pending models
-    let normalUpdateInterval = 3000; // 3 seconds for training models
+    let currentUpdateInterval = 2000; // Default 2 seconds for faster status detection
+    let fastUpdateInterval = 1000; // 1 second for pending/loading models 
+    let normalUpdateInterval = 2000; // 2 seconds for training models
+    let slowUpdateInterval = 5000; // 5 seconds when no active models
     
     function startAutoRefresh() {
         if (autoRefreshInterval) return; // Already running

@@ -33,12 +33,24 @@ class Command(BaseCommand):
         
         self.stdout.write(f"🔍 Found {orphaned_models.count()} models with training/loading status:")
         
+        # Grace period for recently created models
+        from django.utils import timezone
+        from datetime import timedelta
+        grace_period = timedelta(minutes=5)
+        now = timezone.now()
+        
         corrected_count = 0
         for model in orphaned_models:
             self.stdout.write(f"\n📋 Model {model.id}: {model.name}")
             self.stdout.write(f"   Status: {model.status}")
             self.stdout.write(f"   Created: {model.created_at}")
             self.stdout.write(f"   MLflow Run: {model.mlflow_run_id or 'None'}")
+            
+            # Check model age
+            model_age = now - model.created_at
+            if model_age < grace_period:
+                self.stdout.write(self.style.WARNING(f"   ⏰ Model created {model_age.total_seconds():.1f}s ago - skipping (grace period)"))
+                continue
             
             if self.is_training_process_active(model, verbose):
                 self.stdout.write(self.style.SUCCESS("   ✅ Training process is ACTIVE"))
@@ -53,7 +65,7 @@ class Command(BaseCommand):
                     model.status = 'failed'
                     model.save()
                     corrected_count += 1
-                    self.stdout.write(self.style.SUCCESS(f"   🔧 CORRECTED: '{old_status}' → 'failed'"))
+                    self.stdout.write(self.style.SUCCESS(f"   🔧 CORRECTED: '{old_status}' → 'failed' (age: {model_age.total_seconds():.1f}s)"))
         
         if corrected_count > 0:
             if dry_run:

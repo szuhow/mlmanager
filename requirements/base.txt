@@ -22,3 +22,9 @@ zipfile36>=0.1.3  # Enhanced ZIP file handling
 patool>=1.12.0  # Archive extraction
 jsonschema>=4.17.0  # JSON schema validation
 networkx>=3.0.0  # Graph operations for pipelines
+
+
+
+# Enhanced image processing
+scikit-image>=0.21.0,<1.0.0  # Advanced image processing for post-processing
+scipy>=1.10.0,<2.0.0  # Scientific computing for morphological operations

@@ -1,0 +1,330 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Enhanced Inference{% endblock %}
+
+{% block extra_css %}
+<style>
+    .inference-config {
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    
+    .post-processing-section {
+        background: #fff3cd;
+        border: 1px solid #ffeaa7;
+        border-radius: 6px;
+        padding: 15px;
+        margin: 15px 0;
+    }
+    
+    .model-info {
+        background: #d1ecf1;
+        border: 1px solid #bee5eb;
+        border-radius: 6px;
+        padding: 15px;
+        margin-bottom: 15px;
+    }
+    
+    .checkpoint-list {
+        max-height: 200px;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 10px;
+        background: white;
+    }
+    
+    .checkpoint-item {
+        padding: 5px;
+        border-bottom: 1px solid #eee;
+        cursor: pointer;
+    }
+    
+    .checkpoint-item:hover {
+        background: #f8f9fa;
+    }
+    
+    .checkpoint-item.selected {
+        background: #e3f2fd;
+        border-left: 3px solid #2196f3;
+    }
+    
+    .form-group {
+        margin-bottom: 1rem;
+    }
+    
+    .form-group label {
+        font-weight: 600;
+        color: #495057;
+    }
+    
+    .help-text {
+        font-size: 0.875rem;
+        color: #6c757d;
+        margin-top: 0.25rem;
+    }
+    
+    .advanced-options {
+        border-top: 2px solid #dee2e6;
+        padding-top: 20px;
+        margin-top: 20px;
+    }
+    
+    .noise-reduction-info {
+        background: #fff3cd;
+        border-left: 4px solid #ffc107;
+        padding: 10px 15px;
+        margin: 15px 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        <i class="fas fa-brain"></i>
+                        Enhanced Model Inference
+                        {% if selected_model %}
+                        - {{ selected_model.name }}
+                        {% endif %}
+                    </h3>
+                </div>
+                
+                <div class="card-body">
+                    <div class="noise-reduction-info">
+                        <h5><i class="fas fa-info-circle"></i> Enhanced Post-Processing</h5>
+                        <p>This enhanced inference system includes advanced post-processing to reduce false positives and noise artifacts commonly seen in segmentation models, especially during early training epochs.</p>
+                        <ul>
+                            <li><strong>Morphological operations</strong> to remove small noise objects</li>
+                            <li><strong>Connected component filtering</strong> to eliminate tiny segments</li>
+                            <li><strong>Adaptive thresholding</strong> for better confidence-based segmentation</li>
+                            <li><strong>Shape-based filtering</strong> to keep only artery-like structures</li>
+                        </ul>
+                    </div>
+                    
+                    <form method="post" enctype="multipart/form-data" id="inference-form">
+                        {% csrf_token %}
+                        
+                        <!-- Model Selection -->
+                        <div class="inference-config">
+                            <h5><i class="fas fa-cog"></i> Model Configuration</h5>
+                            
+                            {% if selected_model %}
+                            <div class="model-info">
+                                <h6>Selected Model: {{ selected_model.name }}</h6>
+                                <p><strong>Type:</strong> {{ selected_model.model_type|default:"Segmentation" }}</p>
+                                <p><strong>Status:</strong> 
+                                    <span class="badge badge-{{ selected_model.status|yesno:'success,warning,danger' }}">
+                                        {{ selected_model.get_status_display }}
+                                    </span>
+                                </p>
+                                {% if selected_model.best_val_dice %}
+                                <p><strong>Best Validation Dice:</strong> {{ selected_model.best_val_dice|floatformat:3 }}</p>
+                                {% endif %}
+                            </div>
+                            {% else %}
+                            <div class="form-group">
+                                <label for="{{ form.model_id.id_for_label }}">{{ form.model_id.label }}</label>
+                                {{ form.model_id }}
+                                <div class="help-text">{{ form.model_id.help_text }}</div>
+                            </div>
+                            {% endif %}
+                            
+                            <!-- Checkpoint Selection -->
+                            {% if available_checkpoints %}
+                            <div class="form-group">
+                                <label>Available Checkpoints</label>
+                                <div class="checkpoint-list">
+                                    {% for checkpoint in available_checkpoints %}
+                                    <div class="checkpoint-item" data-path="{{ checkpoint.file_path }}">
+                                        <strong>{{ checkpoint.filename }}</strong>
+                                        {% if checkpoint.epoch %}
+                                        <span class="badge badge-info">Epoch {{ checkpoint.epoch }}</span>
+                                        {% endif %}
+                                        <br>
+                                        <small class="text-muted">
+                                            Size: {{ checkpoint.size|filesizeformat }} | 
+                                            Modified: {{ checkpoint.modified|date:"Y-m-d H:i" }}
+                                        </small>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                                {{ form.checkpoint_path }}
+                            </div>
+                            {% endif %}
+                        </div>
+                        
+                        <!-- Image Upload -->
+                        <div class="inference-config">
+                            <h5><i class="fas fa-images"></i> Input Images</h5>
+                            <div class="form-group">
+                                <label for="{{ form.images.id_for_label }}">{{ form.images.label }}</label>
+                                {{ form.images }}
+                                <div class="help-text">{{ form.images.help_text }}</div>
+                            </div>
+                        </div>
+                        
+                        <!-- Post-Processing Configuration -->
+                        <div class="post-processing-section">
+                            <h5><i class="fas fa-filter"></i> Post-Processing Configuration</h5>
+                            <p class="text-muted">Configure post-processing to reduce false positives and noise</p>
+                            
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <label for="{{ form.threshold.id_for_label }}">{{ form.threshold.label }}</label>
+                                        {{ form.threshold }}
+                                        <div class="help-text">{{ form.threshold.help_text }}</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <label for="{{ form.confidence_threshold.id_for_label }}">{{ form.confidence_threshold.label }}</label>
+                                        {{ form.confidence_threshold }}
+                                        <div class="help-text">{{ form.confidence_threshold.help_text }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <label for="{{ form.min_component_size.id_for_label }}">{{ form.min_component_size.label }}</label>
+                                        {{ form.min_component_size }}
+                                        <div class="help-text">{{ form.min_component_size.help_text }}</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <label for="{{ form.morphology_kernel_size.id_for_label }}">{{ form.morphology_kernel_size.label }}</label>
+                                        {{ form.morphology_kernel_size }}
+                                        <div class="help-text">{{ form.morphology_kernel_size.help_text }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <div class="form-check">
+                                        {{ form.apply_opening }}
+                                        <label class="form-check-label" for="{{ form.apply_opening.id_for_label }}">
+                                            {{ form.apply_opening.label }}
+                                        </label>
+                                        <div class="help-text">{{ form.apply_opening.help_text }}</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="col-md-4">
+                                    <div class="form-check">
+                                        {{ form.apply_closing }}
+                                        <label class="form-check-label" for="{{ form.apply_closing.id_for_label }}">
+                                            {{ form.apply_closing.label }}
+                                        </label>
+                                        <div class="help-text">{{ form.apply_closing.help_text }}</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="col-md-4">
+                                    <div class="form-check">
+                                        {{ form.use_adaptive_threshold }}
+                                        <label class="form-check-label" for="{{ form.use_adaptive_threshold.id_for_label }}">
+                                            {{ form.use_adaptive_threshold.label }}
+                                        </label>
+                                        <div class="help-text">{{ form.use_adaptive_threshold.help_text }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Submit Button -->
+                        <div class="text-center">
+                            <button type="submit" class="btn btn-primary btn-lg">
+                                <i class="fas fa-play"></i>
+                                Run Enhanced Inference
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    // Checkpoint selection
+    $('.checkpoint-item').click(function() {
+        $('.checkpoint-item').removeClass('selected');
+        $(this).addClass('selected');
+        
+        var path = $(this).data('path');
+        $('#id_checkpoint_path').val(path);
+    });
+    
+    // Form validation
+    $('#inference-form').submit(function(e) {
+        var images = $('#id_images')[0].files;
+        if (images.length === 0) {
+            alert('Please select at least one image for inference.');
+            e.preventDefault();
+            return false;
+        }
+        
+        // Show loading state
+        $('button[type="submit"]').prop('disabled', true).html(
+            '<i class="fas fa-spinner fa-spin"></i> Starting Inference...'
+        );
+    });
+    
+    // Dynamic model selection (if all_models view)
+    $('#id_model_id').change(function() {
+        var modelId = $(this).val();
+        if (modelId) {
+            // Load checkpoints for selected model
+            $.get('/ml_manager/models/' + modelId + '/checkpoints/', function(data) {
+                if (data.success) {
+                    var checkpointHtml = '';
+                    data.checkpoints.forEach(function(checkpoint) {
+                        checkpointHtml += '<div class="checkpoint-item" data-path="' + 
+                            checkpoint.file_path + '">' +
+                            '<strong>' + checkpoint.filename + '</strong>';
+                        
+                        if (checkpoint.epoch) {
+                            checkpointHtml += ' <span class="badge badge-info">Epoch ' + 
+                                checkpoint.epoch + '</span>';
+                        }
+                        
+                        checkpointHtml += '<br><small class="text-muted">Size: ' + 
+                            checkpoint.size + ' | Modified: ' + checkpoint.modified + 
+                            '</small></div>';
+                    });
+                    
+                    $('.checkpoint-list').html(checkpointHtml);
+                    
+                    // Re-bind click events
+                    $('.checkpoint-item').click(function() {
+                        $('.checkpoint-item').removeClass('selected');
+                        $(this).addClass('selected');
+                        
+                        var path = $(this).data('path');
+                        $('#id_checkpoint_path').val(path);
+                    });
+                }
+            });
+        }
+    });
+});
+</script>
+{% endblock %}

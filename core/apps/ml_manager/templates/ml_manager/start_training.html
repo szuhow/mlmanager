@@ -797,33 +797,11 @@
                     </div>
                 </div>
             </div>
-
-            <div class="row">
-                <div class="col-md-6">
-                    <div class="form-group">
-                        <label for="{{ form.crop_size.id_for_label }}" class="form-label">
-                            <i class="fas fa-crop me-1"></i>Input Image Size
-                        </label>
-                        <input type="number" 
-                               name="{{ form.crop_size.html_name }}"
-                               class="form-control"
-                               id="{{ form.crop_size.id_for_label }}"
-                               value="{{ form.crop_size.value|default:form.crop_size.field.initial }}"
-                               min="{{ form.crop_size.field.min_value|default:64 }}"
-                               step="1">
-                        {% if form.crop_size.help_text %}
-                            <div class="form-text">{{ form.crop_size.help_text }}</div>
-                        {% endif %}
-                        {{ form.crop_size.errors }}
-                    </div>
-                </div>
-            </div>
-
             <div class="row">
                 <div class="col-md-6">
                     <div class="form-group">
                         <label for="{{ form.resolution.id_for_label }}" class="form-label">
-                            <i class="fas fa-expand me-1"></i>Image Resolution <span class="text-danger">*</span>
+                            <i class="fas fa-expand me-1"></i>Image Crop Size <span class="text-danger">*</span>
                         </label>
                         {{ form.resolution }}
                         {% if form.resolution.help_text %}
@@ -905,6 +883,25 @@
                             <div class="form-text">{{ form.batch_size.help_text }}</div>
                         {% endif %}
                         {{ form.batch_size.errors }}
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.threshold.id_for_label }}" class="form-label">
+                            <i class="fas fa-sliders-h me-1"></i>Binary Threshold
+                        </label>
+                        <input type="number" 
+                               name="{{ form.threshold.html_name }}"
+                               class="form-control"
+                               id="{{ form.threshold.id_for_label }}"
+                               value="{{ form.threshold.value|default:form.threshold.field.initial }}"
+                               min="{{ form.threshold.field.min_value|default:0.1 }}"
+                               max="{{ form.threshold.field.max_value|default:0.9 }}"
+                               step="0.1">
+                        {% if form.threshold.help_text %}
+                            <div class="form-text">{{ form.threshold.help_text }}</div>
+                        {% endif %}
+                        {{ form.threshold.errors }}
                     </div>
                 </div>
             </div>
@@ -1444,6 +1441,30 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Positive/Negative Cropping for Segmentation -->
+                <div class="augmentation-card pos-neg-crop" id="pos-neg-crop-card">
+                    <div class="card-header">
+                        <h6 class="card-title">
+                            <i class="fas fa-crop-alt"></i>Pos/Neg Cropping
+                        </h6>
+                        <div class="form-switch">
+                            <input type="checkbox" 
+                                   name="{{ form.use_pos_neg_cropping.html_name }}"
+                                   class="form-check-input"
+                                   id="{{ form.use_pos_neg_cropping.id_for_label }}"
+                                   {% if form.use_pos_neg_cropping.value %}checked{% endif %}
+                                   onchange="toggleAugmentationCard('pos-neg-crop-card', this.checked)">
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small mb-2">Advanced cropping that samples positive and negative regions - ideal for segmentation tasks</p>
+                        <div class="alert alert-info small py-2">
+                            <i class="fas fa-info-circle me-1"></i>
+                            Uses MONAI's RandCropByPosNegLabeld transform for better segmentation training
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -1473,8 +1494,8 @@
                             <li><strong>Name:</strong> <span id="summary-name" class="text-primary">-</span></li>
                             <li><strong>Model:</strong> <span id="summary-model">-</span></li>
                             <li><strong>Dataset Path:</strong> <span id="summary-dataset">-</span></li>
-                            <li><strong>Resolution:</strong> <span id="summary-resolution">-</span></li>
-                            <li><strong>Crop Size:</strong> <span id="summary-crop-size">-</span></li>
+                            <li><strong>Crop Size:</strong> <span id="summary-resolution">-</span></li>
+                            <li><strong>Threshold:</strong> <span id="summary-threshold">-</span></li>
                             <li><strong>Device:</strong> <span id="summary-device">-</span></li>
                         </ul>
                         
@@ -1553,7 +1574,7 @@ function updateConfigSummary() {
         const modelField = document.getElementById('{{ form.model_type.id_for_label }}');
         const dataPathField = document.getElementById('{{ form.data_path.id_for_label }}');
         const resolutionField = document.getElementById('{{ form.resolution.id_for_label }}');
-        const cropSizeField = document.getElementById('{{ form.crop_size.id_for_label }}');
+        const thresholdField = document.getElementById('{{ form.threshold.id_for_label }}');
         const deviceField = document.getElementById('{{ form.device.id_for_label }}');
         const epochsField = document.getElementById('{{ form.epochs.id_for_label }}');
         const batchSizeField = document.getElementById('{{ form.batch_size.id_for_label }}');
@@ -1583,8 +1604,8 @@ function updateConfigSummary() {
             document.getElementById('summary-resolution').textContent = resolutionField.value || 'Not specified';
         }
         
-        if (cropSizeField) {
-            document.getElementById('summary-crop-size').textContent = cropSizeField.value || 'Not specified';
+        if (thresholdField) {
+            document.getElementById('summary-threshold').textContent = thresholdField.value || 'Not specified';
         }
         
         if (deviceField) {
@@ -1634,17 +1655,59 @@ function updateConfigSummary() {
         
         // Update augmentations summary with better formatting
         const enabledAugmentations = [];
-        const augmentationCheckboxes = document.querySelectorAll('.augmentation-card input[type="checkbox"]:checked');
         
-        augmentationCheckboxes.forEach(checkbox => {
+        // Debug: Check all augmentation cards first
+        const allAugmentationCards = document.querySelectorAll('.augmentation-card');
+        log('DEBUG: Total augmentation cards found:', allAugmentationCards.length);
+        
+        allAugmentationCards.forEach((card, index) => {
+            const checkbox = card.querySelector('input[type="checkbox"]');
+            const title = card.querySelector('.card-title');
+            log(`DEBUG: Card ${index}:`, {
+                id: card.id,
+                title: title ? title.textContent.trim() : 'NO TITLE',
+                hasCheckbox: !!checkbox,
+                checkboxChecked: checkbox ? checkbox.checked : 'NO CHECKBOX',
+                checkboxName: checkbox ? checkbox.name : 'NO NAME'
+            });
+        });
+        
+        // Original selector
+        const augmentationCheckboxes = document.querySelectorAll('.augmentation-card input[type="checkbox"]:checked');
+        log('DEBUG: Checked checkboxes with original selector:', augmentationCheckboxes.length);
+        
+        // Alternative selector - try without :checked first
+        const allCheckboxes = document.querySelectorAll('.augmentation-card input[type="checkbox"]');
+        log('DEBUG: All augmentation checkboxes:', allCheckboxes.length);
+        
+        allCheckboxes.forEach((checkbox, index) => {
+            log(`DEBUG: Checkbox ${index}:`, {
+                name: checkbox.name,
+                checked: checkbox.checked,
+                id: checkbox.id,
+                type: checkbox.type
+            });
+        });
+        
+        augmentationCheckboxes.forEach((checkbox, index) => {
+            log(`DEBUG: Checked checkbox ${index}:`, checkbox.name, 'checked:', checkbox.checked);
             const card = checkbox.closest('.augmentation-card');
             if (card) {
+                log(`DEBUG: Found card for checkbox ${index}:`, card.id);
                 const title = card.querySelector('.card-title');
                 if (title) {
-                    enabledAugmentations.push(title.textContent.trim());
+                    const titleText = title.textContent.trim();
+                    log(`DEBUG: Card title: "${titleText}"`);
+                    enabledAugmentations.push(titleText);
+                } else {
+                    log(`DEBUG: No .card-title found in card:`, card.id);
                 }
+            } else {
+                log(`DEBUG: No .augmentation-card parent found for checkbox:`, checkbox.name);
             }
         });
+        
+        log('DEBUG: Final enabled augmentations:', enabledAugmentations);
         
         const augmentationsElement = document.getElementById('summary-augmentations');
         if (enabledAugmentations.length > 0) {
@@ -1652,8 +1715,10 @@ function updateConfigSummary() {
                 `<span class="badge bg-primary me-1 mb-1">${aug}</span>`
             ).join('');
             augmentationsElement.innerHTML = augmentationsList;
+            log('DEBUG: Set augmentations HTML:', augmentationsList);
         } else {
             augmentationsElement.innerHTML = '<small class="text-muted">None selected</small>';
+            log('DEBUG: No augmentations selected, showing "None selected"');
         }
         
         log('Configuration summary updated successfully');
@@ -1848,7 +1913,7 @@ function updateWeights(changedWeight) {
 }
 
 function toggleAugmentationCard(cardId, enabled) {
-    log('toggleAugmentationCard:', cardId, enabled);
+    log('🔄 toggleAugmentationCard called:', cardId, 'enabled:', enabled);
     const card = document.getElementById(cardId);
     if (card) {
         // Use CSS classes for better control
@@ -1862,7 +1927,13 @@ function toggleAugmentationCard(cardId, enabled) {
             card.style.backgroundColor = 'white';
         }
         
-        log('Card', cardId, 'enabled:', enabled, 'has enabled class:', card.classList.contains('enabled'));
+        log('✅ Card', cardId, 'enabled:', enabled, 'has enabled class:', card.classList.contains('enabled'));
+        
+        // Update configuration summary when augmentation is toggled
+        log('🔄 Calling updateConfigSummary from toggleAugmentationCard...');
+        updateConfigSummary();
+    } else {
+        log('❌ Card not found:', cardId);
     }
 }
 
@@ -1873,7 +1944,8 @@ function getCardColor(cardId) {
         'scale-card': '#fd7e14',
         'intensity-card': '#e83e8c',
         'elastic-card': '#20c997',
-        'noise-card': '#6c757d'
+        'noise-card': '#6c757d',
+        'pos-neg-crop-card': '#17a2b8'  // Added pos/neg cropping card
     };
     return colors[cardId] || '#007bff';
 }
@@ -1885,7 +1957,8 @@ function getCardBackgroundColor(cardId) {
         'scale-card': 'rgba(255, 193, 7, 0.05)',
         'intensity-card': 'rgba(232, 62, 140, 0.05)',
         'elastic-card': 'rgba(32, 201, 151, 0.05)',
-        'noise-card': 'rgba(108, 117, 125, 0.05)'
+        'noise-card': 'rgba(108, 117, 125, 0.05)',
+        'pos-neg-crop-card': 'rgba(23, 162, 184, 0.05)'  // Added pos/neg cropping card
     };
     return colors[cardId] || 'rgba(0, 123, 255, 0.05)';
 }
@@ -2073,6 +2146,10 @@ document.addEventListener('DOMContentLoaded', function() {
         
         log('Initialization completed successfully');
         
+        // Update configuration summary after all initialization
+        log('🔄 Calling initial updateConfigSummary...');
+        updateConfigSummary();
+        
         // Add form validation feedback
         const submitButton = document.getElementById('start-training-btn');
         const trainingForm = document.getElementById('training-form');
@@ -2090,21 +2167,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             });
             
-            // TEMPORARY: Remove submit button handler entirely for debugging
-            // submitButton.addEventListener('click', function(e) {
-            //     log('Submit button clicked');
-            //     
-            //     // TEMPORARY: Skip validation and submit directly
-            //     log('Skipping validation - forcing form submission');
-            //     
-            //     // Add loading state and let the form submit normally
-            //     submitButton.disabled = true;
-            //     submitButton.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Starting Training...';
-            //     
-            //     // Don't prevent default - let the form submit normally
-            // });
-            
-            log('Submit button handler DISABLED for debugging - form should submit naturally');
+            // Form submission logging only - no interference
+            log('Form submission handler initialized (no click handler to avoid interference)');
         }
         
     } catch (error) {

@@ -7,7 +7,7 @@ from django.db import models
 from django.core.files import File
 from django.http import JsonResponse, HttpResponse
 from django.utils.http import http_date
-from .forms import TrainingForm, InferenceForm, TrainingTemplateForm
+from .forms import TrainingForm, InferenceForm, EnhancedInferenceForm, TrainingTemplateForm
 from .models import MLModel, Prediction, TrainingTemplate
 import mlflow
 import subprocess
@@ -975,7 +975,7 @@ class StartTrainingView(LoginRequiredMixin, FormView):
             ml_model = MLModel.objects.create(
                 name=form_data['name'],
                 description=form_data.get('description', ''),
-                status='pending',
+                status='pending',  # Will be updated to 'training' immediately by training manager
                 current_epoch=0,
                 total_epochs=form_data['epochs'],
                 train_loss=0.0,
@@ -1038,91 +1038,134 @@ class StartTrainingView(LoginRequiredMixin, FormView):
             logger.info(f"DEBUG: All form keys: {list(form_data.keys())}")
             logger.info(f"DEBUG: Form data crop_size related: {[k for k in form_data.keys() if 'crop' in k.lower()]}")
             
-            command = [
-                sys.executable,
-                str(Path(__file__).parent.parent.parent.parent / 'ml' / 'training' / 'train.py'),
-                '--mode=train',
-                f'--model-id={ml_model.id}',
-                f'--mlflow-run-id={mlflow_run_id}',
-                f'--model-type={form_data["model_type"]}',
-                f'--data-path={form_data["data_path"]}',
-                f'--dataset-type={form_data.get("dataset_type", "auto")}',
-                f'--batch-size={form_data["batch_size"]}',
-                f'--epochs={form_data["epochs"]}',
-                f'--learning-rate={form_data["learning_rate"]}',
-                f'--optimizer={form_data.get("optimizer", "adam")}',
-                f'--validation-split={form_data["validation_split"]}',
-                f'--resolution={form_data["resolution"]}',
-                f'--device={form_data["device"]}',
-                f'--crop-size={form_data.get("crop_size", 512)}',
-                f'--num-workers={form_data["num_workers"]}',
-                # Learning rate scheduler parameters (with None validation)
-                f'--lr-scheduler={form_data.get("lr_scheduler", "none")}',
-                f'--lr-patience={form_data.get("lr_patience") or 5}',
-                f'--lr-factor={form_data.get("lr_factor") or 0.5}',
-                f'--lr-step-size={form_data.get("lr_step_size") or 10}',
-                f'--lr-gamma={form_data.get("lr_gamma") or 0.1}',
-                f'--min-lr={form_data.get("min_lr") or 1e-7}',
-                # Early stopping parameters (with None validation)
-                f'--early-stopping-patience={form_data.get("early_stopping_patience") or 10}',
-                f'--early-stopping-min-epochs={form_data.get("early_stopping_min_epochs") or 20}',
-                f'--early-stopping-min-delta={form_data.get("early_stopping_min_delta") or 1e-4}',
-                f'--early-stopping-metric={form_data.get("early_stopping_metric") or "val_dice"}',
-                # Enhanced Training Parameters (with None validation)
-                f'--loss-type={form_data.get("loss_function", "mixed")}',
-                f'--checkpoint-strategy={form_data.get("checkpoint_strategy", "best")}',
-                f'--max-checkpoints={form_data.get("max_checkpoints") or 5}',
-                f'--monitor-metric={form_data.get("monitor_metric", "val_dice")}',
-                f'--loss-scheduler-type={form_data.get("loss_scheduler_type", "adaptive")}'
+            # Prepare training configuration for direct training
+            training_config = {
+                'model_type': form_data['model_type'],
+                'data_path': form_data['data_path'],
+                'dataset_type': form_data['dataset_type'],
+                'batch_size': form_data['batch_size'],
+                'epochs': form_data['epochs'],
+                'learning_rate': form_data['learning_rate'],
+                'optimizer': form_data.get('optimizer', 'adam'),
+                'validation_split': form_data['validation_split'],
+                'resolution': form_data['resolution'],
+                'device': form_data['device'],
+                'crop_size': form_data.get('crop_size', 512),
+                'num_workers': form_data['num_workers'],
+                # Learning rate scheduler parameters
+                'lr_scheduler': form_data.get('lr_scheduler', 'none'),
+                'lr_patience': form_data.get('lr_patience') or 5,
+                'lr_factor': form_data.get('lr_factor') or 0.5,
+                'lr_step_size': form_data.get('lr_step_size') or 10,
+                'lr_gamma': form_data.get('lr_gamma') or 0.1,
+                'min_lr': form_data.get('min_lr') or 1e-7,
+                # Early stopping parameters
+                'early_stopping_patience': form_data.get('early_stopping_patience') or 10,
+                'early_stopping_min_epochs': form_data.get('early_stopping_min_epochs') or 20,
+                'early_stopping_min_delta': form_data.get('early_stopping_min_delta') or 1e-4,
+                'early_stopping_metric': form_data.get('early_stopping_metric') or 'val_dice',
+                # Enhanced Training Parameters
+                'loss_function': form_data.get('loss_function', 'mixed'),
+                'checkpoint_strategy': form_data.get('checkpoint_strategy', 'best'),
+                'max_checkpoints': form_data.get('max_checkpoints') or 5,
+                'monitor_metric': form_data.get('monitor_metric', 'val_dice'),
+                'loss_scheduler_type': form_data.get('loss_scheduler_type', 'adaptive'),
+                # Loss function weights
+                'dice_weight': form_data.get('dice_weight') or 0.7,
+                'bce_weight': form_data.get('bce_weight') or 0.3,
+                # Training flags
+                'use_early_stopping': form_data.get('use_early_stopping', False),
+                'use_enhanced_training': form_data.get('use_enhanced_training', True),
+                'use_loss_scheduling': form_data.get('use_loss_scheduling', False),
+                'use_mixed_precision': form_data.get('use_mixed_precision', False),
+                # Augmentation flags
+                'use_random_flip': form_data.get('use_random_flip', False),
+                'use_random_rotate': form_data.get('use_random_rotate', False),
+                'use_random_scale': form_data.get('use_random_scale', False),
+                'use_random_intensity': form_data.get('use_random_intensity', False),
+                'mlflow_run_id': mlflow_run_id
+            }
+            
+            # Start training using subprocess instead of direct_training manager
+            logger.info(f"Starting training subprocess for model {ml_model.id}")
+            
+            # Build command arguments
+            training_args = [
+                sys.executable, 'ml/training/train.py',
+                '--mode', 'train',
+                '--model-id', str(ml_model.id),
+                '--mlflow-run-id', str(mlflow_run_id),
+                '--model-family', form_data.get('model_family', 'UNet-Coronary'),
+                '--model-type', form_data['model_type'],
+                '--data-path', form_data['data_path'],
+                '--dataset-type', form_data['dataset_type'],
+                '--batch-size', str(form_data['batch_size']),
+                '--epochs', str(form_data['epochs']),
+                '--learning-rate', str(form_data['learning_rate']),
+                '--optimizer', form_data['optimizer'],
+                '--validation-split', str(form_data['validation_split']),
+                '--crop-size', str(form_data['crop_size']),
+                '--threshold', str(form_data.get('threshold', 0.5)),
+                '--loss-function', form_data.get('loss_function', 'combined'),
+                '--dice-weight', str(form_data.get('dice_weight', 0.7)),
+                '--bce-weight', str(form_data.get('bce_weight', 0.3)),
+                '--num-workers', str(form_data['num_workers']),
+                '--lr-scheduler', form_data['lr_scheduler'],
+                '--lr-patience', str(form_data.get('lr_patience', 5)),
             ]
             
-            # Add loss function weights only for combined losses
-            loss_function = form_data.get("loss_function", "combined")
-            if loss_function in ['combined', 'focal_segmentation', 'balanced_segmentation']:
-                command.append(f'--dice-weight={form_data.get("dice_weight") or 0.7}')
-                command.append(f'--bce-weight={form_data.get("bce_weight") or 0.3}')
-            
-            # Add early stopping flag if enabled
-            if form_data.get('use_early_stopping'):
-                command.append('--use-early-stopping')
+            # Only enable mixed precision on GPU devices
+            device = form_data.get('device', 'auto')
+            if form_data.get('use_mixed_precision', False) and device != 'cpu':
+                training_args.extend(['--use-mixed-precision', 'True'])
+            elif form_data.get('use_mixed_precision', False) and device == 'cpu':
+                logger.info("Mixed precision disabled for CPU device")
             
             # Add enhanced training flags
             if form_data.get('use_enhanced_training', True):
-                command.append('--use-enhanced-training')
-            if form_data.get('use_loss_scheduling', False):
-                command.append('--use-loss-scheduling')
-            if form_data.get('use_mixed_precision', False):
-                command.append('--use-mixed-precision')
+                training_args.append('--use-enhanced-training')
             
             # Add augmentation flags
-            if form_data.get('use_random_flip'): command.append('--random-flip')
-            if form_data.get('use_random_rotate'): command.append('--random-rotate')
-            if form_data.get('use_random_scale'): command.append('--random-scale')
-            if form_data.get('use_random_intensity'): command.append('--random-intensity')
-            logger.info(f"Training command: {' '.join(command)}")
-            current_env = os.environ.copy()
-            project_root = Path(__file__).resolve().parent.parent.parent.parent
-            core_path = str(project_root / "core")
-            ml_path = str(project_root / "ml")
-            existing_python_path = current_env.get("PYTHONPATH")
-            new_paths = [core_path, ml_path]
-            if existing_python_path:
-                current_env["PYTHONPATH"] = ":".join(new_paths) + ":" + existing_python_path
-            else:
-                current_env["PYTHONPATH"] = ":".join(new_paths)
-            current_env["DJANGO_SETTINGS_MODULE"] = "core.config.settings.development"
-            logger.info(f"Starting training subprocess with PYTHONPATH: {current_env['PYTHONPATH']}")
-            logger.info(f"Working directory for subprocess: {str(project_root)}")
-            subprocess.Popen(
-                command,
-                shell=False,
-                env=current_env,
-                cwd=str(project_root)
-            )
+            if form_data.get('use_random_flip', False):
+                training_args.append('--random-flip')
+            if form_data.get('use_random_rotate', False):
+                training_args.append('--random-rotate')
+            if form_data.get('use_random_scale', False):
+                training_args.append('--random-scale')
+            if form_data.get('use_random_intensity', False):
+                training_args.append('--random-intensity')
             
-            # Note: MLflow run remains active for training subprocess to use
-            logger.info(f"[MLFLOW] Training subprocess will manage run {mlflow_run_id} lifecycle")
+            # Start training process in background
+            import subprocess
+            try:
+                # Create log directory for this training session
+                log_dir = Path(settings.MEDIA_ROOT) / 'logs' / f'model_{ml_model.id}'
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_file = log_dir / f'training_{ml_model.id}_{int(time.time())}.log'
+                
+                # Start process and redirect output to log file
+                with open(log_file, 'w') as f:
+                    process = subprocess.Popen(
+                        training_args,
+                        stdout=f,
+                        stderr=subprocess.STDOUT,
+                        cwd=Path(__file__).parent.parent.parent.parent,  # Project root
+                    )
+                
+                # Update model with process info
+                ml_model.status = 'loading'  # Will be updated to 'training' by callback
+                ml_model.process_id = process.pid
+                ml_model.mlflow_run_id = mlflow_run_id
+                ml_model.training_logs = f"Training started. Logs: {log_file}"
+                ml_model.save()
+                
+                logger.info(f"Training process started with PID {process.pid}, logs: {log_file}")
+                
+            except Exception as subprocess_error:
+                logger.error(f"Failed to start training subprocess: {subprocess_error}")
+                raise subprocess_error
             
+            logger.info(f"Direct training started for model {ml_model.id}")
             messages.success(self.request, f"Training for '{ml_model.name}' (ID: {ml_model.id}) started successfully with model type '{form_data['model_type']}'.")
             return super().form_valid(form)
         except Exception as e:
@@ -1225,26 +1268,55 @@ class StartTrainingView(LoginRequiredMixin, FormView):
 @require_POST
 def stop_training(request, model_id):
     """Stop a running training job"""
+    import signal
     try:
         model = get_object_or_404(MLModel, id=model_id)
         
-        if model.status != 'training':
+        if model.status not in ['training', 'loading']:
             return JsonResponse({
                 'status': 'error',
                 'message': 'Model is not currently training'
             })
         
-        # Update model status to stopped and set stop_requested flag
-        model.status = 'stopped'
+        # Method 1: Set stop_requested flag for graceful shutdown
         model.stop_requested = True
         model.save()
         
-        # Try to terminate the actual training process if possible
-        # This could be enhanced to send SIGTERM to the training process
+        # Method 2: Try to terminate the process if process_id is available
+        if hasattr(model, 'process_id') and model.process_id:
+            try:
+                import psutil
+                # Check if process exists and terminate it
+                if psutil.pid_exists(model.process_id):
+                    process = psutil.Process(model.process_id)
+                    process.terminate()  # Send SIGTERM for graceful shutdown
+                    
+                    # Wait a bit for graceful shutdown, then force kill if needed
+                    try:
+                        process.wait(timeout=10)  # Wait up to 10 seconds
+                    except psutil.TimeoutExpired:
+                        process.kill()  # Force kill if graceful shutdown failed
+                    
+                    logging.info(f"Terminated training process {model.process_id} for model {model_id}")
+                else:
+                    logging.warning(f"Process {model.process_id} not found for model {model_id}")
+            except ImportError:
+                # Fallback to os.kill if psutil not available
+                try:
+                    os.kill(model.process_id, signal.SIGTERM)
+                    logging.info(f"Sent SIGTERM to process {model.process_id} for model {model_id}")
+                except ProcessLookupError:
+                    logging.warning(f"Process {model.process_id} not found for model {model_id}")
+            except Exception as proc_error:
+                logging.warning(f"Error terminating process {model.process_id}: {proc_error}")
+        
+        # Update model status
+        model.status = 'stopped'
+        model.save()
         
         return JsonResponse({
             'status': 'success',
-            'message': f'Training for model "{model.name}" has been stopped',
+            'message': f'Training stopped for model "{model.name}".',
             'model_status': 'stopped'
         })
         
@@ -1348,7 +1420,7 @@ def batch_delete_models(request):
 
 
 class ModelInferenceView(LoginRequiredMixin, FormView):
-    form_class = InferenceForm
+    form_class = EnhancedInferenceForm
     template_name = 'ml_manager/model_inference.html'
     
     def get_success_url(self):
@@ -1378,8 +1450,8 @@ class ModelInferenceView(LoginRequiredMixin, FormView):
             # Get the uploaded image
             image = form.cleaned_data['image']
             
-            # Get the chosen resolution
-            resolution = form.cleaned_data['resolution']
+            # Get the chosen crop size
+            crop_size = form.cleaned_data['crop_size']
             
             # Create temporary directories for inference
             temp_input_dir = tempfile.mkdtemp(prefix='inference_input_')
@@ -1482,7 +1554,7 @@ class ModelInferenceView(LoginRequiredMixin, FormView):
                     output_dir=temp_output_dir,
                     device="cuda" if torch.cuda.is_available() else "cpu",
                     model_type=model_type,
-                    resolution=resolution
+                    crop_size=int(crop_size) if crop_size != 'original' else 256
                 )
                 
                 # Find the output images - specifically look for prediction-only file
@@ -1819,21 +1891,76 @@ def get_training_log(request, model_id):
                 with open(model_log_path, 'r') as f:
                     logs = f.read().splitlines()
         
-        # Priority 2: Global training log (filter for model-specific content)
+        # Priority 2: Search for model-specific logs in organized directory structure
         if not logs:
-            global_log_path = os.path.join('models', 'artifacts', 'training.log')
+            import glob
+            # Search for directories that might contain this model's logs
+            search_patterns = [
+                f'data/models/organized/*/*/unet-coronary/*{model.id}*',
+                f'data/models/organized/*/*/unet-coronary/*{model.id}*',
+                f'data/models/{model.id}*/logs/training.log',
+                f'data/models/*{model.id}*/logs/training.log'
+            ]
+            
+            for pattern in search_patterns:
+                possible_logs = glob.glob(os.path.join(pattern, 'logs', 'training.log'))
+                if possible_logs:
+                    # Use the most recent log file
+                    latest_log = max(possible_logs, key=os.path.getctime)
+                    try:
+                        with open(latest_log, 'r') as f:
+                            logs = f.read().splitlines()
+                        break
+                    except Exception:
+                        continue
+            
+            # If still not found, try directory search without specific model ID
+            if not logs:
+                # Get all model directories and try to find the most recent one
+                model_dirs = glob.glob('data/models/organized/*/*/unet-coronary/*')
+                if model_dirs:
+                    # Sort by creation time, get the most recent
+                    recent_dirs = sorted(model_dirs, key=os.path.getctime, reverse=True)
+                    for recent_dir in recent_dirs[:5]:  # Check top 5 most recent
+                        log_path = os.path.join(recent_dir, 'logs', 'training.log')
+                        if os.path.exists(log_path):
+                            try:
+                                with open(log_path, 'r') as f:
+                                    candidate_logs = f.read().splitlines()
+                                # Check if this log contains references to our model
+                                model_ref_found = any(str(model.id) in line or 
+                                                    f'model {model.id}' in line.lower() or
+                                                    f'model_{model.id}' in line.lower()
+                                                    for line in candidate_logs[:50])  # Check first 50 lines
+                                if model_ref_found:
+                                    logs = candidate_logs
+                                    break
+                            except Exception:
+                                continue
+        
+        # Priority 3: Global training log (only as last resort, filtered for this model)
+        if not logs:
+            global_log_path = os.path.join('data', 'models', 'artifacts', 'training.log')
             if os.path.exists(global_log_path):
                 with open(global_log_path, 'r') as f:
                     all_logs = f.read().splitlines()
-                    # Filter for non-DEBUG logs and model-specific content
-                    logs = [
+                    # Filter for logs that specifically mention this model
+                    model_specific_logs = [
                         line for line in all_logs 
-                        if not line.strip().startswith('2025-') or 
-                           not 'DEBUG' in line or
-                           '[TRAIN]' in line or '[EPOCH]' in line or '[VAL]' in line or
-                           '[METRICS]' in line or '[CONFIG]' in line or '[MODEL]' in line or
-                           'ERROR' in line or 'WARNING' in line
+                        if (str(model.id) in line and 
+                            ('model' in line.lower() or 'training' in line.lower())) or
+                           f'model {model.id}' in line.lower() or
+                           f'model_{model.id}' in line.lower() or
+                           ('[TRAIN]' in line or '[EPOCH]' in line or '[VAL]' in line or
+                            '[METRICS]' in line or '[CONFIG]' in line or '[MODEL]' in line or
+                            'ERROR' in line or 'WARNING' in line)
                     ]
+                    if model_specific_logs:
+                        logs = model_specific_logs
+                    else:
+                        # If no model-specific content found, don't show global logs
+                        logs = [f"No specific training logs found for model {model.id}",
+                               f"This model may be new or training logs are not yet available."]
         
         # If still no logs, check alternative locations
         if not logs:
@@ -1847,7 +1974,8 @@ def get_training_log(request, model_id):
         if not logs:
             logs = ["No training logs found", f"Checked locations:", 
                    f"- Model directory: {model.model_directory}/logs/training.log" if model.model_directory else "- No model directory set",
-                   f"- Global log: data/logs/training.log", 
+                   f"- Global log: data/models/artifacts/training.log", 
+                   f"- Training volume: logs/training.log",
                    f"- MLflow artifacts: mlruns/{model.mlflow_run_id}/artifacts/training.log" if model.mlflow_run_id else "- No MLflow run ID"]
         
         return JsonResponse({
@@ -2172,7 +2300,6 @@ class ModelLogsView(LoginRequiredMixin, DetailView):
         """Get training logs for this model with enhanced model-specific prioritization"""
         try:
             model_specific_logs = []
-            global_logs = []
             
             # Priority 1: Model-specific logs in model directory
             if self.object.model_directory and os.path.exists(self.object.model_directory):
@@ -2192,7 +2319,49 @@ class ModelLogsView(LoginRequiredMixin, DetailView):
                         except Exception as e:
                             continue
             
-            # Priority 2: MLflow artifacts if available
+            # Priority 2: Search in organized directory structure
+            if not model_specific_logs:
+                import glob
+                search_patterns = [
+                    f'data/models/organized/*/*/unet-coronary/*{self.object.id}*',
+                    f'data/models/{self.object.id}*',
+                    f'data/models/*{self.object.id}*'
+                ]
+                
+                for pattern in search_patterns:
+                    possible_dirs = glob.glob(pattern)
+                    for dir_path in possible_dirs:
+                        log_path = os.path.join(dir_path, 'logs', 'training.log')
+                        if os.path.exists(log_path):
+                            try:
+                                with open(log_path, 'r') as f:
+                                    model_specific_logs = f.read().splitlines()
+                                break
+                            except Exception:
+                                continue
+                    if model_specific_logs:
+                        break
+                
+                # If still not found, try to find the most recent model directory
+                if not model_specific_logs:
+                    model_dirs = glob.glob('data/models/organized/*/*/unet-coronary/*')
+                    if model_dirs:
+                        recent_dirs = sorted(model_dirs, key=os.path.getctime, reverse=True)
+                        for recent_dir in recent_dirs[:3]:  # Check top 3 most recent
+                            log_path = os.path.join(recent_dir, 'logs', 'training.log')
+                            if os.path.exists(log_path):
+                                try:
+                                    with open(log_path, 'r') as f:
+                                        candidate_logs = f.read().splitlines()
+                                    # Check if this log mentions our specific model
+                                    model_ref_found = any(str(self.object.id) in line for line in candidate_logs[:50])
+                                    if model_ref_found:
+                                        model_specific_logs = candidate_logs
+                                        break
+                                except Exception:
+                                    continue
+            
+            # Priority 3: MLflow artifacts if available
             if not model_specific_logs and self.object.mlflow_run_id:
                 mlflow_log_paths = [
                     os.path.join(str(settings.BASE_MLRUNS_DIR), self.object.mlflow_run_id, 'artifacts', 'training_logs', 'training.log'),
@@ -2209,38 +2378,28 @@ class ModelLogsView(LoginRequiredMixin, DetailView):
                         except Exception as e:
                             continue
             
-            # Priority 3: Global log location (fallback)
-            global_log_paths = [
-                os.path.join('data', 'logs', 'training.log'),
-                os.path.join('artifacts', 'training_logs', 'training.log'),
-                'training.log'
-            ]
-            
-            for log_path in global_log_paths:
-                if os.path.exists(log_path):
+            # Priority 4: Global log only if model-specific content found
+            if not model_specific_logs:
+                global_log_path = os.path.join('data', 'models', 'artifacts', 'training.log')
+                if os.path.exists(global_log_path):
                     try:
-                        with open(log_path, 'r') as f:
-                            global_logs = f.read().splitlines()
-                        break
+                        with open(global_log_path, 'r') as f:
+                            all_logs = f.read().splitlines()
+                        # Filter for logs that specifically mention this model
+                        filtered_logs = [
+                            line for line in all_logs 
+                            if (str(self.object.id) in line and 
+                                ('model' in line.lower() or 'training' in line.lower())) or
+                               f'model {self.object.id}' in line.lower() or
+                               f'model_{self.object.id}' in line.lower()
+                        ]
+                        if filtered_logs:
+                            model_specific_logs = filtered_logs
                     except Exception as e:
-                        continue
+                        pass
             
-            # Return model-specific logs if available, otherwise global logs
-            if model_specific_logs:
-                return model_specific_logs
-            elif global_logs:
-                # If using global logs, try to filter for this model's logs if possible
-                if hasattr(self.object, 'name') and self.object.name:
-                    filtered_logs = [
-                        log for log in global_logs 
-                        if self.object.name.lower() in log.lower() or 
-                           f"model_{self.object.id}" in log.lower()
-                    ]
-                    if filtered_logs:
-                        return filtered_logs
-                return global_logs
-            
-            return []
+            # Return model-specific logs or empty list if none found
+            return model_specific_logs if model_specific_logs else []
             
         except Exception as e:
             import logging

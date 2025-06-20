@@ -1,0 +1,24 @@
+# High-memory configuration for CPU-only training
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.highmem.yml up
+
+services:
+  django:
+    deploy:
+      resources:
+        limits:
+          memory: 32G  # Limit to 32GB RAM (adjust based on your system)
+          cpus: '8.0'  # Limit to 8 CPU cores
+        reservations:
+          memory: 8G   # Reserve minimum 8GB
+          cpus: '2.0'  # Reserve minimum 2 cores
+    environment:
+      # High-performance CPU settings
+      - OMP_NUM_THREADS=8
+      - MKL_NUM_THREADS=8
+      - NUMBA_NUM_THREADS=8
+      # PyTorch CPU optimization
+      - TORCH_NUM_THREADS=8
+      # Override default worker/batch settings
+      - DEFAULT_NUM_WORKERS=8
+      - DEFAULT_BATCH_SIZE=16
+    shm_size: 16gb  # Large shared memory for DataLoader workers

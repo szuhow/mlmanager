@@ -78,8 +78,8 @@
                     </div>
 
                     <div class="mb-3">
-                        <label for="resolution" class="form-label">Input Image Resolution</label>
-                        <select class="form-select" id="resolution" name="resolution" required>
+                        <label for="crop_size" class="form-label">Input Image Crop Size</label>
+                        <select class="form-select" id="crop_size" name="crop_size" required>
                             <option value="original">Original Size</option>
                             <option value="128">128 x 128 pixels</option>
                             <option value="256" selected>256 x 256 pixels</option>
@@ -87,8 +87,8 @@
                             <option value="512">512 x 512 pixels</option>
                         </select>
                         <small class="text-muted">
-                            Choose the resolution for processing. Original keeps the image's natural size.
-                            For best results, select a resolution close to your model's training size.
+                            Choose the crop size for processing. Original keeps the image's natural size.
+                            For best results, select a crop size close to your model's training size.
                         </small>
                     </div>
                     <script>

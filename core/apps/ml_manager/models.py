@@ -69,6 +69,7 @@ class MLModel(models.Model):
     val_dice = models.FloatField(default=0.0)
     best_val_dice = models.FloatField(default=0.0)
     stop_requested = models.BooleanField(default=False)
+    process_id = models.IntegerField(null=True, blank=True, help_text="Process ID of the training process")
     
     # Training logs field (for backward compatibility and query support)
     training_logs = models.TextField(blank=True, null=True, help_text="Training logs and error messages")
@@ -119,8 +120,12 @@ class MLModel(models.Model):
     def progress_percentage(self):
         """Calculate training progress percentage including batch progress within epoch"""
         if self.total_epochs > 0:
-            # Base epoch progress
-            epoch_progress = self.current_epoch / self.total_epochs
+            # current_epoch is already 1-based (stored as epoch+1 in callback)
+            # but we need 0-based for percentage calculation
+            completed_epochs = max(0, self.current_epoch - 1)
+            
+            # Base epoch progress (completed epochs)
+            epoch_progress = completed_epochs / self.total_epochs
             
             # Add batch progress within current epoch if available
             if self.total_batches_per_epoch > 0 and self.current_batch > 0:
@@ -281,6 +286,12 @@ class TrainingTemplate(models.Model):
     use_random_crop = models.BooleanField(default=False)
     crop_size = models.IntegerField(default=128)
     
+    # Advanced cropping for segmentation
+    use_pos_neg_cropping = models.BooleanField(
+        default=False, 
+        help_text="Use RandCropByPosNegLabeld for better segmentation cropping (samples positive and negative regions)"
+    )
+    
     use_elastic_transform = models.BooleanField(default=False)
     elastic_alpha = models.FloatField(default=34.0, help_text="Elastic transformation strength")
     elastic_sigma = models.FloatField(default=4.0, help_text="Elastic transformation smoothness")
@@ -288,7 +299,7 @@ class TrainingTemplate(models.Model):
     use_gaussian_noise = models.BooleanField(default=False)
     noise_std = models.FloatField(default=0.01, help_text="Standard deviation of Gaussian noise")
     
-    num_workers = models.IntegerField(default=4)
+    num_workers = models.IntegerField(default=1)  # Conservative default for Docker
     
     # Optimizer selection
     OPTIMIZER_CHOICES = [
@@ -342,6 +353,12 @@ class TrainingTemplate(models.Model):
         help_text="Metric to monitor for early stopping"
     )
     
+    # Post-processing configuration
+    threshold = models.FloatField(
+        default=0.5,
+        help_text="Binary segmentation threshold for hard predictions (0.1-0.9)"
+    )
+    
     # Additional metadata
     is_default = models.BooleanField(default=False, help_text="Default template for new trainings")
     created_by = models.CharField(max_length=100, blank=True, help_text="Template creator")
@@ -373,6 +390,7 @@ class TrainingTemplate(models.Model):
             'intensity_range': self.intensity_range,
             'use_random_crop': self.use_random_crop,
             'crop_size': self.crop_size,
+            'use_pos_neg_cropping': self.use_pos_neg_cropping,
             'use_elastic_transform': self.use_elastic_transform,
             'elastic_alpha': self.elastic_alpha,
             'elastic_sigma': self.elastic_sigma,
@@ -392,6 +410,7 @@ class TrainingTemplate(models.Model):
             'early_stopping_min_epochs': self.early_stopping_min_epochs,
             'early_stopping_min_delta': self.early_stopping_min_delta,
             'early_stopping_metric': self.early_stopping_metric,
+            'threshold': self.threshold,
         }
     
     def save(self, *args, **kwargs):

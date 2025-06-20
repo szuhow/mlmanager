@@ -38,13 +38,14 @@ DATABASES = {
     }
 }
 
-# Production caching with Redis
+# Production caching (simplified without Redis)
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': get_env_variable('REDIS_URL', 'redis://redis:6379/1'),
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'enhanced_ml_manager_prod_cache',
         'OPTIONS': {
-            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'MAX_ENTRIES': 2000,
+            'CULL_FREQUENCY': 3,
         }
     }
 }
@@ -131,14 +132,6 @@ REST_FRAMEWORK.update({
         'user': '1000/hour'
     }
 })
-
-# Celery configuration for production (if using async tasks)
-CELERY_BROKER_URL = get_env_variable('CELERY_BROKER_URL', 'redis://redis:6379/0')
-CELERY_RESULT_BACKEND = get_env_variable('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = TIME_ZONE
 
 # Production performance settings
 DATA_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024  # 50 MB

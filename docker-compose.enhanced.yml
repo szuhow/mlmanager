@@ -1,4 +1,5 @@
 services:
+  # MLflow tracking server
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.12.1
     container_name: mlflow
@@ -15,11 +16,13 @@ services:
       --backend-store-uri sqlite:////app/data/mlflow/mlflow.db
       --default-artifact-root /app/data/mlflow
       --host 0.0.0.0
+    restart: unless-stopped
 
+  # Main Django application with direct training
   django:
     build:
       context: .
-      dockerfile: infrastructure/docker/Dockerfile
+      dockerfile: infrastructure/docker/Dockerfile.enhanced
     container_name: web
     environment:
       - PYTHONPATH=/app
@@ -29,18 +32,32 @@ services:
       - PYTHONUNBUFFERED=1
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - MLFLOW_ARTIFACT_ROOT=/app/data/mlflow
-      # Memory and CPU optimization (configurable via .env)
+      
+      # Direct training mode (no Celery)
+      - TRAINING_VALIDATION_MODE=direct
+      
+      # Memory and CPU optimization
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
       - MKL_NUM_THREADS=${MKL_NUM_THREADS:-1}
       - TORCH_NUM_THREADS=${TORCH_NUM_THREADS:-1}
-      # Training defaults (configurable via .env)
+      
+      # Training defaults
       - DEFAULT_NUM_WORKERS=${DEFAULT_NUM_WORKERS:-2}
       - DEFAULT_BATCH_SIZE=${DEFAULT_BATCH_SIZE:-8}
       - DEFAULT_SHM_SIZE=${DEFAULT_SHM_SIZE:-4gb}
+      
+      # Enhanced ML Manager settings
+      - ML_MANAGER_MAX_INFERENCE_IMAGES=${MAX_INFERENCE_IMAGES:-50}
+      - ML_MANAGER_DEFAULT_THRESHOLD=${DEFAULT_THRESHOLD:-0.6}
+      - ML_MANAGER_DEFAULT_MIN_COMPONENT_SIZE=${DEFAULT_MIN_COMPONENT_SIZE:-50}
+      
     command: python core/manage.py runserver 0.0.0.0:8000
     volumes:
       - ./:/app
       - django_data:/data
+      - model_storage:/app/data/models
+      - training_logs:/app/logs
+      - inference_temp:/app/data/temp
       - ~/Desktop:/host/desktop
       - ~/Downloads:/host/downloads
       - ~/Documents:/host/documents
@@ -48,17 +65,14 @@ services:
       - "8000:8000"
     depends_on:
       - mlflow
-    shm_size: ${DEFAULT_SHM_SIZE:-4gb}  # Configurable shared memory
-    # Optional memory limits (uncomment and configure as needed)
-    # deploy:
-    #   resources:
-    #     limits:
-    #       memory: ${MEMORY_LIMIT:-8G}
-    #     reservations:
-    #       memory: ${MEMORY_RESERVATION:-2G}
+    shm_size: ${DEFAULT_SHM_SIZE:-4gb}
+    restart: unless-stopped
 
 volumes:
   django_data:
+  model_storage:
+  inference_temp:
+  training_logs:
 
 networks:
   default:

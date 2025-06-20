@@ -2,7 +2,24 @@ from django import forms
 from pathlib import Path
 import importlib.util
 import inspect
+import os
 from .utils.device_utils import get_device_choices, get_default_device, get_device_info_for_display
+
+# Get default values from environment variables
+def get_env_default(key, default_value, value_type=int):
+    """Get default value from environment variable with type conversion"""
+    try:
+        env_value = os.environ.get(key)
+        if env_value is None:
+            return default_value
+        if value_type == int:
+            return int(env_value)
+        elif value_type == float:
+            return float(env_value)
+        else:
+            return env_value
+    except (ValueError, TypeError):
+        return default_value
 
 # Import the new architecture registry system
 try:
@@ -46,8 +63,9 @@ class TrainingTemplateForm(forms.ModelForm):
             'use_random_flip', 'flip_probability', 'use_random_rotate', 'rotation_range',
             'use_random_scale', 'scale_range_min', 'scale_range_max', 
             'use_random_intensity', 'intensity_range', 'use_random_crop', 'crop_size',
+            'use_pos_neg_cropping',
             'use_elastic_transform', 'elastic_alpha', 'elastic_sigma',
-            'use_gaussian_noise', 'noise_std', 'num_workers', 'is_default'
+            'use_gaussian_noise', 'noise_std', 'num_workers', 'threshold', 'is_default'
         ]
         widgets = {
             'description': forms.Textarea(attrs={'rows': 3}),
@@ -62,7 +80,7 @@ class TrainingTemplateForm(forms.ModelForm):
             'epochs': 'Number of training epochs',
             'learning_rate': 'Learning rate for optimization',
             'validation_split': 'Validation set size (0-1)',
-            'resolution': 'Training image resolution. Higher resolutions require more memory.',
+            'resolution': 'Training image crop size. Higher crop sizes require more memory.',
             'device': 'Device to use for training. Auto will detect the best available device.',
             'optimizer': 'Optimizer algorithm to use for training',
             'use_random_flip': 'Apply random horizontal flip augmentation',
@@ -76,6 +94,7 @@ class TrainingTemplateForm(forms.ModelForm):
             'intensity_range': 'Intensity variation range (±range)',
             'use_random_crop': 'Apply random cropping for data augmentation',
             'crop_size': 'Size of random crop (pixels)',
+            'use_pos_neg_cropping': 'Use advanced positive/negative region cropping for segmentation tasks',
             'use_elastic_transform': 'Apply elastic deformation for medical image augmentation',
             'elastic_alpha': 'Elastic transformation strength',
             'elastic_sigma': 'Elastic transformation smoothness',
@@ -157,7 +176,11 @@ class TrainingForm(forms.Form):
         help_text="Type of dataset to use for training"
     )
     
-    batch_size = forms.IntegerField(min_value=1, initial=32, help_text="Number of samples per batch")
+    batch_size = forms.IntegerField(
+        min_value=1, 
+        initial=get_env_default('DEFAULT_BATCH_SIZE', 8), 
+        help_text="Number of samples per batch. Larger batches require more memory."
+    )
     epochs = forms.IntegerField(min_value=1, initial=10, help_text="Number of training epochs")
     learning_rate = forms.FloatField(min_value=0.0, initial=0.001, help_text="Learning rate")
     validation_split = forms.FloatField(min_value=0.0, max_value=1.0, initial=0.2, help_text="Validation set size (0-1)")
@@ -167,7 +190,7 @@ class TrainingForm(forms.Form):
         choices=RESOLUTION_CHOICES,
         initial='256',
         required=True,
-        help_text="Training image resolution. Higher resolutions require more memory."
+        help_text="Training image crop size. Higher crop sizes require more memory."
     )
     
     # Device selection for training
@@ -303,7 +326,22 @@ class TrainingForm(forms.Form):
     intensity_range = forms.FloatField(min_value=0.0, max_value=1.0, initial=0.2, required=False, help_text="Intensity variation range (±range)")
     
     use_random_crop = forms.BooleanField(initial=False, required=False, help_text="Apply random cropping for data augmentation")
-    crop_size = forms.IntegerField(min_value=16, initial=128, help_text="Size of random crop (pixels)")
+    # Note: crop_size is automatically determined from resolution field
+    crop_size = forms.IntegerField(
+        min_value=64,
+        max_value=1024,
+        initial=256,
+        required=False,
+        widget=forms.HiddenInput(),
+        help_text="Size of crops for training (pixels). Automatically set from resolution."
+    )
+    
+    # Advanced cropping for segmentation
+    use_pos_neg_cropping = forms.BooleanField(
+        initial=False, 
+        required=False, 
+        help_text="Use advanced positive/negative region cropping for segmentation tasks (RandCropByPosNegLabeld)"
+    )
     
     use_elastic_transform = forms.BooleanField(initial=False, required=False, help_text="Apply elastic deformation for medical image augmentation")
     elastic_alpha = forms.FloatField(min_value=0.0, max_value=100.0, initial=34.0, required=False, help_text="Elastic transformation strength")
@@ -312,7 +350,11 @@ class TrainingForm(forms.Form):
     use_gaussian_noise = forms.BooleanField(initial=False, required=False, help_text="Add Gaussian noise to simulate real-world conditions")
     noise_std = forms.FloatField(min_value=0.0, max_value=0.1, initial=0.01, required=False, help_text="Standard deviation of Gaussian noise")
     
-    num_workers = forms.IntegerField(min_value=0, initial=4, help_text="Number of data loading workers")
+    num_workers = forms.IntegerField(
+        min_value=0, 
+        initial=get_env_default('DEFAULT_NUM_WORKERS', 1), 
+        help_text="Number of data loading workers. Reduce if you get memory errors."
+    )
     
     # Enhanced Training Features
     LOSS_FUNCTION_CHOICES = [
@@ -422,9 +464,20 @@ class TrainingForm(forms.Form):
     use_mixed_precision = forms.BooleanField(
         initial=False,
         required=False,
-        help_text="Enable mixed precision training for faster training and lower memory usage (requires compatible GPU)"
+        help_text="Enable mixed precision training for faster training and lower memory usage (requires CUDA GPU - automatically disabled on CPU)"
     )
     
+    # Post-processing configuration
+    threshold = forms.FloatField(
+        initial=0.5,
+        min_value=0.1,
+        max_value=0.9,
+        widget=forms.NumberInput(attrs={'step': '0.1', 'class': 'form-control'}),
+        required=False,
+        label="Binary Segmentation Threshold",
+        help_text="Threshold for converting soft predictions to hard binary masks (0.5 is standard)"
+    )
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Import here to avoid circular imports
@@ -463,9 +516,25 @@ class TrainingForm(forms.Form):
                         self.fields[field_name].initial = value
         except:
             pass  # Handle case where table doesn't exist yet
+    
+    def clean(self):
+        cleaned_data = super().clean()
+        resolution = cleaned_data.get('resolution')
+        
+        # Auto-set crop_size based on resolution
+        if resolution and resolution.isdigit():
+            cleaned_data['crop_size'] = int(resolution)
+        elif resolution == 'original':
+            # For original size, use a default crop size
+            cleaned_data['crop_size'] = 512
+        else:
+            # Fallback default
+            cleaned_data['crop_size'] = 256
+                
+        return cleaned_data
 
 class InferenceForm(forms.Form):
-    RESOLUTION_CHOICES = [
+    CROP_SIZE_CHOICES = [
         ('original', 'Original Size'),
         ('128', '128 x 128 pixels'),
         ('256', '256 x 256 pixels'),
@@ -482,11 +551,11 @@ class InferenceForm(forms.Form):
         help_text="Upload an image for segmentation",
         required=True
     )
-    resolution = forms.ChoiceField(
-        choices=RESOLUTION_CHOICES,
+    crop_size = forms.ChoiceField(
+        choices=CROP_SIZE_CHOICES,
         initial='original',
         required=True,
-        help_text="Choose the input image resolution for processing"
+        help_text="Choose the input image crop size for processing"
     )
     
     def __init__(self, *args, **kwargs):
@@ -504,3 +573,210 @@ class InferenceForm(forms.Form):
                 field.widget.attrs.update({'class': 'form-control'})
             else:
                 field.widget.attrs.update({'class': 'form-control'})
+
+class EnhancedInferenceForm(forms.Form):
+    """Enhanced inference form with post-processing options."""
+    
+    # Model selection
+    model_id = forms.ChoiceField(
+        choices=[],  # Will be populated dynamically
+        required=True,
+        label="Model",
+        help_text="Select the trained model to use for inference"
+    )
+    
+    checkpoint_path = forms.ChoiceField(
+        choices=[],  # Will be populated dynamically
+        required=False,
+        label="Checkpoint (Optional)",
+        help_text="Select specific checkpoint, or leave empty to use the best model"
+    )
+    
+    # Image upload
+    image = forms.FileField(
+        widget=forms.FileInput(attrs={'accept': 'image/*'}),
+        required=True,
+        label="Image",
+        help_text="Upload image for inference"
+    )
+    
+    # Image resolution
+    RESOLUTION_CHOICES = [
+        (256, '256x256'),
+        (512, '512x512'),
+        (1024, '1024x1024'),
+    ]
+    
+    resolution = forms.ChoiceField(
+        choices=RESOLUTION_CHOICES,
+        initial=512,
+        label="Resolution",
+        help_text="Choose the input image resolution for processing"
+    )
+    
+    # Post-processing configuration
+    threshold = forms.FloatField(
+        initial=0.5,
+        min_value=0.1,
+        max_value=0.9,
+        widget=forms.NumberInput(attrs={'step': '0.1', 'class': 'form-control'}),
+        required=False,
+        label="Binary Segmentation Threshold",
+        help_text="Threshold for converting soft predictions to hard binary masks (0.5 is standard)"
+    )
+
+    def __init__(self, *args, **kwargs):
+        # Extract model_id for model-specific forms
+        model_id = kwargs.pop('model_id', None)
+        all_models = kwargs.pop('all_models', False)
+        super().__init__(*args, **kwargs)
+        
+        # Populate model choices
+        from .models import MLModel
+        
+        if model_id:
+            # Single model - get only its checkpoints
+            try:
+                model = MLModel.objects.get(id=model_id)
+                self.fields['model_id'].choices = [(model.id, model.name)]
+                self.fields['model_id'].initial = model.id
+                self.fields['model_id'].widget.attrs['readonly'] = True
+            except MLModel.DoesNotExist:
+                self.fields['model_id'].choices = []
+        elif all_models:
+            # All models - populate with completed models
+            models = MLModel.objects.filter(status='completed')
+            self.fields['model_id'].choices = [(m.id, f"{m.name} (ID: {m.id})") for m in models]
+        else:
+            self.fields['model_id'].choices = []
+
+
+class TrainingConfigForm(forms.Form):
+    """Enhanced training configuration form with loss function options."""
+    
+    # Basic training parameters
+    epochs = forms.IntegerField(
+        initial=100,
+        min_value=1,
+        max_value=1000,
+        label="Epochs",
+        help_text="Number of training epochs"
+    )
+    
+    batch_size = forms.IntegerField(
+        initial=8,
+        min_value=1,
+        max_value=64,
+        label="Batch Size",
+        help_text="Number of samples per batch"
+    )
+    
+    learning_rate = forms.FloatField(
+        initial=0.001,
+        min_value=1e-6,
+        max_value=1.0,
+        widget=forms.NumberInput(attrs={'step': 'any'}),
+        label="Learning Rate",
+        help_text="Initial learning rate"
+    )
+    
+    # Enhanced loss function options
+    LOSS_CHOICES = [
+        ('bce', 'Binary Cross Entropy'),
+        ('dice', 'Dice Loss'),
+        ('combined_dice_focal', 'Combined Dice + Focal Loss'),
+        ('tversky', 'Tversky Loss'),
+        ('focal', 'Focal Loss')
+    ]
+    
+    loss_function = forms.ChoiceField(
+        choices=LOSS_CHOICES,
+        initial='combined_dice_focal',
+        label="Loss Function",
+        help_text="Loss function optimized for segmentation and class imbalance"
+    )
+    
+    # Loss function parameters
+    dice_weight = forms.FloatField(
+        initial=0.7,
+        min_value=0.0,
+        max_value=1.0,
+        widget=forms.NumberInput(attrs={'step': '0.1'}),
+        label="Dice Loss Weight",
+        help_text="Weight for Dice loss in combined loss (higher = more segmentation focus)"
+    )
+    
+    focal_alpha = forms.FloatField(
+        initial=0.25,
+        min_value=0.01,
+        max_value=1.0,
+        widget=forms.NumberInput(attrs={'step': '0.01'}),
+        label="Focal Alpha",
+        help_text="Alpha parameter for Focal loss (class weighting)"
+    )
+    
+    focal_gamma = forms.FloatField(
+        initial=2.0,
+        min_value=0.5,
+        max_value=5.0,
+        widget=forms.NumberInput(attrs={'step': '0.5'}),
+        label="Focal Gamma",
+        help_text="Gamma parameter for Focal loss (focus on hard examples)"
+    )
+    
+    # Regularization
+    weight_decay = forms.FloatField(
+        initial=1e-4,
+        min_value=0.0,
+        max_value=1e-2,
+        widget=forms.NumberInput(attrs={'step': 'any'}),
+        label="Weight Decay",
+        help_text="L2 regularization strength"
+    )
+    
+    dropout_rate = forms.FloatField(
+        initial=0.1,
+        min_value=0.0,
+        max_value=0.5,
+        widget=forms.NumberInput(attrs={'step': '0.05'}),
+        label="Dropout Rate",
+        help_text="Dropout probability for regularization"
+    )
+    
+    # Early stopping
+    early_stopping_patience = forms.IntegerField(
+        initial=15,
+        min_value=5,
+        max_value=50,
+        label="Early Stopping Patience",
+        help_text="Number of epochs to wait before stopping if no improvement"
+    )
+    
+    METRIC_CHOICES = [
+        ('val_dice_score', 'Validation Dice Score'),
+        ('val_loss', 'Validation Loss'),
+        ('val_accuracy', 'Validation Accuracy'),
+        ('val_iou', 'Validation IoU')
+    ]
+    
+    early_stopping_metric = forms.ChoiceField(
+        choices=METRIC_CHOICES,
+        initial='val_dice_score',
+        label="Early Stopping Metric",
+        help_text="Metric to monitor for early stopping"
+    )
+    
+    # Data augmentation for noise robustness
+    augmentation_probability = forms.FloatField(
+        initial=0.5,
+        min_value=0.0,
+        max_value=1.0,
+        widget=forms.NumberInput(attrs={'step': '0.1'}),
+        label="Augmentation Probability",
+        help_text="Probability of applying data augmentation (helps with noise robustness)"
+    )
+
+# Update the original InferenceForm to inherit from EnhancedInferenceForm
+class InferenceForm(EnhancedInferenceForm):
+    """Backward compatibility alias for InferenceForm."""
+    pass

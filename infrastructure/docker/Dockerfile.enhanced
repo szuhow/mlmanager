@@ -1,0 +1,97 @@
+FROM python:3.10-slim
+
+# Install system dependencies for Enhanced ML Manager
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    python3-dev \
+    build-essential \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgtk-3-0 \
+    libjpeg-dev \
+    libpng-dev \
+    libtiff-dev \
+    libatlas-base-dev \
+    pkg-config \
+    redis-tools \
+    curl \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies first for better Docker layer caching
+WORKDIR /app
+
+# Copy requirements files
+COPY requirements/base.txt ./requirements/base.txt
+
+# Install Python packages with enhanced dependencies for ML Manager
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements/base.txt && \
+    pip install --no-cache-dir django uvicorn && \
+    pip install --no-cache-dir flower && \
+    # Clear pip cache to reduce image size
+    pip cache purge
+
+# Copy application code
+COPY . .
+
+# Create necessary directories for Enhanced ML Manager
+RUN mkdir -p /app/data/logs && \
+    mkdir -p /app/data/models && \
+    mkdir -p /app/data/temp/inference && \
+    mkdir -p /app/data/artifacts && \
+    mkdir -p /app/logs && \
+    # Set proper permissions
+    chmod 755 /app/data/logs && \
+    chmod 755 /app/data/models && \
+    chmod 755 /app/data/temp && \
+    chmod 755 /app/logs && \
+    # Create celery user for security
+    useradd --no-create-home --shell /bin/false celery && \
+    chown -R celery:celery /app/data && \
+    chown -R celery:celery /app/logs
+
+# Set environment variables
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    DJANGO_SETTINGS_MODULE=core.config.settings.development \
+    # Enhanced ML Manager specific env vars
+    ML_MANAGER_ENHANCED=true \
+    # Celery environment
+    C_FORCE_ROOT=1
+
+# Create entrypoint script for flexible container startup
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Wait for Redis if starting Celery workers\n\
+if [[ "$1" == "celery" ]]; then\n\
+    echo "Waiting for Redis..."\n\
+    while ! redis-cli -h redis ping; do\n\
+        sleep 1\n\
+    done\n\
+    echo "Redis is ready!"\n\
+fi\n\
+\n\
+# Wait for Django migrations if starting web server\n\
+if [[ "$1" == "python" && "$2" == "core/manage.py" && "$3" == "runserver" ]]; then\n\
+    echo "Running Django migrations..."\n\
+    python core/manage.py migrate --noinput || true\n\
+    echo "Collecting static files..."\n\
+    python core/manage.py collectstatic --noinput || true\n\
+fi\n\
+\n\
+# Execute the command\n\
+exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+# Default command for Django web server
+CMD ["python", "core/manage.py", "runserver", "0.0.0.0:8000"]
+
+# Set entrypoint
+ENTRYPOINT ["/entrypoint.sh"]
