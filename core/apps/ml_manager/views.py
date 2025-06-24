@@ -2396,6 +2396,7 @@ def preprocessing_preview(request):
             'original_stats': original_stats,
             'processed_stats': processed_stats,
             'sample_image_path': os.path.basename(sample_image_path),
+            'full_sample_image_path': sample_image_path,  # Pełna ścieżka dla ponownego użycia
             'preprocessing_type': preprocessing_type
         })
         

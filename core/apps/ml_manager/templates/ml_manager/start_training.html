@@ -724,7 +724,7 @@
                            name="{{ form.data_path.html_name }}"
                            class="form-control"
                            id="{{ form.data_path.id_for_label }}"
-                           value="{{ form.data_path.value|default:'' }}"
+                           value="{{ form.data_path.value|default:'/app/data/datasets/arcade_challenge_datasets/dataset_phase_1/segmentation_dataset/seg_train' }}"
                            placeholder="/host/desktop/my_dataset or /app/data/datasets"
                            required>
                     <div class="dropdown">
@@ -744,8 +744,14 @@
                             </a></li>
                             <li><hr class="dropdown-divider"></li>
                             <li><h6 class="dropdown-header">Built-in Datasets</h6></li>
-                            <li><a class="dropdown-item" href="#" onclick="setDataPath('/app/data/datasets')">
-                                <i class="fas fa-heart me-1"></i>Coronary Dataset
+                            <li><a class="dropdown-item" href="#" onclick="setDataPath('/app/data/datasets/arcade_challenge_datasets/dataset_final_phase/test_cases_stenosis')">
+                                <i class="fas fa-heart me-1"></i>ARCADE Challenge (Stenosis)
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" onclick="setDataPath('/app/data/datasets/cadica')">
+                                <i class="fas fa-heartbeat me-1"></i>CADICA Dataset
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" onclick="setDataPath('/app/data/datasets/basic')">
+                                <i class="fas fa-database me-1"></i>Basic Dataset
                             </a></li>
                         </ul>
                     </div>
@@ -1491,7 +1497,7 @@
                 
                 <!-- Main Configuration Panel -->
                 <div class="row mb-3">
-                    <!-- Basic Settings -->
+                    <!-- Basic Settings - Much wider to prevent dropdown cutting -->
                     <div class="col-md-4">
                         <div class="card h-100">
                             <div class="card-header bg-light py-2">
@@ -1541,27 +1547,25 @@
                         </div>
                     </div>
                     
-                    <!-- CLAHE Enhancement -->
+                    <!-- CLAHE Enhancement - Compact -->
                     <div class="col-md-4">
                         <div class="card h-100">
                             <div class="card-header bg-info text-white py-2">
                                 <h6 class="mb-0"><i class="fas fa-adjust me-2"></i>CLAHE</h6>
-                                <small class="opacity-75">Contrast Enhancement</small>
+                                <small class="opacity-75">Contrast</small>
                             </div>
                             <div class="card-body">
                                 <div class="row">
-                                    <div class="col-6">
-                                        <label for="{{ form.clahe_clip_limit.id_for_label }}" class="form-label small">Clip Limit</label>
+                                    <div class="col-12 mb-2">
+                                        <label for="{{ form.clahe_clip_limit.id_for_label }}" class="form-label small">Clip</label>
                                         <div class="input-group input-group-sm">
                                             {{ form.clahe_clip_limit }}
-                                            <span class="input-group-text"><i class="fas fa-scissors"></i></span>
                                         </div>
                                     </div>
-                                    <div class="col-6">
-                                        <label for="{{ form.clahe_tile_size.id_for_label }}" class="form-label small">Tile Size</label>
+                                    <div class="col-12">
+                                        <label for="{{ form.clahe_tile_size.id_for_label }}" class="form-label small">Tile</label>
                                         <div class="input-group input-group-sm">
                                             {{ form.clahe_tile_size }}
-                                            <span class="input-group-text"><i class="fas fa-th"></i></span>
                                         </div>
                                     </div>
                                 </div>
@@ -1578,38 +1582,55 @@
                         </div>
                     </div>
                     
-                    <!-- Quick Preview -->
+                    <!-- Quick Preview - Smaller width -->
                     <div class="col-md-4">
                         <div class="card h-100">
                             <div class="card-header bg-success text-white py-2 d-flex justify-content-between align-items-center">
                                 <h6 class="mb-0"><i class="fas fa-eye me-2"></i>Preview</h6>
-                                <button type="button" class="btn btn-light btn-sm py-1" onclick="generatePreprocessingPreview()">
-                                    <i class="fas fa-refresh"></i>
+                                <button type="button" class="btn btn-light btn-sm py-1" onclick="generatePreprocessingPreview()" title="Generate new preview with random image from dataset">
+                                    <i class="fas fa-refresh"></i> Refresh Images
                                 </button>
                             </div>
                             <div class="card-body text-center">
+                                <!-- Note: 
+                                    - Refresh button: generates NEW random preview images (both original & enhanced)
+                                    - Parameter changes: refresh ONLY enhanced image with current original + new parameters
+                                -->
                                 <div id="preview-loading" style="display: none;">
                                     <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
                                     <p class="small mt-2 mb-0">Processing...</p>
                                 </div>
                                 
                                 <div id="preview-container" style="display: none;">
-                                    <div class="row g-1">
-                                        <div class="col-6">
-                                            <small class="text-muted">Original</small>
-                                            <img id="original-preview" class="img-fluid border rounded" alt="Original" style="max-height: 80px;">
+                                    <!-- Original Image with side label -->
+                                    <div class="mb-3 d-flex align-items-center">
+                                        <div class="flex-shrink-0 me-2" style="width: 70px;">
+                                            <small class="text-muted fw-bold">Original</small>
                                         </div>
-                                        <div class="col-6">
-                                            <small class="text-muted">Enhanced</small>
-                                            <img id="processed-preview" class="img-fluid border rounded" alt="Enhanced" style="max-height: 80px;">
+                                        <div class="flex-grow-1">
+                                            <img id="original-preview" class="img-fluid border rounded shadow-sm" alt="Original" style="max-height: 120px; width: 100%; object-fit: contain; background: #f8f9fa;">
+                                        </div>
+                                    </div>
+                                    <!-- Enhanced Image with side label -->
+                                    <div class="mb-2 d-flex align-items-center">
+                                        <div class="flex-shrink-0 me-2" style="width: 70px;">
+                                            <small class="text-muted fw-bold">Enhanced</small>
+                                        </div>
+                                        <div class="flex-grow-1">
+                                            <img id="processed-preview" class="img-fluid border rounded shadow-sm" alt="Enhanced" style="max-height: 120px; width: 100%; object-fit: contain; background: #f8f9fa;">
                                         </div>
                                     </div>
                                     <p id="processing-steps" class="small text-info mt-2 mb-0"></p>
                                 </div>
                                 
-                                <div id="preview-placeholder" class="text-muted py-3">
-                                    <i class="fas fa-image fa-2x mb-2 opacity-50"></i>
-                                    <p class="small mb-0">Click refresh to generate preview</p>
+                                <div id="preview-error" class="text-danger py-4" style="display: none;">
+                                    <i class="fas fa-exclamation-triangle fa-2x mb-3"></i>
+                                    <p class="mb-0 small"><span>Error occurred</span></p>
+                                </div>
+                                
+                                <div id="preview-placeholder" class="text-muted py-4">
+                                    <i class="fas fa-image fa-2x mb-3 opacity-50"></i>
+                                    <p class="mb-0 small">Click refresh to generate preview</p>
                                 </div>
                             </div>
                         </div>
@@ -2245,6 +2266,11 @@ function toggleMedicalPreprocessingFields(enabled) {
         if (enabled) {
             fieldsContainer.classList.add('active');
             fieldsContainer.style.display = 'block';
+            // Set up auto-refresh for preview when fields become active
+            setTimeout(() => {
+                console.log('Setting up auto-refresh after enabling medical preprocessing...');
+                setupPreviewAutoRefresh();
+            }, 200);
         } else {
             fieldsContainer.classList.remove('active');
             fieldsContainer.style.display = 'none';
@@ -2284,10 +2310,24 @@ function toggleFrangiFilterFields(enabled) {
 }
 
 function generatePreprocessingPreview() {
-    log('Generating preprocessing preview...');
+    // Zapobiegamy podwójnemu wywołaniu
+    if (window.isGeneratingPreview) {
+        console.log('🚫 Preview generation already in progress - skipping duplicate call');
+        return;
+    }
     
-    // Use "arcade" as default dataset
-    const dataPath = 'arcade';
+    window.isGeneratingPreview = true;
+    log('🖼️ Generating NEW preprocessing preview with fresh images...');
+    console.log('🔄 This will generate BOTH new original and enhanced images from the dataset');
+    
+    // Get data path from the form field or use a fallback
+    const dataPathField = document.getElementById('{{ form.data_path.id_for_label }}');
+    let dataPath = dataPathField ? dataPathField.value : '';
+    
+    // If no data path is specified, use a default dataset
+    if (!dataPath) {
+        dataPath = '/app/data/datasets/arcade_challenge_datasets/dataset_phase_1/segmentation_dataset/seg_train/images';
+    }
     const preprocessingEnabled = document.getElementById('{{ form.use_medical_preprocessing.id_for_label }}')?.checked;
     
     if (!preprocessingEnabled) {
@@ -2314,12 +2354,19 @@ function generatePreprocessingPreview() {
         clahe_clip_limit: document.getElementById('{{ form.clahe_clip_limit.id_for_label }}')?.value || '3.0',
         clahe_tile_size: document.getElementById('{{ form.clahe_tile_size.id_for_label }}')?.value || '8',
         use_unsharp_masking: document.getElementById('{{ form.use_unsharp_masking.id_for_label }}')?.checked || false,
+        unsharp_amount: document.getElementById('{{ form.unsharp_amount.id_for_label }}')?.value || '1.0',
+        unsharp_radius: document.getElementById('{{ form.unsharp_radius.id_for_label }}')?.value || '1.0',
         use_frangi_filter: document.getElementById('{{ form.use_frangi_filter.id_for_label }}')?.checked || false,
+        frangi_sigma_min: document.getElementById('{{ form.frangi_sigma_min.id_for_label }}')?.value || '1.0',
+        frangi_sigma_max: document.getElementById('{{ form.frangi_sigma_max.id_for_label }}')?.value || '10.0',
         use_denoising: document.getElementById('{{ form.use_denoising.id_for_label }}')?.checked || false,
+        noise_reduction_sigma: document.getElementById('{{ form.noise_reduction_sigma.id_for_label }}')?.value || '1.0',
         normalize_intensity: document.getElementById('{{ form.normalize_intensity.id_for_label }}')?.checked || false,
         use_histogram_equalization: document.getElementById('{{ form.use_histogram_equalization.id_for_label }}')?.checked || false,
         gamma_correction: document.getElementById('{{ form.gamma_correction.id_for_label }}')?.value || '1.0'
     });
+    
+    log('Preview request parameters:', Object.fromEntries(params));
     
     // Make AJAX request to generate preview
     fetch(`{% url 'ml_manager:preprocessing-preview' %}?${params.toString()}`, {
@@ -2329,8 +2376,13 @@ function generatePreprocessingPreview() {
             'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
         }
     })
-    .then(response => response.json())
+    .then(response => {
+        log('Preview response received:', response.status);
+        return response.json();
+    })
     .then(data => {
+        log('Preview data received:', data.status);
+        window.isGeneratingPreview = false; // Zwolnij flagę po sukcesie
         if (loadingElement) loadingElement.style.display = 'none';
         
         if (data.status === 'success') {
@@ -2344,16 +2396,27 @@ function generatePreprocessingPreview() {
                 
                 if (originalImg && data.original_image) {
                     originalImg.src = data.original_image;
+                    log('✅ NEW Original image loaded and displayed');
                 }
                 if (processedImg && data.processed_image) {
                     processedImg.src = data.processed_image;
+                    log('✅ NEW Enhanced image loaded and displayed');
                 }
                 if (stepsText && data.processing_steps) {
                     stepsText.textContent = data.processing_steps.join(' → ');
+                    log('✅ Processing steps updated:', data.processing_steps);
+                }
+                
+                // Zapisz ścieżkę aktualnego obrazu dla przyszłych odświeżeń enhanced image
+                if (data.full_sample_image_path) {
+                    currentImagePath = data.full_sample_image_path;
+                    console.log('💾 Saved current image path:', currentImagePath);
                 }
             }
         } else {
             // Show error
+            window.isGeneratingPreview = false; // Zwolnij flagę przy błędzie w odpowiedzi
+            log('Preview generation failed:', data.message);
             if (errorElement) {
                 errorElement.style.display = 'block';
                 const errorText = errorElement.querySelector('span');
@@ -2366,16 +2429,28 @@ function generatePreprocessingPreview() {
     })
     .catch(error => {
         log('Preview generation error:', error);
+        window.isGeneratingPreview = false; // Zwolnij flagę po błędzie
         if (loadingElement) loadingElement.style.display = 'none';
         if (errorElement) {
             errorElement.style.display = 'block';
             const errorText = errorElement.querySelector('span');
             if (errorText) {
-                errorText.textContent = 'Network error occurred';
+                errorText.textContent = 'Network error occurred: ' + error.message;
             }
         }
         if (placeholderElement) placeholderElement.style.display = 'block';
     });
+    
+    console.log('🔚 generatePreprocessingPreview completed - both images should be refreshed');
+}
+
+// Helper function to set data path from dropdown
+function setDataPath(path) {
+    const dataPathField = document.getElementById('{{ form.data_path.id_for_label }}');
+    if (dataPathField) {
+        dataPathField.value = path;
+        log('Data path set to:', path);
+    }
 }
 
 // Debugging function for augmentation states
@@ -2586,6 +2661,12 @@ document.addEventListener('DOMContentLoaded', function() {
         
         log('Initialization completed successfully');
         
+        // Setup preview auto-refresh immediately
+        setTimeout(() => {
+            console.log('Setting up initial auto-refresh...');
+            setupPreviewAutoRefresh();
+        }, 500);
+        
         // Add form validation feedback
         const submitButton = document.getElementById('start-training-btn');
         const trainingForm = document.getElementById('training-form');
@@ -2627,5 +2708,179 @@ document.addEventListener('DOMContentLoaded', function() {
     // Ensure interactions are enabled
     document.body.classList.add('page-loaded');
 });
+
+// Globalna zmienna do przechowywania aktualnej ścieżki obrazu
+let currentImagePath = null;
+
+// Odświeżanie enhanced image z obecnego original image (bez generowania nowego)
+function refreshEnhancedPreview() {
+    // Zapobiegamy podwójnemu wywołaniu
+    if (window.isRefreshingEnhanced) {
+        console.log('🚫 Enhanced preview refresh already in progress - skipping duplicate call');
+        return;
+    }
+    
+    // Sprawdź czy mamy aktualny obraz
+    if (!currentImagePath) {
+        console.log('❌ No current image available - use Refresh Images button first');
+        return;
+    }
+    
+    window.isRefreshingEnhanced = true;
+    console.log('🔄 Refreshing enhanced preview with current image and new parameters...');
+    
+    const preprocessingEnabled = document.getElementById('{{ form.use_medical_preprocessing.id_for_label }}')?.checked;
+    if (!preprocessingEnabled) {
+        console.log('❌ Medical preprocessing not enabled');
+        window.isRefreshingEnhanced = false;
+        return;
+    }
+    
+    // Show loading only for enhanced image area
+    const processedImg = document.getElementById('processed-preview');
+    if (processedImg) {
+        processedImg.style.opacity = '0.5';
+    }
+    
+    // Get data path from the form field or use a fallback
+    const dataPathField = document.getElementById('{{ form.data_path.id_for_label }}');
+    let dataPath = dataPathField ? dataPathField.value : '';
+    
+    // If no data path is specified, use a default dataset
+    if (!dataPath) {
+        dataPath = '/app/data/datasets/arcade_challenge_datasets/dataset_phase_1/segmentation_dataset/seg_train/images';
+    }
+    
+    // Collect preprocessing parameters z obecną ścieżką obrazu
+    const params = new URLSearchParams({
+        data_path: dataPath,
+        sample_image_path: currentImagePath, // Użyj aktualnego obrazu
+        preprocessing_type: document.getElementById('{{ form.preprocessing_type.id_for_label }}')?.value || 'angiography',
+        use_clahe: 'true',
+        clahe_clip_limit: document.getElementById('{{ form.clahe_clip_limit.id_for_label }}')?.value || '3.0',
+        clahe_tile_size: document.getElementById('{{ form.clahe_tile_size.id_for_label }}')?.value || '8',
+        use_unsharp_masking: document.getElementById('{{ form.use_unsharp_masking.id_for_label }}')?.checked || false,
+        unsharp_amount: document.getElementById('{{ form.unsharp_amount.id_for_label }}')?.value || '1.0',
+        unsharp_radius: document.getElementById('{{ form.unsharp_radius.id_for_label }}')?.value || '1.0',
+        use_frangi_filter: document.getElementById('{{ form.use_frangi_filter.id_for_label }}')?.checked || false,
+        frangi_sigma_min: document.getElementById('{{ form.frangi_sigma_min.id_for_label }}')?.value || '1.0',
+        frangi_sigma_max: document.getElementById('{{ form.frangi_sigma_max.id_for_label }}')?.value || '10.0',
+        use_denoising: document.getElementById('{{ form.use_denoising.id_for_label }}')?.checked || false,
+        noise_reduction_sigma: document.getElementById('{{ form.noise_reduction_sigma.id_for_label }}')?.value || '1.0',
+        normalize_intensity: document.getElementById('{{ form.normalize_intensity.id_for_label }}')?.checked || false,
+        use_histogram_equalization: document.getElementById('{{ form.use_histogram_equalization.id_for_label }}')?.checked || false,
+        gamma_correction: document.getElementById('{{ form.gamma_correction.id_for_label }}')?.value || '1.0'
+    });
+    
+    console.log('Enhanced refresh parameters:', Object.fromEntries(params));
+    
+    // Make AJAX request to refresh enhanced image only
+    fetch(`{% url 'ml_manager:preprocessing-preview' %}?${params.toString()}`, {
+        method: 'GET',
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+        }
+    })
+    .then(response => {
+        console.log('Enhanced refresh response received:', response.status);
+        return response.json();
+    })
+    .then(data => {
+        console.log('Enhanced refresh data received:', data.status);
+        window.isRefreshingEnhanced = false;
+        
+        if (data.status === 'success') {
+            // Update ONLY the enhanced image and steps
+            if (processedImg && data.processed_image) {
+                processedImg.src = data.processed_image;
+                processedImg.style.opacity = '1';
+                console.log('✅ Enhanced image updated with new parameters');
+            }
+            
+            const stepsText = document.getElementById('processing-steps');
+            if (stepsText && data.processing_steps) {
+                stepsText.textContent = data.processing_steps.join(' → ');
+                console.log('✅ Processing steps updated:', data.processing_steps);
+            }
+        } else {
+            console.log('❌ Enhanced refresh failed:', data.message);
+            if (processedImg) {
+                processedImg.style.opacity = '1';
+            }
+        }
+    })
+    .catch(error => {
+        console.log('❌ Enhanced refresh error:', error);
+        window.isRefreshingEnhanced = false;
+        if (processedImg) {
+            processedImg.style.opacity = '1';
+        }
+    });
+}
+
+// Automatyczne odświeżanie enhanced preview po zmianie parametrów
+let previewDebounceTimer = null;
+
+function setupPreviewAutoRefresh() {
+    console.log('Setting up preview auto-refresh...');
+    
+    // Wybierz kontener z polami medycznego preprocessingu
+    const container = document.getElementById('medical-preprocessing-fields');
+    if (!container) {
+        console.log('Medical preprocessing fields container not found');
+        return;
+    }
+    
+    console.log('Found medical preprocessing container, setting up event listeners...');
+    
+    // Wybierz wszystkie inputy, selecty i checkboxy w tej sekcji
+    const inputs = container.querySelectorAll('input, select, textarea');
+    console.log(`Found ${inputs.length} form inputs in medical preprocessing section`);
+    
+    inputs.forEach((input, index) => {
+        console.log(`Setting up events for input ${index}: ${input.name || input.id || 'unnamed'} (type: ${input.type})`);
+        
+        // Usuwamy stare eventy, jeśli były
+        input.removeEventListener('change', refreshEnhancedPreview);
+        input.removeEventListener('input', refreshEnhancedPreview);
+        
+        // Dodajemy eventy z debouncing - teraz odświeżamy TYLKO enhanced image
+        input.addEventListener('change', function() {
+            console.log(`Parameter changed: ${this.name || this.id}, value: ${this.value || this.checked}`);
+            
+            // Czyszczenie poprzedniego timera
+            if (previewDebounceTimer) {
+                clearTimeout(previewDebounceTimer);
+            }
+            
+            // Ustawienie nowego timera z opóźnieniem 500ms
+            previewDebounceTimer = setTimeout(() => {
+                refreshEnhancedPreview(); // ZMIANA: tylko enhanced image!
+            }, 500);
+        });
+        
+        if (input.type === 'range' || input.type === 'number' || input.type === 'text') {
+            input.addEventListener('input', function() {
+                console.log(`Parameter input: ${this.name || this.id}, value: ${this.value}`);
+                
+                // Czyszczenie poprzedniego timera
+                if (previewDebounceTimer) {
+                    clearTimeout(previewDebounceTimer);
+                }
+                
+                // Ustawienie nowego timera z opóźnieniem 500ms
+                previewDebounceTimer = setTimeout(() => {
+                    refreshEnhancedPreview(); // ZMIANA: tylko enhanced image!
+                }, 500);
+            });
+        }
+    });
+    
+    console.log('Preview auto-refresh setup completed');
+}
+
+// Uruchom po załadowaniu strony
+window.addEventListener('DOMContentLoaded', setupPreviewAutoRefresh);
 </script>
 {% endblock %}
