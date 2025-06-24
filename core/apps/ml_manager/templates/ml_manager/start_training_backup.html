@@ -1,0 +1,5843 @@
+{% extends "ml_manager/base.html" %}
+
+{% block title %}Start Training - ML Manager{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Main Layout */
+    .training-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+    
+    .training-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 12px;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    }
+    
+    .training-header h1 {
+        margin: 0;
+        font-size: 2.5rem;
+        font-weight: 700;
+    }
+    
+    .training-header p {
+        margin: 0.5rem 0 0;
+        opacity: 0.9;
+        font-size: 1.1rem;
+    }
+    
+    /* Step Navigation */
+    .step-nav {
+        display: flex;
+        justify-content: center;
+        margin-bottom: 2rem;
+        padding: 0;
+        list-style: none;
+    }
+    
+    .step-nav li {
+        position: relative;
+        margin: 0 1rem;
+    }
+    
+    .step-nav li:not(:last-child)::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        right: -2rem;
+        width: 2rem;
+        height: 2px;
+        background: #dee2e6;
+        transform: translateY(-50%);
+    }
+    
+    .step-nav a {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 3rem;
+        height: 3rem;
+        border-radius: 50%;
+        background: #f8f9fa;
+        color: #212529; /* Very dark color for maximum contrast */
+        text-decoration: none;
+        font-weight: 800; /* Extra bold for better visibility */
+        transition: all 0.3s ease;
+        border: 2px solid #dee2e6;
+        text-shadow: 0 0 2px rgba(255, 255, 255, 0.8); /* White outline effect */
+        font-size: 1.1rem; /* Slightly larger text */
+    }
+    
+    .step-nav a.active {
+        background: #0d6efd;
+        color: white;
+        border-color: #0d6efd;
+        text-shadow: 0 0 3px rgba(0, 0, 0, 0.5); /* Dark shadow for white text on blue */
+        font-weight: 800;
+    }
+    
+    .step-nav a:hover {
+        background: #e9ecef;
+        color: #000000; /* Pure black on hover for maximum visibility */
+        border-color: #adb5bd;
+        text-shadow: 0 0 3px rgba(255, 255, 255, 1); /* Stronger white outline on hover */
+        transform: translateZ(0) scale(1.05); /* Slight scale for better interaction feedback */
+    }
+    
+    .step-nav a.completed {
+        background: #28a745;
+        color: white;
+        border-color: #28a745;
+        text-shadow: 0 0 3px rgba(0, 0, 0, 0.5); /* Dark shadow for white text on green */
+        font-weight: 800;
+    }
+    
+    /* Form Sections */
+    .form-section {
+        background: white;
+        border-radius: 12px;
+        padding: 2rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        border: 1px solid #e9ecef;
+        display: none;
+    }
+    
+    .form-section.active {
+        display: block;
+        animation: slideIn 0.3s ease-out;
+    }
+    
+    @keyframes slideIn {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    .section-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 2px solid #f8f9fa;
+    }
+    
+    .section-header .icon {
+        width: 3rem;
+        height: 3rem;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 1rem;
+        font-size: 1.2rem;
+    }
+    
+    .section-header h3 {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: #343a40;
+    }
+    
+    .section-header p {
+        margin: 0.25rem 0 0;
+        color: #6c757d;
+        font-size: 0.9rem;
+    }
+    
+    /* Form Controls */
+    .form-group {
+        margin-bottom: 1.5rem;
+    }
+    
+    .form-label {
+        font-weight: 600;
+        color: #495057;
+        margin-bottom: 0.5rem;
+        display: block;
+    }
+    
+    .form-control, .form-select {
+        border-radius: 8px;
+        border: 2px solid #e9ecef;
+        padding: 0.75rem 1rem;
+        transition: all 0.3s ease;
+        background: #fff;
+    }
+    
+    .form-control:focus, .form-select:focus {
+        border-color: #0d6efd;
+        box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.1);
+        outline: none;
+    }
+    
+    .form-text {
+        color: #6c757d;
+        font-size: 0.875rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Toggle Switches */
+    .toggle-group {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 1rem;
+        margin: 1rem 0;
+    }
+    
+    .toggle-item {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 1rem;
+        border: 2px solid #e9ecef;
+        transition: all 0.3s ease;
+    }
+    
+    .toggle-item:hover {
+        border-color: #0d6efd;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+    
+    .toggle-item.active {
+        border-color: #28a745;
+        background: #f8fff9;
+    }
+    
+    .form-switch {
+        display: flex;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+    
+    .form-switch input[type="checkbox"] {
+        width: 3rem;
+        height: 1.5rem;
+        margin-right: 0.75rem;
+        cursor: pointer;
+        border: 2px solid #dee2e6;
+        border-radius: 0.75rem;
+        background-color: #fff;
+        position: relative;
+        appearance: none;
+        -webkit-appearance: none;
+        transition: all 0.3s ease;
+    }
+    
+    .form-switch input[type="checkbox"]:checked {
+        background-color: #0d6efd;
+        border-color: #0d6efd;
+    }
+    
+    .form-switch input[type="checkbox"]::before {
+        content: '';
+        position: absolute;
+        width: 1.1rem;
+        height: 1.1rem;
+        background-color: white;
+        border-radius: 50%;
+        top: 0.1rem;
+        left: 0.1rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+    
+    .form-switch input[type="checkbox"]:checked::before {
+        transform: translateX(1.4rem);
+    }
+    
+    .form-switch input[type="checkbox"]:focus {
+        outline: none;
+        box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+    }
+    
+    .form-switch label {
+        font-weight: 600;
+        margin: 0;
+        cursor: pointer;
+        color: #495057;
+    }
+    
+    /* Augmentation Cards */
+    .augmentation-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 1.5rem;
+        margin: 1.5rem 0;
+    }
+    
+    .augmentation-card {
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        border: 2px solid #e9ecef;
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: visible;
+        min-height: 180px;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .augmentation-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: var(--card-color, #6c757d);
+    }
+    
+    .augmentation-card.flip { --card-color: #007bff; }
+    .augmentation-card.rotate { --card-color: #28a745; }
+    .augmentation-card.scale { --card-color: #fd7e14; }
+    .augmentation-card.brightness { --card-color: #ffc107; }
+    .augmentation-card.contrast { --card-color: #6f42c1; }
+    .augmentation-card.blur { --card-color: #20c997; }
+    .augmentation-card.noise { --card-color: #dc3545; }
+    .augmentation-card.intensity { --card-color: #e83e8c; }
+    .augmentation-card.crop { --card-color: #17a2b8; }
+    .augmentation-card.elastic { --card-color: #6c757d; }
+    
+    .augmentation-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+        border-color: var(--card-color, #6c757d);
+    }
+    
+    .augmentation-card.enabled {
+        border-color: var(--card-color, #6c757d);
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 249, 250, 0.9) 100%);
+    }
+
+    /* Medical Preprocessing Styles */
+    .preprocessing-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 1.5rem;
+        margin-top: 1.5rem;
+    }
+
+    .preprocessing-card {
+        background: white;
+        border: 2px solid #e9ecef;
+        border-radius: 12px;
+        overflow: hidden;
+        transition: all 0.3s ease;
+        position: relative;
+        --card-color: #6c757d;
+    }
+
+    .preprocessing-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: var(--card-color, #6c757d);
+        transform: scaleX(0);
+        transition: transform 0.3s ease;
+    }
+
+    .preprocessing-card.clahe-card { --card-color: #007bff; }
+    .preprocessing-card.unsharp-card { --card-color: #28a745; }
+    .preprocessing-card.frangi-card { --card-color: #fd7e14; }
+    .preprocessing-card.denoising-card { --card-color: #dc3545; }
+    .preprocessing-card.additional-card { --card-color: #6f42c1; }
+    .preprocessing-card.custom-card { --card-color: #17a2b8; }
+
+    .preprocessing-card:hover {
+        border-color: var(--card-color, #6c757d);
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+    }
+
+    .preprocessing-card:hover::before,
+    .preprocessing-card.enabled::before {
+        transform: scaleX(1);
+    }
+
+    .preprocessing-card.enabled {
+        border-color: var(--card-color, #6c757d);
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 249, 250, 0.9) 100%);
+    }
+    
+    /* Responsive Design */
+    @media (max-width: 768px) {
+        .training-container {
+            padding: 1rem;
+        }
+        
+        .training-header {
+            padding: 1.5rem;
+            text-align: center;
+        }
+        
+        .training-header h1 {
+            font-size: 2rem;
+        }
+        
+        .step-nav {
+            flex-wrap: wrap;
+        }
+        
+        .step-nav li {
+            margin: 0.5rem;
+        }
+        
+        .form-section {
+            padding: 1.5rem;
+        }
+        
+        .nav-buttons {
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .augmentation-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+    
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */
+    .form-switch:has(#{{ form.use_medical_preprocessing.id_for_label }}) {
+        margin-bottom: 1rem;
+    }
+
+    /* Loading States */
+    body:not(.page-loaded) .training-container {
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    
+    body.page-loaded .training-container {
+        opacity: 1;
+        pointer-events: auto;
+        transition: opacity 0.3s ease;
+    }
+    
+    /* Form loading state */
+    .training-form.loading {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .training-form.loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Reduce layout thrashing */
+    .step-nav, .form-section, .augmentation-card {
+        contain: layout style;
+    }
+    
+    /* GPU acceleration for animations */
+    .step-nav a, .augmentation-card, .btn {
+        transform: translateZ(0);
+    }
+    
+    /* Smaller form controls for augmentation cards */
+    .augmentation-card .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .augmentation-card .form-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .augmentation-card .form-text {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    
+    /* Better spacing for multi-field cards */
+    .augmentation-card .card-body .row {
+        margin-left: -0.25rem;
+        margin-right: -0.25rem;
+    }
+    
+    .augmentation-card .card-body .row > div {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    
+    /* Augmentation card behavior - Maximum specificity */
+    .form-section .augmentation-grid .augmentation-card .card-body {
+        display: none !important; /* Hidden by default */
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .form-section .augmentation-grid .augmentation-card.enabled .card-body {
+        display: block !important; /* Show when enabled */
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    .augmentation-card.enabled {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    /* Force augmentation grid to be visible - temporary debug */
+    .augmentation-grid {
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .augmentation-card {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* FINAL OVERRIDE - Absolute priority for hiding augmentation options */
+    .augmentation-card .card-body,
+    .augmentation-card:not(.enabled) .card-body,
+    .form-section .augmentation-grid .augmentation-card:not(.enabled) .card-body {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        max-height: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Only show when explicitly enabled */
+    .augmentation-card.enabled .card-body {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: initial !important;
+        padding: initial !important;
+    }
+    
+    /* EMERGENCY CSS - Force interactions in case JavaScript fails */
+    body .training-container,
+    .training-container,
+    .training-container * {
+        pointer-events: auto !important;
+    }
+    
+    /* Override loading states */
+    body:not(.page-loaded) .training-container {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Ensure the toggle container has proper spacing */

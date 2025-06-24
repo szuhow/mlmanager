@@ -44,4 +44,10 @@ urlpatterns = [
     
     # Dataset preview URL
     path('dataset-preview/', views.dataset_preview_view, name='dataset-preview'),
+    
+    # Serve preview image URL
+    path('serve-preview-image/', views.serve_preview_image, name='serve-preview-image'),
+    
+    # Preprocessing preview URL
+    path('preprocessing-preview/', views.preprocessing_preview, name='preprocessing-preview'),
 ]

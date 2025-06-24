@@ -65,7 +65,13 @@ class TrainingTemplateForm(forms.ModelForm):
             'use_random_intensity', 'intensity_range', 'use_random_crop', 'crop_size',
             'use_pos_neg_cropping',
             'use_elastic_transform', 'elastic_alpha', 'elastic_sigma',
-            'use_gaussian_noise', 'noise_std', 'num_workers', 'threshold', 'is_default'
+            'use_gaussian_noise', 'noise_std', 'num_workers', 'threshold', 'is_default',
+            # Medical preprocessing fields - only include fields that exist in model
+            'use_medical_preprocessing', 'preprocessing_type', 'clahe_clip_limit', 'clahe_tile_size',
+            'use_unsharp_masking', 'unsharp_amount', 'unsharp_radius',
+            'use_frangi_filter', 'frangi_sigma_min', 'frangi_sigma_max', 'frangi_sigma_step',
+            'use_denoising', 'noise_reduction_sigma', 'use_histogram_equalization',
+            'normalize_intensity', 'gamma_correction', 'custom_preprocessing_pipeline'
         ]
         widgets = {
             'description': forms.Textarea(attrs={'rows': 3}),
@@ -102,6 +108,24 @@ class TrainingTemplateForm(forms.ModelForm):
             'noise_std': 'Standard deviation of Gaussian noise',
             'num_workers': 'Number of data loading workers',
             'is_default': 'Make this the default template for new trainings',
+            # Medical preprocessing help texts
+            'use_medical_preprocessing': 'Enable advanced medical image preprocessing',
+            'preprocessing_type': 'Type of medical imaging modality for optimal preprocessing',
+            'clahe_clip_limit': 'CLAHE clip limit for contrast enhancement (1.0-8.0)',
+            'clahe_tile_size': 'CLAHE tile grid size (4-16)',
+            'use_unsharp_masking': 'Enable unsharp masking for edge enhancement',
+            'unsharp_amount': 'Unsharp masking strength (0.5-2.0)',
+            'unsharp_radius': 'Unsharp masking radius (0.5-3.0)',
+            'use_frangi_filter': 'Enable Frangi vesselness filter for vessel enhancement',
+            'frangi_sigma_min': 'Minimum sigma for Frangi filter (detects thin vessels)',
+            'frangi_sigma_max': 'Maximum sigma for Frangi filter (detects thick vessels)',
+            'frangi_sigma_step': 'Step size for sigma range (1.0-3.0)',
+            'use_denoising': 'Enable denoising filters to reduce image noise',
+            'noise_reduction_sigma': 'Noise reduction strength (0.5-3.0)',
+            'use_histogram_equalization': 'Enable histogram equalization for global contrast',
+            'normalize_intensity': 'Normalize image intensity to standard range',
+            'gamma_correction': 'Gamma correction (0.5-2.0, 1.0=no correction)',
+            'custom_preprocessing_pipeline': 'Custom preprocessing pipeline (comma-separated)',
         }
     
     def __init__(self, *args, **kwargs):
@@ -366,6 +390,13 @@ class TrainingForm(forms.Form):
         ('balanced_segmentation', 'Balanced Segmentation'),
         ('dice_focused', 'Dice Focused'),
         ('jaccard_based', 'Jaccard Based'),
+        # Advanced loss functions from pywick
+        ('tversky_recall', 'Tversky Loss (Recall-focused) - Fewer missed arteries'),
+        ('tversky_precision', 'Tversky Loss (Precision-focused) - Cleaner segmentations'),
+        ('focal_advanced', 'Advanced Focal Loss - Better class imbalance handling'),
+        ('combo_dice_bce_focal', 'Combined Dice + Focal BCE - Advanced combination'),
+        ('boundary_aware', 'Boundary-aware Loss - Improved edge detection'),
+        ('weighted_bce_adaptive', 'Adaptive Weighted BCE - Dynamic class balancing'),
     ]
     
     loss_function = forms.ChoiceField(
@@ -467,6 +498,152 @@ class TrainingForm(forms.Form):
         help_text="Enable mixed precision training for faster training and lower memory usage (requires CUDA GPU - automatically disabled on CPU)"
     )
     
+    # Medical Preprocessing Configuration
+    use_medical_preprocessing = forms.BooleanField(
+        initial=False,
+        required=False,
+        help_text="Enable advanced medical image preprocessing for better results with angiography and coronary images"
+    )
+    
+    PREPROCESSING_TYPE_CHOICES = [
+        ('angiography', 'Angiography (X-ray coronary images)'),
+        ('ct_coronary', 'CT Coronary Angiography'),
+        ('oct_coronary', 'OCT Coronary Images'),
+        ('general', 'General Medical Images'),
+    ]
+    
+    preprocessing_type = forms.ChoiceField(
+        choices=PREPROCESSING_TYPE_CHOICES,
+        initial='angiography',
+        required=False,
+        help_text="Type of medical imaging modality for optimal preprocessing"
+    )
+    
+    # CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    clahe_clip_limit = forms.FloatField(
+        min_value=1.0,
+        max_value=8.0,
+        initial=3.0,
+        required=False,
+        widget=forms.NumberInput(attrs={'step': '0.5', 'class': 'form-control'}),
+        help_text="CLAHE clip limit for contrast enhancement (1.0-8.0). Higher values = stronger contrast."
+    )
+    
+    clahe_tile_size = forms.IntegerField(
+        min_value=4,
+        max_value=16,
+        initial=8,
+        required=False,
+        help_text="CLAHE tile grid size (4-16). Smaller tiles = more local contrast enhancement."
+    )
+    
+    # Unsharp Masking for edge enhancement
+    use_unsharp_masking = forms.BooleanField(
+        initial=False,
+        required=False,
+        help_text="Enable unsharp masking for edge enhancement and vessel definition"
+    )
+    
+    unsharp_amount = forms.FloatField(
+        min_value=0.5,
+        max_value=2.0,
+        initial=1.0,
+        required=False,
+        widget=forms.NumberInput(attrs={'step': '0.1', 'class': 'form-control'}),
+        help_text="Unsharp masking strength (0.5-2.0). Higher values = stronger edge enhancement."
+    )
+    
+    unsharp_radius = forms.FloatField(
+        min_value=0.5,
+        max_value=3.0,
+        initial=1.0,
+        required=False,
+        widget=forms.NumberInput(attrs={'step': '0.1', 'class': 'form-control'}),
+        help_text="Unsharp masking radius (0.5-3.0). Controls the size of details enhanced."
+    )
+    
+    # Frangi vesselness filter
+    use_frangi_filter = forms.BooleanField(
+        initial=False,
+        required=False,
+        help_text="Enable Frangi vesselness filter for enhanced vessel detection in angiography"
+    )
+    
+    frangi_sigma_min = forms.FloatField(
+        min_value=0.5,
+        max_value=5.0,
+        initial=1.0,
+        required=False,
+        widget=forms.NumberInput(attrs={'step': '0.5', 'class': 'form-control'}),
+        help_text="Minimum sigma for Frangi filter (0.5-5.0). Detects thin vessels."
+    )
+    
+    frangi_sigma_max = forms.FloatField(
+        min_value=5.0,
+        max_value=20.0,
+        initial=10.0,
+        required=False,
+        widget=forms.NumberInput(attrs={'step': '1.0', 'class': 'form-control'}),
+        help_text="Maximum sigma for Frangi filter (5.0-20.0). Detects thick vessels."
+    )
+    
+    frangi_sigma_step = forms.FloatField(
+        min_value=1.0,
+        max_value=3.0,
+        initial=2.0,
+        required=False,
+        widget=forms.NumberInput(attrs={'step': '0.5', 'class': 'form-control'}),
+        help_text="Step size for sigma range (1.0-3.0). Smaller steps = more precise detection."
+    )
+    
+    # Denoising
+    use_denoising = forms.BooleanField(
+        initial=False,
+        required=False,
+        help_text="Enable denoising filters to reduce image noise"
+    )
+    
+    noise_reduction_sigma = forms.FloatField(
+        min_value=0.5,
+        max_value=3.0,
+        initial=1.0,
+        required=False,
+        widget=forms.NumberInput(attrs={'step': '0.1', 'class': 'form-control'}),
+        help_text="Noise reduction strength (0.5-3.0). Higher values = stronger denoising."
+    )
+    
+    # Histogram equalization
+    use_histogram_equalization = forms.BooleanField(
+        initial=False,
+        required=False,
+        help_text="Enable histogram equalization for global contrast improvement"
+    )
+    
+    # Intensity normalization
+    normalize_intensity = forms.BooleanField(
+        initial=True,
+        required=False,
+        help_text="Normalize image intensity to standard range for consistent processing"
+    )
+    
+    # Gamma correction
+    gamma_correction = forms.FloatField(
+        min_value=0.5,
+        max_value=2.0,
+        initial=1.0,
+        required=False,
+        widget=forms.NumberInput(attrs={'step': '0.1', 'class': 'form-control'}),
+        help_text="Gamma correction (0.5-2.0). 1.0 = no correction, <1.0 = brighter, >1.0 = darker."
+    )
+    
+    # Custom preprocessing pipeline
+    custom_preprocessing_pipeline = forms.CharField(
+        max_length=500,
+        required=False,
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g., clahe,unsharp,frangi,denoise'}),
+        help_text="Custom preprocessing pipeline (comma-separated): clahe, unsharp, frangi, denoise, histogram_eq"
+    )
+
     # Post-processing configuration
     threshold = forms.FloatField(
         initial=0.5,
@@ -623,6 +800,93 @@ class EnhancedInferenceForm(forms.Form):
         required=False,
         label="Binary Segmentation Threshold",
         help_text="Threshold for converting soft predictions to hard binary masks (0.5 is standard)"
+    )
+    
+    confidence_threshold = forms.FloatField(
+        initial=0.5,
+        min_value=0.1,
+        max_value=0.9,
+        widget=forms.NumberInput(attrs={'step': '0.1', 'class': 'form-control'}),
+        required=False,
+        label="Confidence Threshold",
+        help_text="Minimum confidence score for accepting predictions"
+    )
+    
+    min_component_size = forms.IntegerField(
+        initial=100,
+        min_value=1,
+        max_value=10000,
+        widget=forms.NumberInput(attrs={'class': 'form-control'}),
+        required=False,
+        label="Minimum Component Size",
+        help_text="Remove connected components smaller than this size (in pixels)"
+    )
+    
+    morphology_kernel_size = forms.IntegerField(
+        initial=3,
+        min_value=1,
+        max_value=15,
+        widget=forms.NumberInput(attrs={'class': 'form-control'}),
+        required=False,
+        label="Morphology Kernel Size",
+        help_text="Size of morphological operations kernel (odd numbers only)"
+    )
+    
+    apply_opening = forms.BooleanField(
+        initial=True,
+        required=False,
+        label="Apply Opening",
+        help_text="Remove small noise objects using morphological opening"
+    )
+    
+    apply_closing = forms.BooleanField(
+        initial=True,
+        required=False,
+        label="Apply Closing",
+        help_text="Fill small holes using morphological closing"
+    )
+    
+    use_adaptive_threshold = forms.BooleanField(
+        initial=False,
+        required=False,
+        label="Use Adaptive Threshold",
+        help_text="Use adaptive thresholding instead of fixed threshold"
+    )
+    
+    # Test Time Augmentation (TTA) options
+    use_tta = forms.BooleanField(
+        initial=False,
+        required=False,
+        label="Enable Test Time Augmentation",
+        help_text="Apply augmentations and average results for better accuracy (slower but more accurate)"
+    )
+    
+    tta_flip_horizontal = forms.BooleanField(
+        initial=True,
+        required=False,
+        label="TTA: Horizontal Flip",
+        help_text="Include horizontal flip in test time augmentation"
+    )
+    
+    tta_flip_vertical = forms.BooleanField(
+        initial=True,
+        required=False,
+        label="TTA: Vertical Flip", 
+        help_text="Include vertical flip in test time augmentation"
+    )
+    
+    tta_rotate_90 = forms.BooleanField(
+        initial=True,
+        required=False,
+        label="TTA: 90° Rotations",
+        help_text="Include 90°, 180°, 270° rotations in test time augmentation"
+    )
+    
+    tta_scale = forms.BooleanField(
+        initial=False,
+        required=False,
+        label="TTA: Multi-scale",
+        help_text="Include different scales in test time augmentation (experimental)"
     )
 
     def __init__(self, *args, **kwargs):

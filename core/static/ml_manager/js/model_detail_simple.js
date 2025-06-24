@@ -838,14 +838,18 @@ class ModelDetailManager {
             let logsToDisplay = [];
             
             if (data.logs && Array.isArray(data.logs)) {
-                logsToDisplay = data.logs.filter(line => line && line.trim() !== '');
+                logsToDisplay = data.logs.filter(line => {
+                    if (!line) return false;
+                    const text = typeof line === 'object' && line.content ? line.content : String(line);
+                    return text.trim() !== '';
+                });
             }
             
-            // Filter out DEBUG log lines
-            logsToDisplay = logsToDisplay.filter(line => {
-                const text = typeof line === 'object' && line.content ? line.content : String(line);
-                return !/^\d{4}-\d{2}-\d{2}.*\bDEBUG\b/.test(text);
-            });
+            // Show ALL logs (no filtering)
+            // logsToDisplay = logsToDisplay.filter(line => {
+            //     const text = typeof line === 'object' && line.content ? line.content : String(line);
+            //     return !/^\d{4}-\d{2}-\d{2}.*\bDEBUG\b/.test(text);
+            // });
             
             if (logsToDisplay.length > 0) {
                 const logHTML = logsToDisplay.map(line => {

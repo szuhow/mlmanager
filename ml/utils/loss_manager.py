@@ -3,24 +3,37 @@ Enhanced Loss Function Manager for ML Training System
 Provides advanced loss function combinations, scheduling, and monitoring.
 """
 
+# =============================================================================
+# IMPORTS
+# =============================================================================
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.optim as optim
+from typing import Dict, Any, Optional, Union, Callable
 import logging
-import numpy as np
-from typing import Dict, Any, Optional, List, Callable, Union
-from abc import ABC, abstractmethod
 
+# Import advanced loss functions
 try:
-    from monai.losses import DiceLoss as MonaiDiceLoss, FocalLoss
-    MONAI_AVAILABLE = True
-except ImportError:
-    MONAI_AVAILABLE = False
+    from .advanced_losses import (
+        TverskyLoss, FocalLoss, ComboDiceBCELoss, SoftDiceLoss, 
+        WeightedBCELoss, BoundaryLoss, StableBCELoss,
+        create_advanced_loss, get_recommended_loss,
+        CORONARY_LOSS_CONFIGS
+    )
+    ADVANCED_LOSSES_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Advanced losses not available: {e}")
+    ADVANCED_LOSSES_AVAILABLE = False
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# BASE CLASSES
+# =============================================================================
 
-class BaseLossFunction(nn.Module, ABC):
+class BaseLossFunction(nn.Module):
     """Base class for all loss functions with common interface."""
     
     def __init__(self, name: str):
@@ -28,7 +41,6 @@ class BaseLossFunction(nn.Module, ABC):
         self.name = name
         self.history = []
     
-    @abstractmethod
     def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """Compute loss value."""
         pass
@@ -49,6 +61,10 @@ class BaseLossFunction(nn.Module, ABC):
             'class': self.__class__.__name__
         }
 
+
+# =============================================================================
+# ENHANCED LOSS FUNCTIONS
+# =============================================================================
 
 class EnhancedDiceLoss(BaseLossFunction):
     """Enhanced Dice loss with multiple variants and smoothing options."""
@@ -241,6 +257,10 @@ class CombinedLoss(BaseLossFunction):
         return config
 
 
+# =============================================================================
+# LOSS SCHEDULER
+# =============================================================================
+
 class LossScheduler:
     """Scheduler for dynamically adjusting loss function weights during training."""
     
@@ -332,6 +352,10 @@ class LossScheduler:
             self.loss_function.update_weights({'dice': new_dice_weight, 'bce': bce_weight})
 
 
+# =============================================================================
+# LOSS MANAGER
+# =============================================================================
+
 class LossManager:
     """Central manager for loss functions with factory methods and monitoring."""
     
@@ -389,8 +413,58 @@ class LossManager:
                 reduction=loss_config.get('reduction', 'mean')
             )
         
+        # Advanced loss functions from pywick
+        elif ADVANCED_LOSSES_AVAILABLE:
+            if loss_type == 'tversky':
+                return TverskyLoss(
+                    alpha=loss_config.get('alpha', 0.3),
+                    beta=loss_config.get('beta', 0.7),
+                    smooth=loss_config.get('smooth', 1e-6)
+                )
+            
+            elif loss_type == 'focal_advanced':
+                return FocalLoss(
+                    alpha=loss_config.get('alpha', 0.25),
+                    gamma=loss_config.get('gamma', 2.0),
+                    reduction=loss_config.get('reduction', 'mean')
+                )
+            
+            elif loss_type == 'combo_dice_bce':
+                return ComboDiceBCELoss(
+                    dice_weight=loss_config.get('dice_weight', 0.7),
+                    bce_weight=loss_config.get('bce_weight', 0.3),
+                    smooth=loss_config.get('smooth', 1e-6),
+                    use_focal=loss_config.get('use_focal', False),
+                    focal_gamma=loss_config.get('focal_gamma', 2.0),
+                    focal_alpha=loss_config.get('focal_alpha', 0.25)
+                )
+            
+            elif loss_type == 'soft_dice':
+                return SoftDiceLoss(
+                    smooth=loss_config.get('smooth', 1e-6)
+                )
+            
+            elif loss_type == 'weighted_bce':
+                return WeightedBCELoss(
+                    pos_weight=loss_config.get('pos_weight'),
+                    adaptive=loss_config.get('adaptive', False)
+                )
+            
+            elif loss_type == 'boundary':
+                return BoundaryLoss(
+                    theta0=loss_config.get('theta0', 3),
+                    theta=loss_config.get('theta', 5)
+                )
+            
+            elif loss_type == 'stable_bce':
+                return StableBCELoss()
+        
         else:
-            raise ValueError(f"Unknown loss type: {loss_type}")
+            available_types = ['dice', 'bce', 'combined', 'mixed', 'focal']
+            if ADVANCED_LOSSES_AVAILABLE:
+                available_types.extend(['tversky', 'focal_advanced', 'combo_dice_bce', 
+                                      'soft_dice', 'weighted_bce', 'boundary', 'stable_bce'])
+            raise ValueError(f"Unknown loss type: {loss_type}. Available: {available_types}")
     
     @staticmethod
     def create_loss_scheduler(loss_function: CombinedLoss, 
@@ -487,6 +561,48 @@ LOSS_PRESETS = {
         'bce_weight': 0.3,
         'dice_config': {'smooth': 1e-6, 'jaccard': True},
         'bce_config': {}
+    },
+    
+    # Advanced loss functions from pywick
+    'tversky_recall': {
+        'type': 'tversky',
+        'alpha': 0.3,
+        'beta': 0.7,
+        'smooth': 1e-6
+    },
+    
+    'tversky_precision': {
+        'type': 'tversky', 
+        'alpha': 0.7,
+        'beta': 0.3,
+        'smooth': 1e-6
+    },
+    
+    'focal_advanced': {
+        'type': 'focal',
+        'alpha': 0.25,
+        'gamma': 2.0,
+        'reduction': 'mean'
+    },
+    
+    'combo_dice_bce_focal': {
+        'type': 'combo_dice_bce',
+        'dice_weight': 0.6,
+        'bce_weight': 0.4,
+        'use_focal': True,
+        'focal_gamma': 2.0,
+        'focal_alpha': 0.25
+    },
+    
+    'boundary_aware': {
+        'type': 'boundary',
+        'theta0': 3,
+        'theta': 5
+    },
+    
+    'weighted_bce_adaptive': {
+        'type': 'weighted_bce',
+        'adaptive': True
     }
 }
 
@@ -534,3 +650,197 @@ def get_preset_scheduler_config(preset_name: str) -> Dict[str, Any]:
         raise ValueError(f"Unknown preset: {preset_name}. Available: {available}")
     
     return SCHEDULER_PRESETS[preset_name].copy()
+
+
+# =============================================================================
+# HELPER FUNCTIONS FOR ADVANCED LOSSES
+# =============================================================================
+
+def get_coronary_optimized_loss(task_focus: str = 'balanced') -> Dict[str, Any]:
+    """
+    Get optimized loss configurations for coronary artery segmentation.
+    
+    Args:
+        task_focus: Focus of the task
+            - 'balanced': Balanced precision/recall (default)
+            - 'recall': Prioritize not missing arteries
+            - 'precision': Prioritize clean segmentations
+            - 'boundary': Focus on boundary accuracy
+            - 'class_imbalanced': Handle severe class imbalance
+    
+    Returns:
+        Loss configuration dictionary
+    """
+    configs = {
+        'balanced': {
+            'type': 'combo_dice_bce',
+            'dice_weight': 0.7,
+            'bce_weight': 0.3,
+            'smooth': 1e-6,
+            'use_focal': False
+        },
+        
+        'recall': {
+            'type': 'tversky',
+            'alpha': 0.3,  # Low alpha = penalize false negatives more
+            'beta': 0.7,   # High beta = less penalty for false positives
+            'smooth': 1e-6
+        },
+        
+        'precision': {
+            'type': 'tversky',
+            'alpha': 0.7,  # High alpha = penalize false positives more
+            'beta': 0.3,   # Low beta = less penalty for false negatives
+            'smooth': 1e-6
+        },
+        
+        'boundary': {
+            'type': 'boundary',
+            'theta0': 3,
+            'theta': 5
+        },
+        
+        'class_imbalanced': {
+            'type': 'combo_dice_bce',
+            'dice_weight': 0.6,
+            'bce_weight': 0.4,
+            'use_focal': True,
+            'focal_gamma': 2.0,
+            'focal_alpha': 0.25
+        }
+    }
+    
+    if task_focus not in configs:
+        raise ValueError(f"Unknown task focus: {task_focus}. Available: {list(configs.keys())}")
+    
+    return configs[task_focus]
+
+
+def create_coronary_loss(task_focus: str = 'balanced', **override_params) -> torch.nn.Module:
+    """
+    Create an optimized loss function for coronary artery segmentation.
+    
+    Args:
+        task_focus: Focus of the task (see get_coronary_optimized_loss)
+        **override_params: Parameters to override in the configuration
+    
+    Returns:
+        Configured loss function
+    """
+    config = get_coronary_optimized_loss(task_focus)
+    config.update(override_params)
+    
+    if ADVANCED_LOSSES_AVAILABLE:
+        loss_type = config.pop('type')
+        if loss_type in ['tversky', 'combo_dice_bce', 'boundary', 'weighted_bce', 'focal_advanced']:
+            return create_advanced_loss(loss_type, **config)
+    
+    # Fallback to standard loss manager
+    return LossManager.create_loss_function(config)
+
+
+def get_loss_recommendations_for_dataset(dataset_stats: Dict[str, float]) -> Dict[str, Any]:
+    """
+    Get loss function recommendations based on dataset statistics.
+    
+    Args:
+        dataset_stats: Dictionary with dataset statistics:
+            - 'class_imbalance_ratio': Ratio of positive to negative pixels
+            - 'boundary_pixel_ratio': Ratio of boundary to total pixels
+            - 'avg_object_size': Average size of segmented objects
+    
+    Returns:
+        Recommended loss configuration
+    """
+    imbalance_ratio = dataset_stats.get('class_imbalance_ratio', 0.1)
+    boundary_ratio = dataset_stats.get('boundary_pixel_ratio', 0.05)
+    avg_object_size = dataset_stats.get('avg_object_size', 0.1)
+    
+    recommendations = []
+    
+    # Severe class imbalance
+    if imbalance_ratio < 0.05:
+        recommendations.append({
+            'reason': f'Severe class imbalance (ratio: {imbalance_ratio:.3f})',
+            'config': get_coronary_optimized_loss('class_imbalanced'),
+            'priority': 'high'
+        })
+    
+    # Small objects
+    if avg_object_size < 0.05:
+        recommendations.append({
+            'reason': f'Small objects detected (avg size: {avg_object_size:.3f})',
+            'config': get_coronary_optimized_loss('recall'),
+            'priority': 'medium'
+        })
+    
+    # High boundary complexity
+    if boundary_ratio > 0.1:
+        recommendations.append({
+            'reason': f'Complex boundaries detected (boundary ratio: {boundary_ratio:.3f})',
+            'config': get_coronary_optimized_loss('boundary'),
+            'priority': 'medium'
+        })
+    
+    # Default recommendation
+    if not recommendations:
+        recommendations.append({
+            'reason': 'Balanced dataset characteristics',
+            'config': get_coronary_optimized_loss('balanced'),
+            'priority': 'low'
+        })
+    
+    # Return highest priority recommendation
+    recommendations.sort(key=lambda x: {'high': 3, 'medium': 2, 'low': 1}[x['priority']], reverse=True)
+    return recommendations[0]
+
+
+def compare_loss_functions(predictions: torch.Tensor, 
+                          targets: torch.Tensor,
+                          loss_configs: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+    """
+    Compare multiple loss functions on the same data.
+    
+    Args:
+        predictions: Model predictions (logits) [B, 1, H, W]
+        targets: Ground truth masks [B, 1, H, W]
+        loss_configs: Dictionary of loss configurations to compare
+    
+    Returns:
+        Dictionary with loss values and statistics for each configuration
+    """
+    results = {}
+    
+    with torch.no_grad():
+        for name, config in loss_configs.items():
+            try:
+                # Create loss function
+                if ADVANCED_LOSSES_AVAILABLE and config.get('type') in ['tversky', 'combo_dice_bce', 'boundary']:
+                    loss_fn = create_advanced_loss(config['type'], **{k: v for k, v in config.items() if k != 'type'})
+                else:
+                    loss_fn = LossManager.create_loss_function(config)
+                
+                # Calculate loss
+                loss_value = loss_fn(predictions, targets)
+                
+                # Get additional statistics if available
+                stats = {'loss': loss_value.item()}
+                
+                if hasattr(loss_fn, 'get_loss_components'):
+                    components = loss_fn.get_loss_components(predictions, targets)
+                    stats.update(components)
+                
+                results[name] = stats
+                
+            except Exception as e:
+                results[name] = {'error': str(e)}
+    
+    return results
+
+
+# Export useful functions
+__all__ = [
+    'LossManager', 'LossScheduler', 'get_preset_loss_config', 'get_preset_scheduler_config',
+    'get_coronary_optimized_loss', 'create_coronary_loss', 'get_loss_recommendations_for_dataset',
+    'compare_loss_functions', 'LOSS_PRESETS', 'SCHEDULER_PRESETS'
+]

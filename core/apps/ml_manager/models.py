@@ -359,6 +359,96 @@ class TrainingTemplate(models.Model):
         help_text="Binary segmentation threshold for hard predictions (0.1-0.9)"
     )
     
+    # Medical Preprocessing Configuration
+    use_medical_preprocessing = models.BooleanField(
+        default=False,
+        help_text="Enable advanced medical image preprocessing"
+    )
+    
+    PREPROCESSING_TYPE_CHOICES = [
+        ('angiography', 'Angiography (X-ray coronary images)'),
+        ('ct_coronary', 'CT Coronary Angiography'),
+        ('oct_coronary', 'OCT Coronary Images'),
+        ('general', 'General Medical Images'),
+    ]
+    preprocessing_type = models.CharField(
+        max_length=20,
+        choices=PREPROCESSING_TYPE_CHOICES,
+        default='angiography',
+        help_text="Type of medical imaging modality"
+    )
+    
+    # CLAHE parameters
+    clahe_clip_limit = models.FloatField(
+        default=3.0,
+        help_text="CLAHE clip limit for contrast enhancement (1.0-8.0)"
+    )
+    clahe_tile_size = models.IntegerField(
+        default=8,
+        help_text="CLAHE tile grid size (4-16)"
+    )
+    
+    # Unsharp masking
+    use_unsharp_masking = models.BooleanField(
+        default=False,
+        help_text="Enable unsharp masking for edge enhancement"
+    )
+    unsharp_amount = models.FloatField(
+        default=1.0,
+        help_text="Unsharp masking strength (0.5-2.0)"
+    )
+    unsharp_radius = models.FloatField(
+        default=1.0,
+        help_text="Unsharp masking radius (0.5-3.0)"
+    )
+    
+    # Frangi vesselness filter
+    use_frangi_filter = models.BooleanField(
+        default=False,
+        help_text="Enable Frangi vesselness filter for vessel enhancement"
+    )
+    frangi_sigma_min = models.FloatField(
+        default=1.0,
+        help_text="Minimum sigma for Frangi filter (detects thin vessels)"
+    )
+    frangi_sigma_max = models.FloatField(
+        default=10.0,
+        help_text="Maximum sigma for Frangi filter (detects thick vessels)"
+    )
+    frangi_sigma_step = models.FloatField(
+        default=2.0,
+        help_text="Step size for sigma range (1.0-3.0)"
+    )
+    
+    # Denoising
+    use_denoising = models.BooleanField(
+        default=False,
+        help_text="Enable denoising filters to reduce image noise"
+    )
+    noise_reduction_sigma = models.FloatField(
+        default=1.0,
+        help_text="Noise reduction strength (0.5-3.0)"
+    )
+    
+    # Additional preprocessing options
+    use_histogram_equalization = models.BooleanField(
+        default=False,
+        help_text="Enable histogram equalization for global contrast"
+    )
+    normalize_intensity = models.BooleanField(
+        default=True,
+        help_text="Normalize image intensity to standard range"
+    )
+    gamma_correction = models.FloatField(
+        default=1.0,
+        help_text="Gamma correction (0.5-2.0, 1.0=no correction)"
+    )
+    custom_preprocessing_pipeline = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text="Custom preprocessing pipeline (comma-separated)"
+    )
+
     # Additional metadata
     is_default = models.BooleanField(default=False, help_text="Default template for new trainings")
     created_by = models.CharField(max_length=100, blank=True, help_text="Template creator")
@@ -411,6 +501,24 @@ class TrainingTemplate(models.Model):
             'early_stopping_min_delta': self.early_stopping_min_delta,
             'early_stopping_metric': self.early_stopping_metric,
             'threshold': self.threshold,
+            # Medical preprocessing fields
+            'use_medical_preprocessing': self.use_medical_preprocessing,
+            'preprocessing_type': self.preprocessing_type,
+            'clahe_clip_limit': self.clahe_clip_limit,
+            'clahe_tile_size': self.clahe_tile_size,
+            'use_unsharp_masking': self.use_unsharp_masking,
+            'unsharp_amount': self.unsharp_amount,
+            'unsharp_radius': self.unsharp_radius,
+            'use_frangi_filter': self.use_frangi_filter,
+            'frangi_sigma_min': self.frangi_sigma_min,
+            'frangi_sigma_max': self.frangi_sigma_max,
+            'frangi_sigma_step': self.frangi_sigma_step,
+            'use_denoising': self.use_denoising,
+            'noise_reduction_sigma': self.noise_reduction_sigma,
+            'use_histogram_equalization': self.use_histogram_equalization,
+            'normalize_intensity': self.normalize_intensity,
+            'gamma_correction': self.gamma_correction,
+            'custom_preprocessing_pipeline': self.custom_preprocessing_pipeline,
         }
     
     def save(self, *args, **kwargs):

@@ -82,7 +82,7 @@
                     <div class="row">
                         <div class="col-md-6">
                             <strong>Detected Type:</strong> 
-                            <span class="badge bg-info">{{ detected_type }}</span>
+                            <span class="badge bg-info">{{ detected_type|default:"Unknown" }}</span>
                         </div>
                         <div class="col-md-6">
                             <strong>Total Samples:</strong> {{ total_samples|default:"N/A" }}
@@ -103,7 +103,7 @@
             {% endif %}
 
             <!-- Sample Images -->
-            {% if samples %}
+            {% if samples and samples|length > 0 %}
             <div class="card">
                 <div class="card-header">
                     <h5 class="card-title mb-0">

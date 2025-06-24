@@ -29,6 +29,7 @@ from torch.utils.data import DataLoader as TorchDataLoader  # ARCADE DataLoader
 
 # === Early Django Setup ===
 # Setup Django early to avoid import issues with training_callback
+DJANGO_AVAILABLE = False
 try:
     import django
     
@@ -42,20 +43,31 @@ try:
     if ml_path not in sys.path:
         sys.path.insert(0, ml_path)
     
-    # Set the Django settings module
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.config.settings.development')
+    # Set the Django settings module - use container settings in Docker environment
+    if os.environ.get('DJANGO_SETTINGS_MODULE'):
+        # Use existing environment setting (likely from container)
+        logger.info(f"[DJANGO] Using existing settings module: {os.environ.get('DJANGO_SETTINGS_MODULE')}")
+    else:
+        # Default to development settings
+        os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.config.settings.development')
+        logger.info("[DJANGO] Using default development settings")
     
     # Setup Django
     try:
         django.setup()
+        DJANGO_AVAILABLE = True
         logger.info("[DJANGO] Django setup completed successfully")
     except RuntimeError as e:
         if "populated" in str(e):
+            DJANGO_AVAILABLE = True
             logger.info("[DJANGO] Django already configured")
         else:
             logger.error(f"[DJANGO] Django setup failed: {e}")
-            raise
+            # Don't raise, just continue without Django
         
+except ImportError:
+    logger.warning("[DJANGO] Django not available in current environment")
+    logger.warning("[DJANGO] Training callback will not be available")
 except Exception as e:
     logger.warning(f"[DJANGO] Django setup failed: {e}")
     logger.warning("[DJANGO] Training callback will not be available")
@@ -116,6 +128,38 @@ except ImportError as e:
     ENHANCED_UTILS_AVAILABLE = False
     logger.warning(f"[ENHANCED] Enhanced training utilities not available: {e}")
     logger.warning("[ENHANCED] Will use standard loss functions and checkpointing")
+
+# Import advanced loss functions and medical preprocessing
+try:
+    from ml.utils.advanced_losses import (
+        TverskyLoss, FocalLoss, ComboDiceBCELoss, SoftDiceLoss,
+        WeightedBCELoss, BoundaryLoss, StableBCELoss,
+        create_advanced_loss, get_recommended_loss
+    )
+    ADVANCED_LOSSES_AVAILABLE = True
+    logger.info("[ADVANCED_LOSSES] Advanced loss functions available")
+except ImportError as e:
+    ADVANCED_LOSSES_AVAILABLE = False
+    logger.warning(f"[ADVANCED_LOSSES] Advanced loss functions not available: {e}")
+
+try:
+    from ml.utils.medical_preprocessing import (
+        MedicalImagePreprocessor, preprocess_angiography,
+        preprocess_ct_coronary, preprocess_oct_coronary
+    )
+    MEDICAL_PREPROCESSING_AVAILABLE = True
+    logger.info("[MEDICAL_PREPROCESSING] Medical preprocessing available")
+except ImportError as e:
+    MEDICAL_PREPROCESSING_AVAILABLE = False
+    logger.warning(f"[MEDICAL_PREPROCESSING] Medical preprocessing not available: {e}")
+
+try:
+    from ml.utils.loss_manager import LossManager
+    LOSS_MANAGER_AVAILABLE = True
+    logger.info("[LOSS_MANAGER] Loss manager available")
+except ImportError as e:
+    LOSS_MANAGER_AVAILABLE = False
+    logger.warning(f"[LOSS_MANAGER] Loss manager not available: {e}")
 
 # Global logger for architecture functions
 logger = logging.getLogger(__name__)
@@ -578,8 +622,156 @@ def ensure_single_channel(x):
     else:
         return x
 
+def apply_medical_preprocessing(image_array, preprocessing_type='angiography', **preprocessing_params):
+    """Apply medical preprocessing to image array with configurable parameters"""
+    if not MEDICAL_PREPROCESSING_AVAILABLE:
+        logger.warning(f"[MEDICAL_PREPROCESSING] Medical preprocessing not available, returning original image")
+        return image_array
+    
+    try:
+        # Convert torch tensor to numpy if needed
+        if isinstance(image_array, torch.Tensor):
+            img_np = image_array.squeeze().cpu().numpy()
+            device = image_array.device
+        else:
+            img_np = image_array
+            device = None
+            
+        # Extract preprocessing parameters with defaults
+        clahe_clip_limit = preprocessing_params.get('clahe_clip_limit', 3.0)
+        clahe_tile_size = preprocessing_params.get('clahe_tile_size', 8)
+        use_unsharp = preprocessing_params.get('use_unsharp_masking', False)
+        unsharp_radius = preprocessing_params.get('unsharp_radius', 1.0)
+        unsharp_amount = preprocessing_params.get('unsharp_amount', 1.0)
+        use_frangi = preprocessing_params.get('use_frangi', False)
+        frangi_scale_range = preprocessing_params.get('frangi_scale_range', '1,10')
+        frangi_scale_step = preprocessing_params.get('frangi_scale_step', 2.0)
+        use_histogram_eq = preprocessing_params.get('use_histogram_equalization', False)
+        use_denoising = preprocessing_params.get('use_denoising', False)
+        noise_variance = preprocessing_params.get('noise_variance', 0.1)
+        intensity_range = preprocessing_params.get('intensity_range', 'auto')
+        gamma_correction = preprocessing_params.get('gamma_correction', 1.0)
+        vessel_enhancement_sigma = preprocessing_params.get('vessel_enhancement_sigma', 1.0)
+        custom_pipeline = preprocessing_params.get('custom_pipeline', '')
+        
+        logger.info(f"[MEDICAL_PREPROCESSING] Applying {preprocessing_type} preprocessing with custom parameters")
+        
+        # Use custom pipeline if specified
+        if custom_pipeline:
+            logger.info(f"[MEDICAL_PREPROCESSING] Using custom pipeline: {custom_pipeline}")
+            processed_img = _apply_custom_preprocessing_pipeline(
+                img_np, custom_pipeline, preprocessing_params
+            )
+        # Apply medical preprocessing based on type with custom parameters
+        elif preprocessing_type == 'angiography':
+            processed_img = preprocess_angiography(
+                img_np, 
+                clahe_clip_limit=clahe_clip_limit,
+                enhance_vessels=use_frangi,
+                vessel_sigma=vessel_enhancement_sigma
+            )
+        elif preprocessing_type == 'ct_coronary':
+            processed_img = preprocess_ct_coronary(
+                img_np,
+                clahe_clip_limit=clahe_clip_limit,
+                use_denoising=use_denoising
+            )
+        elif preprocessing_type == 'oct_coronary':
+            processed_img = preprocess_oct_coronary(
+                img_np,
+                enhance_contrast=clahe_clip_limit > 0,
+                denoise=use_denoising
+            )
+        else:
+            # Use general preprocessing with custom parameters
+            logger.info(f"[MEDICAL_PREPROCESSING] Using general preprocessing with custom parameters")
+            processed_img = _apply_general_preprocessing(img_np, preprocessing_params)
+        
+        # Convert back to torch tensor
+        if isinstance(image_array, torch.Tensor):
+            return torch.from_numpy(processed_img).unsqueeze(0).to(device)
+        else:
+            return processed_img
+            
+    except Exception as e:
+        logger.warning(f"[MEDICAL_PREPROCESSING] Failed to apply preprocessing: {e}")
+        return image_array
+
+def _apply_custom_preprocessing_pipeline(image, pipeline_str, params):
+    """Apply custom preprocessing pipeline based on string specification"""
+    steps = [step.strip() for step in pipeline_str.split(',') if step.strip()]
+    processed = image.copy()
+    
+    logger.info(f"[CUSTOM_PIPELINE] Applying steps: {steps}")
+    
+    # Create a preprocessor instance for method access
+    preprocessor = MedicalImagePreprocessor()
+    
+    for step in steps:
+        if step == 'clahe':
+            processed = preprocessor.enhance_contrast_clahe(
+                processed, 
+                clip_limit=params.get('clahe_clip_limit', 3.0),
+                tile_grid_size=(params.get('clahe_tile_size', 8), params.get('clahe_tile_size', 8))
+            )
+        elif step == 'unsharp':
+            processed = preprocessor.enhance_contrast_unsharp_mask(
+                processed,
+                radius=params.get('unsharp_radius', 1.0),
+                amount=params.get('unsharp_amount', 1.0)
+            )
+        elif step == 'frangi':
+            scale_range = params.get('frangi_scale_range', '1,10')
+            scale_min, scale_max = map(float, scale_range.split(','))
+            processed = preprocessor.enhance_vessels_frangi(
+                processed,
+                scale_range=(scale_min, scale_max),
+                scale_step=params.get('frangi_scale_step', 2.0)
+            )
+        elif step == 'denoise':
+            processed = preprocessor.denoise(
+                processed,
+                method='bilateral'  # Use bilateral filtering
+            )
+        elif step == 'histeq':
+            # Use OpenCV histogram equalization
+            import cv2
+            if len(processed.shape) == 2:
+                processed = cv2.equalizeHist((processed * 255).astype(np.uint8)).astype(np.float64) / 255.0
+            else:
+                logger.warning(f"[CUSTOM_PIPELINE] Histogram equalization skipped - unsupported shape: {processed.shape}")
+        elif step == 'gamma':
+            gamma = params.get('gamma_correction', 1.0)
+            if gamma != 1.0:
+                processed = np.power(processed, gamma)
+        elif step == 'normalize':
+            processed = preprocessor.normalize(processed)
+        else:
+            logger.warning(f"[CUSTOM_PIPELINE] Unknown preprocessing step: {step}")
+    
+    return processed
+
+def _apply_general_preprocessing(image, params):
+    """Apply general preprocessing with all available options"""
+    preprocessor = MedicalImagePreprocessor(
+        target_size=None,  # Keep original size, will be resized later by MONAI
+        normalize_method='percentile',
+        enhance_contrast=params.get('clahe_clip_limit', 3.0) > 0,
+        enhance_vessels=params.get('use_frangi', False),
+        clahe_clip_limit=params.get('clahe_clip_limit', 3.0),
+        clahe_tile_size=params.get('clahe_tile_size', 8),
+        use_unsharp_masking=params.get('use_unsharp_masking', False),
+        unsharp_radius=params.get('unsharp_radius', 1.0),
+        unsharp_amount=params.get('unsharp_amount', 1.0),
+        use_denoising=params.get('use_denoising', False),
+        noise_variance=params.get('noise_variance', 0.1),
+        gamma_correction=params.get('gamma_correction', 1.0)
+    )
+    result = preprocessor.preprocess(image)
+    return result['image']
+
 def get_monai_transforms(params, for_training=True, dataset_type=None):
-    """Get MONAI transforms with configurable augmentations"""
+    """Get MONAI transforms with configurable augmentations and optional medical preprocessing"""
     transforms = [
         LoadImaged(keys=["image", "label"]),
         EnsureChannelTransform(keys=["image", "label"]),  # Ensure channel dimension
@@ -587,10 +779,45 @@ def get_monai_transforms(params, for_training=True, dataset_type=None):
         Lambdad(keys=["image"], func=ensure_single_channel),
         # Convert labels/masks to single channel (grayscale) if they are RGB
         Lambdad(keys=["label"], func=ensure_single_channel),
+    ]
+    
+    # Add medical preprocessing if enabled and available
+    use_medical_preprocessing = params.get('use_medical_preprocessing', False)
+    if use_medical_preprocessing and MEDICAL_PREPROCESSING_AVAILABLE:
+        preprocessing_type = params.get('medical_preprocessing_type', 'angiography')
+        logger.info(f"[TRANSFORMS] Adding medical preprocessing ({preprocessing_type}) to pipeline")
+        
+        # Extract all preprocessing parameters
+        preprocessing_params = {
+            'clahe_clip_limit': params.get('preprocessing_clahe_clip_limit', 3.0),
+            'clahe_tile_size': params.get('preprocessing_clahe_tile_size', 8),
+            'use_unsharp_masking': params.get('preprocessing_use_unsharp_masking', False),
+            'unsharp_radius': params.get('preprocessing_unsharp_radius', 1.0),
+            'unsharp_amount': params.get('preprocessing_unsharp_amount', 1.0),
+            'use_frangi': params.get('preprocessing_use_frangi', False),
+            'frangi_scale_range': params.get('preprocessing_frangi_scale_range', '1,10'),
+            'frangi_scale_step': params.get('preprocessing_frangi_scale_step', 2.0),
+            'use_histogram_equalization': params.get('preprocessing_use_histogram_equalization', False),
+            'use_denoising': params.get('preprocessing_use_denoising', False),
+            'noise_variance': params.get('preprocessing_noise_variance', 0.1),
+            'intensity_range': params.get('preprocessing_intensity_range', 'auto'),
+            'gamma_correction': params.get('preprocessing_gamma_correction', 1.0),
+            'vessel_enhancement_sigma': params.get('preprocessing_vessel_enhancement_sigma', 1.0),
+            'custom_pipeline': params.get('preprocessing_custom_pipeline', '')
+        }
+        
+        # Create a wrapper function that captures the preprocessing type and parameters
+        def medical_preprocessing_wrapper(image_array):
+            return apply_medical_preprocessing(image_array, preprocessing_type, **preprocessing_params)
+        
+        transforms.append(Lambdad(keys=["image"], func=medical_preprocessing_wrapper))
+    
+    # Standard intensity scaling
+    transforms.extend([
         ScaleIntensityd(keys=["image"]),
         # Normalize labels to 0-1 range for binary masks
         ScaleIntensityd(keys=["label"], minv=0.0, maxv=1.0),
-    ]
+    ])
     
     if for_training:
         # Add training-specific augmentations
@@ -1015,15 +1242,40 @@ def save_sample_predictions(model, val_loader, device, epoch, model_dir=None, cl
                 filename = os.path.join(fallback_dir, f'predictions_epoch_{epoch+1:03d}.png')
             
             # Save with high quality and ensure file is written
-            plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white', edgecolor='none')
-            plt.close()
-            
-            # Verify file was created and has content
-            if os.path.exists(filename) and os.path.getsize(filename) > 1000:  # At least 1KB
-                logger.info(f"[PREDICTIONS] Successfully saved prediction samples to: {filename}")
-                return filename
-            else:
-                logger.error(f"[PREDICTIONS] Failed to create valid prediction file: {filename}")
+            try:
+                # Use PNG format explicitly and handle potential issues
+                plt.savefig(filename, format='png', dpi=150, bbox_inches='tight', 
+                           facecolor='white', edgecolor='none', pil_kwargs={'optimize': True})
+                plt.close('all')  # Close all figures to free memory
+                
+                # Wait a moment for file system to sync
+                import time
+                time.sleep(0.1)
+                
+                # Verify file was created and has content
+                if os.path.exists(filename) and os.path.getsize(filename) > 1000:  # At least 1KB
+                    # Additional verification - try to open the image
+                    try:
+                        from PIL import Image
+                        with Image.open(filename) as img:
+                            # Verify image can be loaded and has reasonable dimensions
+                            if img.size[0] > 0 and img.size[1] > 0:
+                                logger.info(f"[PREDICTIONS] Successfully saved prediction samples to: {filename} ({img.size[0]}x{img.size[1]})")
+                                return filename
+                            else:
+                                logger.error(f"[PREDICTIONS] Image has invalid dimensions: {img.size}")
+                                return None
+                    except Exception as img_verify_error:
+                        logger.warning(f"[PREDICTIONS] Could not verify image but file exists: {img_verify_error}")
+                        # File exists and has size, assume it's okay
+                        return filename
+                else:
+                    logger.error(f"[PREDICTIONS] Failed to create valid prediction file: {filename}")
+                    return None
+                    
+            except Exception as save_error:
+                logger.error(f"[PREDICTIONS] Error saving plot: {save_error}")
+                plt.close('all')
                 return None
                 
         except Exception as e:
@@ -1545,6 +1797,50 @@ def create_optimizer(model, args):
     logger.info(f"[OPTIMIZER] Created {type(optimizer).__name__} with parameters: {optimizer.defaults}")
     return optimizer
 
+def create_advanced_loss_function(loss_type, **kwargs):
+    """Create advanced loss function with enhanced error handling"""
+    logger.info(f"[LOSS] Creating advanced loss function: {loss_type}")
+    
+    # Try advanced losses first if available
+    if ADVANCED_LOSSES_AVAILABLE:
+        try:
+            loss_fn = create_advanced_loss(loss_type, **kwargs)
+            logger.info(f"[LOSS] Successfully created advanced loss: {loss_type}")
+            return loss_fn
+        except ValueError as e:
+            logger.warning(f"[LOSS] Advanced loss '{loss_type}' not found: {e}")
+        except Exception as e:
+            logger.error(f"[LOSS] Failed to create advanced loss '{loss_type}': {e}")
+    
+    # Try loss manager if available
+    if LOSS_MANAGER_AVAILABLE:
+        try:
+            loss_config = {'type': loss_type, **kwargs}
+            loss_fn = LossManager.create_loss_function(loss_config)
+            logger.info(f"[LOSS] Successfully created loss via LossManager: {loss_type}")
+            return loss_fn
+        except Exception as e:
+            logger.warning(f"[LOSS] LossManager failed for '{loss_type}': {e}")
+    
+    # Fallback to standard losses
+    logger.info(f"[LOSS] Falling back to standard loss functions")
+    
+    if loss_type.lower() in ['dice', 'dicelloss']:
+        return MonaiDiceLoss(sigmoid=True)
+    elif loss_type.lower() in ['bce', 'bceloss']:
+        return torch.nn.BCEWithLogitsLoss()
+    elif loss_type.lower() in ['mse', 'mseloss']:
+        return torch.nn.MSELoss()
+    elif loss_type.lower() in ['tversky', 'tversky_precision', 'tversky_recall']:
+        # Fallback Tversky implementation
+        logger.warning(f"[LOSS] Using fallback Dice loss instead of {loss_type}")
+        return MonaiDiceLoss(sigmoid=True)
+    elif loss_type.lower() in ['crossentropy', 'cross_entropy']:
+        return torch.nn.CrossEntropyLoss()
+    else:
+        logger.warning(f"[LOSS] Unknown loss type '{loss_type}', using Dice loss")
+        return MonaiDiceLoss(sigmoid=True)
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Train or run inference with MONAI U-Net model for coronary segmentation')
     parser.add_argument('--save-training-template', action='store_true', help='Save a training config template and exit')
@@ -1622,8 +1918,47 @@ def parse_args():
     
     # Enhanced Training parameters
     parser.add_argument('--loss-function', type=str, default='combined',
-                       choices=['bce', 'dice', 'combined', 'focal', 'focal_segmentation', 'balanced_segmentation', 'dice_focused', 'jaccard_based'],
+                       choices=['bce', 'dice', 'combined', 'focal', 'focal_segmentation', 'balanced_segmentation', 
+                               'dice_focused', 'jaccard_based', 'tversky_recall', 'tversky_precision', 
+                               'focal_advanced', 'combo_dice_bce_focal', 'boundary_aware', 'weighted_bce_adaptive',
+                               'tversky', 'combo_dice_bce', 'soft_dice', 'weighted_bce', 'boundary', 'stable_bce'],
                        help='Loss function type for training')
+    # Medical Preprocessing parameters
+    parser.add_argument('--use-medical-preprocessing', action='store_true',
+                       help='Enable advanced medical image preprocessing (CLAHE, unsharp masking, etc.)')
+    parser.add_argument('--medical-preprocessing-type', type=str, default='angiography',
+                       choices=['angiography', 'ct_coronary', 'oct_coronary', 'general'],
+                       help='Type of medical preprocessing to apply')
+    parser.add_argument('--preprocessing-clahe-clip-limit', type=float, default=3.0,
+                       help='CLAHE clip limit for contrast enhancement (1.0-8.0)')
+    parser.add_argument('--preprocessing-clahe-tile-size', type=int, default=8,
+                       help='CLAHE tile grid size (4-16)')
+    parser.add_argument('--preprocessing-use-unsharp-masking', action='store_true',
+                       help='Enable unsharp masking for edge enhancement')
+    parser.add_argument('--preprocessing-unsharp-radius', type=float, default=1.0,
+                       help='Unsharp masking radius (0.5-3.0)')
+    parser.add_argument('--preprocessing-unsharp-amount', type=float, default=1.0,
+                       help='Unsharp masking amount (0.5-2.0)')
+    parser.add_argument('--preprocessing-use-frangi', action='store_true',
+                       help='Enable Frangi vesselness filter for vessel enhancement')
+    parser.add_argument('--preprocessing-frangi-scale-range', type=str, default='1,10',
+                       help='Frangi scale range as min,max (e.g., "1,10")')
+    parser.add_argument('--preprocessing-frangi-scale-step', type=float, default=2.0,
+                       help='Frangi scale step size (1.0-3.0)')
+    parser.add_argument('--preprocessing-use-histogram-equalization', action='store_true',
+                       help='Enable histogram equalization for contrast improvement')
+    parser.add_argument('--preprocessing-use-denoising', action='store_true',
+                       help='Enable denoising filters')
+    parser.add_argument('--preprocessing-noise-variance', type=float, default=0.1,
+                       help='Denoising variance parameter (0.01-0.5)')
+    parser.add_argument('--preprocessing-intensity-range', type=str, default='auto',
+                       help='Intensity normalization range (auto, 0-1, 0-255, or min,max)')
+    parser.add_argument('--preprocessing-gamma-correction', type=float, default=1.0,
+                       help='Gamma correction value (0.5-2.0, 1.0=no correction)')
+    parser.add_argument('--preprocessing-vessel-enhancement-sigma', type=float, default=1.0,
+                       help='Vessel enhancement sigma parameter (0.5-3.0)')
+    parser.add_argument('--preprocessing-custom-pipeline', type=str, default='',
+                       help='Custom preprocessing pipeline (comma-separated: clahe,unsharp,frangi,denoise)')
     parser.add_argument('--use-loss-scheduling', action='store_true',
                        help='Enable dynamic loss weight scheduling during training')
     parser.add_argument('--loss-scheduler-type', type=str, default='adaptive',
@@ -2010,6 +2345,27 @@ def train_model(args):
     mlflow.log_param("random_scale", getattr(args, 'random_scale', False))
     mlflow.log_param("random_intensity", getattr(args, 'random_intensity', False))
     
+    # Log medical preprocessing parameters
+    mlflow.log_param("use_medical_preprocessing", getattr(args, 'use_medical_preprocessing', False))
+    if getattr(args, 'use_medical_preprocessing', False):
+        mlflow.log_param("medical_preprocessing_type", getattr(args, 'medical_preprocessing_type', 'angiography'))
+        mlflow.log_param("preprocessing_clahe_clip_limit", getattr(args, 'preprocessing_clahe_clip_limit', 3.0))
+        mlflow.log_param("preprocessing_clahe_tile_size", getattr(args, 'preprocessing_clahe_tile_size', 8))
+        mlflow.log_param("preprocessing_use_unsharp_masking", getattr(args, 'preprocessing_use_unsharp_masking', False))
+        mlflow.log_param("preprocessing_unsharp_radius", getattr(args, 'preprocessing_unsharp_radius', 1.0))
+        mlflow.log_param("preprocessing_unsharp_amount", getattr(args, 'preprocessing_unsharp_amount', 1.0))
+        mlflow.log_param("preprocessing_use_frangi", getattr(args, 'preprocessing_use_frangi', False))
+        mlflow.log_param("preprocessing_frangi_scale_range", getattr(args, 'preprocessing_frangi_scale_range', '1,10'))
+        mlflow.log_param("preprocessing_frangi_scale_step", getattr(args, 'preprocessing_frangi_scale_step', 2.0))
+        mlflow.log_param("preprocessing_use_histogram_equalization", getattr(args, 'preprocessing_use_histogram_equalization', False))
+        mlflow.log_param("preprocessing_use_denoising", getattr(args, 'preprocessing_use_denoising', False))
+        mlflow.log_param("preprocessing_noise_variance", getattr(args, 'preprocessing_noise_variance', 0.1))
+        mlflow.log_param("preprocessing_intensity_range", getattr(args, 'preprocessing_intensity_range', 'auto'))
+        mlflow.log_param("preprocessing_gamma_correction", getattr(args, 'preprocessing_gamma_correction', 1.0))
+        mlflow.log_param("preprocessing_vessel_enhancement_sigma", getattr(args, 'preprocessing_vessel_enhancement_sigma', 1.0))
+        if getattr(args, 'preprocessing_custom_pipeline', ''):
+            mlflow.log_param("preprocessing_custom_pipeline", getattr(args, 'preprocessing_custom_pipeline', ''))
+    
     # Set MLflow tags for better organization
     mlflow.set_tag("model_family", args.model_family)
     mlflow.set_tag("architecture", args.model_type)
@@ -2053,13 +2409,31 @@ def train_model(args):
             logger.error(f"[DATASET] Data path does not exist: {args.data_path}")
             raise FileNotFoundError(f"Dataset path not found: {args.data_path}")
 
-        # Get transforms with augmentation parameters
+        # Get transforms with augmentation and preprocessing parameters
         transform_params = {
             'use_random_flip': getattr(args, 'random_flip', True),
             'use_random_rotate': getattr(args, 'random_rotate', True),
             'use_random_scale': getattr(args, 'random_scale', True),
             'use_random_intensity': getattr(args, 'random_intensity', True),
-            'crop_size': getattr(args, 'crop_size', 128)
+            'crop_size': getattr(args, 'crop_size', 128),
+            'use_medical_preprocessing': getattr(args, 'use_medical_preprocessing', False),
+            'medical_preprocessing_type': getattr(args, 'medical_preprocessing_type', 'angiography'),
+            # Add all detailed preprocessing parameters
+            'preprocessing_clahe_clip_limit': getattr(args, 'preprocessing_clahe_clip_limit', 3.0),
+            'preprocessing_clahe_tile_size': getattr(args, 'preprocessing_clahe_tile_size', 8),
+            'preprocessing_use_unsharp_masking': getattr(args, 'preprocessing_use_unsharp_masking', False),
+            'preprocessing_unsharp_radius': getattr(args, 'preprocessing_unsharp_radius', 1.0),
+            'preprocessing_unsharp_amount': getattr(args, 'preprocessing_unsharp_amount', 1.0),
+            'preprocessing_use_frangi': getattr(args, 'preprocessing_use_frangi', False),
+            'preprocessing_frangi_scale_range': getattr(args, 'preprocessing_frangi_scale_range', '1,10'),
+            'preprocessing_frangi_scale_step': getattr(args, 'preprocessing_frangi_scale_step', 2.0),
+            'preprocessing_use_histogram_equalization': getattr(args, 'preprocessing_use_histogram_equalization', False),
+            'preprocessing_use_denoising': getattr(args, 'preprocessing_use_denoising', False),
+            'preprocessing_noise_variance': getattr(args, 'preprocessing_noise_variance', 0.1),
+            'preprocessing_intensity_range': getattr(args, 'preprocessing_intensity_range', 'auto'),
+            'preprocessing_gamma_correction': getattr(args, 'preprocessing_gamma_correction', 1.0),
+            'preprocessing_vessel_enhancement_sigma': getattr(args, 'preprocessing_vessel_enhancement_sigma', 1.0),
+            'preprocessing_custom_pipeline': getattr(args, 'preprocessing_custom_pipeline', '')
         }
         
         logger.info("[DATASET] Loading datasets with auto-detection...")
@@ -2401,76 +2775,87 @@ def train_model(args):
 
         # Configure loss function based on detected class information and args
         logger.info(f"[LOSS CONFIG] Received loss function argument: {args.loss_function}")
-        if ENHANCED_UTILS_AVAILABLE:
-            logger.info(f"[LOSS CONFIG] Using enhanced loss configuration")
-            
-            # Determine loss type based on task and arguments
-            if class_info and class_info.get('task_type') == 'artery_classification':
-                # Classification task
-                logger.info(f"[LOSS CONFIG] Using classification loss for artery classification")
-                loss_function = create_loss_function('crossentropy')
-            elif args.loss_function == 'combined':
-                # Mixed Dice + BCE loss (combined mode)
-                logger.info(f"[LOSS CONFIG] Using mixed loss: {args.dice_weight:.1%} Dice + {args.bce_weight:.1%} BCE")
-                loss_function = create_loss_function(
-                    'mixed',
-                    dice_weight=args.dice_weight,
-                    bce_weight=args.bce_weight,
-                    smooth=args.loss_smooth
-                )
-            elif args.loss_function == 'dice':
-                # Pure Dice loss
-                logger.info(f"[LOSS CONFIG] Using Dice loss")
-                if class_info and class_info['class_type'] == 'semantic_onehot' and class_info['max_channels'] > 1:
-                    logger.info(f"[LOSS CONFIG] Using multi-class Dice loss for {class_info['max_channels']} classes")
-                    loss_function = create_loss_function('dice', sigmoid=False, softmax=True)
-                else:
-                    loss_function = create_loss_function('dice', sigmoid=True, smooth=args.loss_smooth)
-                    logger.info(f"[LOSS CONFIG] Using binary Dice loss")
-            elif args.loss_function == 'bce':
-                # Pure BCE loss
-                logger.info(f"[LOSS CONFIG] Using Binary Cross Entropy loss")
-                loss_function = create_loss_function('bce')
-            elif args.loss_function == 'focal':
-                # Focal loss
-                logger.info(f"[LOSS CONFIG] Using Focal loss")
-                loss_function = create_loss_function('focal')
-            elif args.loss_function == 'focal_segmentation':
-                # Focal segmentation (Dice + Focal BCE)
-                logger.info(f"[LOSS CONFIG] Using Focal Segmentation loss")
-                loss_function = create_loss_function('focal_segmentation')
-            elif args.loss_function == 'balanced_segmentation':
-                # Balanced segmentation
-                logger.info(f"[LOSS CONFIG] Using Balanced Segmentation loss")
-                loss_function = create_loss_function('balanced_segmentation')
-            elif args.loss_function == 'dice_focused':
-                # Dice focused
-                logger.info(f"[LOSS CONFIG] Using Dice Focused loss")
-                loss_function = create_loss_function('dice_focused')
-            elif args.loss_function == 'jaccard_based':
-                # Jaccard based
-                logger.info(f"[LOSS CONFIG] Using Jaccard Based loss")
-                loss_function = create_loss_function('jaccard_based')
+        
+        # Use our new advanced loss function creation with fallback support
+        logger.info(f"[LOSS CONFIG] Using advanced loss configuration with fallback")
+        
+        # Determine loss parameters based on task and arguments
+        loss_kwargs = {}
+        
+        if class_info and class_info.get('task_type') == 'artery_classification':
+            # Classification task
+            logger.info(f"[LOSS CONFIG] Using classification loss for artery classification")
+            loss_function = create_advanced_loss_function('crossentropy', **loss_kwargs)
+        elif args.loss_function == 'combined':
+            # Mixed Dice + BCE loss (combined mode)
+            logger.info(f"[LOSS CONFIG] Using mixed loss: {getattr(args, 'dice_weight', 0.5):.1%} Dice + {getattr(args, 'bce_weight', 0.5):.1%} BCE")
+            loss_kwargs.update({
+                'dice_weight': getattr(args, 'dice_weight', 0.5),
+                'bce_weight': getattr(args, 'bce_weight', 0.5),
+                'smooth': getattr(args, 'loss_smooth', 1e-5)
+            })
+            loss_function = create_advanced_loss_function('combo_dice_bce', **loss_kwargs)
+        elif args.loss_function == 'dice':
+            # Pure Dice loss
+            logger.info(f"[LOSS CONFIG] Using Dice loss")
+            if class_info and class_info['class_type'] == 'semantic_onehot' and class_info['max_channels'] > 1:
+                logger.info(f"[LOSS CONFIG] Using multi-class Dice loss for {class_info['max_channels']} classes")
+                loss_kwargs.update({'sigmoid': False, 'softmax': True})
             else:
-                # Default to dice loss for single selection
-                logger.info(f"[LOSS CONFIG] Using default Dice loss")
-                loss_function = create_loss_function('dice', sigmoid=True, smooth=args.loss_smooth)
+                loss_kwargs.update({'sigmoid': True, 'smooth': getattr(args, 'loss_smooth', 1e-5)})
+                logger.info(f"[LOSS CONFIG] Using binary Dice loss")
+            loss_function = create_advanced_loss_function('dice', **loss_kwargs)
+        elif args.loss_function == 'tversky':
+            # Tversky loss with balanced alpha/beta
+            logger.info(f"[LOSS CONFIG] Using Tversky loss (balanced)")
+            loss_kwargs.update({'alpha': 0.5, 'beta': 0.5})
+            loss_function = create_advanced_loss_function('tversky', **loss_kwargs)
+        elif args.loss_function == 'tversky_recall':
+            # Tversky loss optimized for recall (missing fewer arteries)
+            logger.info(f"[LOSS CONFIG] Using Tversky loss (recall-focused)")
+            loss_kwargs.update({'alpha': 0.3, 'beta': 0.7})  # Emphasize recall
+            loss_function = create_advanced_loss_function('tversky', **loss_kwargs)
+        elif args.loss_function == 'tversky_precision':
+            # Tversky loss optimized for precision (cleaner segmentations)
+            logger.info(f"[LOSS CONFIG] Using Tversky loss (precision-focused)")
+            loss_kwargs.update({'alpha': 0.7, 'beta': 0.3})  # Emphasize precision
+            loss_function = create_advanced_loss_function('tversky', **loss_kwargs)
+        elif args.loss_function == 'focal':
+            # Focal loss
+            logger.info(f"[LOSS CONFIG] Using Focal loss")
+            loss_kwargs.update({'alpha': 0.25, 'gamma': 2.0})
+            loss_function = create_advanced_loss_function('focal', **loss_kwargs)
+        elif args.loss_function == 'combo_dice_bce':
+            # Combined Dice + BCE loss
+            logger.info(f"[LOSS CONFIG] Using Combined Dice + BCE loss")
+            loss_kwargs.update({'dice_weight': 0.5, 'bce_weight': 0.5})
+            loss_function = create_advanced_loss_function('combo_dice_bce', **loss_kwargs)
+        elif args.loss_function == 'soft_dice':
+            # Soft Dice loss
+            logger.info(f"[LOSS CONFIG] Using Soft Dice loss")
+            loss_kwargs.update({'smooth': getattr(args, 'loss_smooth', 1e-5)})
+            loss_function = create_advanced_loss_function('soft_dice', **loss_kwargs)
+        elif args.loss_function == 'weighted_bce':
+            # Weighted BCE loss
+            logger.info(f"[LOSS CONFIG] Using Weighted BCE loss")
+            loss_function = create_advanced_loss_function('weighted_bce', **loss_kwargs)
+        elif args.loss_function == 'boundary':
+            # Boundary loss
+            logger.info(f"[LOSS CONFIG] Using Boundary loss")
+            loss_function = create_advanced_loss_function('boundary', **loss_kwargs)
+        elif args.loss_function == 'stable_bce':
+            # Stable BCE loss
+            logger.info(f"[LOSS CONFIG] Using Stable BCE loss")
+            loss_function = create_advanced_loss_function('stable_bce', **loss_kwargs)
+        elif args.loss_function == 'bce':
+            # Pure BCE loss
+            logger.info(f"[LOSS CONFIG] Using Binary Cross Entropy loss")
+            loss_function = create_advanced_loss_function('bce', **loss_kwargs)
         else:
-            # Fallback to original configuration if enhanced utils not available
-            logger.info(f"[LOSS CONFIG] Using standard loss configuration (enhanced utils not available)")
-            
-            if class_info and class_info.get('task_type') == 'artery_classification':
-                # Classification task (ARCADEArteryClassification)
-                logger.info(f"[LOSS CONFIG] Using classification loss for artery classification (2 classes)")
-                loss_function = torch.nn.CrossEntropyLoss()
-            elif class_info and class_info['class_type'] == 'semantic_onehot' and class_info['max_channels'] > 1:
-                # Multi-class semantic segmentation with one-hot encoding
-                logger.info(f"[LOSS CONFIG] Using multi-class loss for {class_info['max_channels']} classes")
-                loss_function = MonaiDiceLoss(sigmoid=False, softmax=True)  # Use softmax for multi-class
-            else:
-                # Binary segmentation (default)
-                logger.info(f"[LOSS CONFIG] Using binary segmentation loss")
-                loss_function = MonaiDiceLoss(sigmoid=True)
+            # Default to dice loss for unknown selection
+            logger.info(f"[LOSS CONFIG] Using default Dice loss (unknown loss function: {args.loss_function})")
+            loss_kwargs.update({'sigmoid': True, 'smooth': getattr(args, 'loss_smooth', 1e-5)})
+            loss_function = create_advanced_loss_function('dice', **loss_kwargs)
         
         # Create optimizer based on args.optimizer choice
         optimizer = create_optimizer(model, args)
@@ -2538,15 +2923,9 @@ def train_model(args):
             if callback and not callback.on_epoch_start(epoch, args.epochs):
                 logger.info("Stop requested via callback. Exiting training loop.")
                 break
-            elif hasattr(args, 'model_id') and args.model_id is not None and callback is None:
-                # Fallback for stop checking if callback is not available
+            elif hasattr(args, 'model_id') and args.model_id is not None and callback is None and DJANGO_AVAILABLE:
+                # Fallback for stop checking if callback is not available and Django is available
                 try:
-                    import django
-                    import os as _os
-                    # Setup Django if not already
-                    if not hasattr(django.conf.settings, 'configured') or not django.conf.settings.configured:
-                        _os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.config.settings.development')
-                        django.setup()
                     from ml_manager.models import MLModel
                     model_obj = MLModel.objects.get(pk=args.model_id)
                     if getattr(model_obj, 'stop_requested', False):

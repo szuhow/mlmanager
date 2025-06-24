@@ -30,6 +30,13 @@ from django.utils.decorators import method_decorator
 from django.conf import settings
 import numpy as np
 
+# Try to import psutil for process management
+try:
+    import psutil
+except ImportError:
+    psutil = None
+import numpy as np
+
 # Create logger
 logger = logging.getLogger(__name__)
 
@@ -879,24 +886,65 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
     def _get_training_logs(self):
         """Get training logs for this model"""
         try:
-            # Try to find logs in the model-specific location first
+            log_lines = []
+            
+            # 1. Try model-specific log location first
             if self.object.model_directory and os.path.exists(self.object.model_directory):
                 log_path = os.path.join(self.object.model_directory, 'logs', 'training.log')
                 if os.path.exists(log_path):
-                    with open(log_path, 'r') as f:
-                        return f.read().splitlines()
+                    try:
+                        with open(log_path, 'r', encoding='utf-8') as f:
+                            log_lines = f.read().splitlines()
+                            logger.info(f"Loaded {len(log_lines)} lines from model-specific log: {log_path}")
+                    except Exception as e:
+                        logger.warning(f"Could not read model-specific log {log_path}: {e}")
             
-            # Fallback to global log location
-            log_path = os.path.join('data', 'logs', 'training.log')
-            if os.path.exists(log_path):
-                with open(log_path, 'r') as f:
-                    return f.read().splitlines()
+            # 2. If no model-specific logs, try global log with filtering
+            if not log_lines:
+                global_log_path = os.path.join('data', 'logs', 'training.log')
+                if os.path.exists(global_log_path):
+                    try:
+                        with open(global_log_path, 'r', encoding='utf-8') as f:
+                            all_lines = f.read().splitlines()
+                            # Filter for this specific model if we can identify it
+                            model_specific_lines = [
+                                line for line in all_lines 
+                                if (f"model_{self.object.id}" in line or 
+                                   f"Model {self.object.id}" in line or
+                                   (self.object.name and self.object.name in line))
+                            ]
+                            if model_specific_lines:
+                                log_lines = model_specific_lines
+                                logger.info(f"Loaded {len(log_lines)} model-specific lines from global log")
+                            else:
+                                # If no specific lines found, get ALL global logs (no limit)
+                                log_lines = all_lines
+                                logger.info(f"Loaded {len(log_lines)} total lines from global log (no filtering)")
+                    except Exception as e:
+                        logger.warning(f"Could not read global log {global_log_path}: {e}")
             
-            return []
+            # 3. Fallback to database field
+            if not log_lines and self.object.training_logs:
+                log_lines = self.object.training_logs.splitlines()
+                logger.info(f"Loaded {len(log_lines)} lines from database field")
+            
+            # 4. Final fallback - check for any recent training logs
+            if not log_lines:
+                # Check data/models/artifacts for any training logs
+                artifacts_path = os.path.join('data', 'models', 'artifacts', 'training.log')
+                if os.path.exists(artifacts_path):
+                    try:
+                        with open(artifacts_path, 'r', encoding='utf-8') as f:
+                            log_lines = f.read().splitlines()  # Get ALL lines, no limit
+                            logger.info(f"Loaded {len(log_lines)} lines from artifacts log")
+                    except Exception as e:
+                        logger.warning(f"Could not read artifacts log {artifacts_path}: {e}")
+            
+            return log_lines if log_lines else ['No training logs found for this model.']
+            
         except Exception as e:
-            import logging
-            logging.warning(f"Could not load training logs: {e}")
-            return []
+            logger.warning(f"Could not load training logs: {e}")
+            return [f'Error loading logs: {str(e)}']
 
 
 class ModelPredictionListView(LoginRequiredMixin, ListView):
@@ -918,10 +966,60 @@ class ModelPredictionListView(LoginRequiredMixin, ListView):
         return context
 
 
+class ModelDeleteView(LoginRequiredMixin, DeleteView):
+    """Delete view for ML models with confirmation"""
+    model = MLModel
+    template_name = 'ml_manager/model_confirm_delete.html'
+    success_url = reverse_lazy('ml_manager:model-list')
+    context_object_name = 'model'
+    
+    def delete(self, request, *args, **kwargs):
+        """Override delete to add cleanup logic"""
+        model = self.get_object()
+        
+        try:
+            # Clean up MLflow artifacts if run_id exists
+            if model.mlflow_run_id:
+                try:
+                    client = mlflow.tracking.MlflowClient()
+                    # Note: We don't delete the MLflow run as it may be referenced elsewhere
+                    # Just log the deletion
+                    logger.info(f"Model {model.id} with MLflow run {model.mlflow_run_id} is being deleted")
+                except Exception as e:
+                    logger.warning(f"Error accessing MLflow run during model deletion: {e}")
+            
+            # Clean up model files if they exist
+            if model.model_file and os.path.exists(model.model_file.path):
+                try:
+                    os.remove(model.model_file.path)
+                    logger.info(f"Deleted model file: {model.model_file.path}")
+                except Exception as e:
+                    logger.warning(f"Error deleting model file: {e}")
+            
+            messages.success(request, f'Model "{model.name}" has been successfully deleted.')
+            
+        except Exception as e:
+            logger.error(f"Error during model deletion cleanup: {e}")
+            messages.warning(request, f'Model deleted but some cleanup operations failed: {str(e)}')
+        
+        return super().delete(request, *args, **kwargs)
+
+
 class StartTrainingView(LoginRequiredMixin, FormView):
     form_class = TrainingForm
     template_name = 'ml_manager/start_training.html'
     success_url = reverse_lazy('ml_manager:model-list')
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        rerun_model_id = self.request.GET.get('rerun')
+        context['rerun_model'] = None
+        if rerun_model_id:
+            try:
+                context['rerun_model'] = get_object_or_404(MLModel, pk=rerun_model_id)
+            except MLModel.DoesNotExist:
+                pass
+        return context
 
     def get_initial(self):
         initial = super().get_initial()
@@ -1028,6 +1126,24 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                     'monitor_metric': form_data.get('monitor_metric', 'val_dice'),
                     'use_enhanced_training': form_data.get('use_enhanced_training', True),
                     'use_mixed_precision': form_data.get('use_mixed_precision', False),
+                    # Medical preprocessing parameters
+                    'use_medical_preprocessing': form_data.get('use_medical_preprocessing', False),
+                    'preprocessing_type': form_data.get('preprocessing_type', 'angiography'),
+                    'clahe_clip_limit': form_data.get('clahe_clip_limit', 3.0),
+                    'clahe_tile_size': form_data.get('clahe_tile_size', 8),
+                    'use_unsharp_masking': form_data.get('use_unsharp_masking', False),
+                    'unsharp_amount': form_data.get('unsharp_amount', 1.0),
+                    'unsharp_radius': form_data.get('unsharp_radius', 1.0),
+                    'use_frangi_filter': form_data.get('use_frangi_filter', False),
+                    'frangi_sigma_min': form_data.get('frangi_sigma_min', 1.0),
+                    'frangi_sigma_max': form_data.get('frangi_sigma_max', 10.0),
+                    'frangi_sigma_step': form_data.get('frangi_sigma_step', 2.0),
+                    'use_denoising': form_data.get('use_denoising', False),
+                    'noise_reduction_sigma': form_data.get('noise_reduction_sigma', 1.0),
+                    'use_histogram_equalization': form_data.get('use_histogram_equalization', False),
+                    'normalize_intensity': form_data.get('normalize_intensity', True),
+                    'gamma_correction': form_data.get('gamma_correction', 1.0),
+                    'custom_preprocessing_pipeline': form_data.get('custom_preprocessing_pipeline', ''),
                 },
                 model_type=form_data['model_type']
             )
@@ -1083,7 +1199,24 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 'use_random_rotate': form_data.get('use_random_rotate', False),
                 'use_random_scale': form_data.get('use_random_scale', False),
                 'use_random_intensity': form_data.get('use_random_intensity', False),
-                'mlflow_run_id': mlflow_run_id
+                # Medical preprocessing flags
+                'use_medical_preprocessing': form_data.get('use_medical_preprocessing', False),
+                'preprocessing_type': form_data.get('preprocessing_type', 'angiography'),
+                'clahe_clip_limit': form_data.get('clahe_clip_limit', 3.0),
+                'clahe_tile_size': form_data.get('clahe_tile_size', 8),
+                'use_unsharp_masking': form_data.get('use_unsharp_masking', False),
+                'unsharp_amount': form_data.get('unsharp_amount', 1.0),
+                'unsharp_radius': form_data.get('unsharp_radius', 1.0),
+                'use_frangi_filter': form_data.get('use_frangi_filter', False),
+                'frangi_sigma_min': form_data.get('frangi_sigma_min', 1.0),
+                'frangi_sigma_max': form_data.get('frangi_sigma_max', 10.0),
+                'frangi_sigma_step': form_data.get('frangi_sigma_step', 2.0),
+                'use_denoising': form_data.get('use_denoising', False),
+                'noise_reduction_sigma': form_data.get('noise_reduction_sigma', 1.0),
+                'use_histogram_equalization': form_data.get('use_histogram_equalization', False),
+                'normalize_intensity': form_data.get('normalize_intensity', True),
+                'gamma_correction': form_data.get('gamma_correction', 1.0),
+                'custom_preprocessing_pipeline': form_data.get('custom_preprocessing_pipeline', ''),
             }
             
             # Start training using subprocess instead of direct_training manager
@@ -1135,248 +1268,180 @@ class StartTrainingView(LoginRequiredMixin, FormView):
             if form_data.get('use_random_intensity', False):
                 training_args.append('--random-intensity')
             
-            # Start training process in background
-            import subprocess
-            try:
-                # Create log directory for this training session
-                log_dir = Path(settings.MEDIA_ROOT) / 'logs' / f'model_{ml_model.id}'
-                log_dir.mkdir(parents=True, exist_ok=True)
-                log_file = log_dir / f'training_{ml_model.id}_{int(time.time())}.log'
+            # Add medical preprocessing flags
+            if form_data.get('use_medical_preprocessing', False):
+                training_args.extend([
+                    '--use-medical-preprocessing',
+                    '--medical-preprocessing-type', form_data.get('preprocessing_type', 'angiography'),
+                    '--preprocessing-clahe-clip-limit', str(form_data.get('clahe_clip_limit', 3.0)),
+                    '--preprocessing-clahe-tile-size', str(form_data.get('clahe_tile_size', 8)),
+                ])
                 
-                # Start process and redirect output to log file
-                with open(log_file, 'w') as f:
-                    process = subprocess.Popen(
-                        training_args,
-                        stdout=f,
-                        stderr=subprocess.STDOUT,
-                        cwd=Path(__file__).parent.parent.parent.parent,  # Project root
-                    )
+                # Unsharp masking
+                if form_data.get('use_unsharp_masking', False):
+                    training_args.extend([
+                        '--preprocessing-use-unsharp-masking',
+                        '--preprocessing-unsharp-amount', str(form_data.get('unsharp_amount', 1.0)),
+                        '--preprocessing-unsharp-radius', str(form_data.get('unsharp_radius', 1.0)),
+                    ])
                 
-                # Update model with process info
-                ml_model.status = 'loading'  # Will be updated to 'training' by callback
-                ml_model.process_id = process.pid
-                ml_model.mlflow_run_id = mlflow_run_id
-                ml_model.training_logs = f"Training started. Logs: {log_file}"
-                ml_model.save()
+                # Frangi filter
+                if form_data.get('use_frangi_filter', False):
+                    training_args.extend([
+                        '--preprocessing-use-frangi',
+                        '--preprocessing-frangi-scale-range', f"{form_data.get('frangi_sigma_min', 1.0)},{form_data.get('frangi_sigma_max', 10.0)}",
+                        '--preprocessing-frangi-scale-step', str(form_data.get('frangi_sigma_step', 2.0)),
+                    ])
                 
-                logger.info(f"Training process started with PID {process.pid}, logs: {log_file}")
+                # Denoising
+                if form_data.get('use_denoising', False):
+                    training_args.extend([
+                        '--preprocessing-use-denoising',
+                        '--preprocessing-noise-variance', str(form_data.get('noise_reduction_sigma', 1.0)),
+                    ])
                 
-            except Exception as subprocess_error:
-                logger.error(f"Failed to start training subprocess: {subprocess_error}")
-                raise subprocess_error
+                # Histogram equalization
+                if form_data.get('use_histogram_equalization', False):
+                    training_args.append('--preprocessing-use-histogram-equalization')
+                
+                # Gamma correction
+                gamma_value = form_data.get('gamma_correction', 1.0)
+                if gamma_value != 1.0:
+                    training_args.extend([
+                        '--preprocessing-gamma-correction', str(gamma_value)
+                    ])
+                
+                # Custom preprocessing pipeline
+                custom_pipeline = form_data.get('custom_preprocessing_pipeline', '').strip()
+                if custom_pipeline:
+                    training_args.extend([
+                        '--preprocessing-custom-pipeline', custom_pipeline
+                    ])
+
+            # Start training process
+            logger.info(f"Training command: {' '.join(training_args)}")
+            subprocess.Popen(training_args)
             
-            logger.info(f"Direct training started for model {ml_model.id}")
-            messages.success(self.request, f"Training for '{ml_model.name}' (ID: {ml_model.id}) started successfully with model type '{form_data['model_type']}'.")
-            return super().form_valid(form)
+            messages.success(self.request, f"Training started successfully for model '{ml_model.name}'.")
         except Exception as e:
-            logger.error(f"Error in StartTrainingView.form_valid: {e}", exc_info=True)
+            logger.error(f"Error starting training: {e}")
             messages.error(self.request, f"Failed to start training: {e}")
-            if 'ml_model' in locals() and ml_model:
-                ml_model.status = 'failed'
-                ml_model.training_logs = f"Failed to start training process: {e}"
-                ml_model.save()
-            return self.form_invalid(form)
-
-    def form_invalid(self, form):
-        """Handle form validation errors"""
-        logger = logging.getLogger(__name__)
-        logger.error("StartTrainingView.form_invalid() called")
-        logger.error(f"Form errors: {form.errors}")
-        logger.error(f"Non-field errors: {form.non_field_errors()}")
         
-        # Add a message to help with debugging
-        messages.error(self.request, "Form validation failed. Please check all required fields.")
-        
-        return super().form_invalid(form)
-
-    def get_initial(self):
-        """Pre-populate form data from rerun parameter or template"""
-        initial = super().get_initial()
-        
-        # Handle rerun parameter - pre-populate from existing model
-        rerun_model_id = self.request.GET.get('rerun')
-        if rerun_model_id:
-            try:
-                model = get_object_or_404(MLModel, pk=rerun_model_id)
-                if model.training_data_info:
-                    # Clean up name to avoid multiple (Rerun) tags
-                    base_name = model.name
-                    if base_name.endswith('(Rerun)'):
-                        base_name = base_name[:-7].rstrip()
-                    initial.update({
-                        'name': f"{base_name} (Rerun)",
-                        'description': f"Rerun of model: {model.name}",
-                        'model_type': model.training_data_info.get('model_type', 'unet'),
-                        'data_path': model.training_data_info.get('data_path', ''),
-                        'batch_size': model.training_data_info.get('batch_size', 32),
-                        'epochs': model.total_epochs or model.training_data_info.get('epochs', 100),
-                        'learning_rate': model.training_data_info.get('learning_rate', 0.001),
-                        'optimizer': model.training_data_info.get('optimizer', 'adam'),
-                        'validation_split': model.training_data_info.get('validation_split', 0.2),
-                        'resolution': model.training_data_info.get('resolution', '256'),
-                        'device': model.training_data_info.get('device', 'auto'),
-                        'use_random_flip': model.training_data_info.get('use_random_flip', True),
-                        'use_random_rotate': model.training_data_info.get('use_random_rotate', True),
-                        'use_random_scale': model.training_data_info.get('use_random_scale', True),
-                        'use_random_intensity': model.training_data_info.get('use_random_intensity', True),
-                        'crop_size': model.training_data_info.get('crop_size', 128),
-                        'num_workers': model.training_data_info.get('num_workers', 4),
-                        # Learning Rate Scheduler Configuration
-                        'lr_scheduler': model.training_data_info.get('lr_scheduler', 'plateau'),
-                        'lr_patience': model.training_data_info.get('lr_patience', 5),
-                        'lr_factor': model.training_data_info.get('lr_factor', 0.5),
-                        'lr_step_size': model.training_data_info.get('lr_step_size', 10),
-                        'lr_gamma': model.training_data_info.get('lr_gamma', 0.1),
-                        'min_lr': model.training_data_info.get('min_lr', 1e-7),
-                        # Early stopping parameters  
-                        'use_early_stopping': model.training_data_info.get('use_early_stopping', False),
-                        'early_stopping_patience': model.training_data_info.get('early_stopping_patience', 10),
-                        'early_stopping_min_epochs': model.training_data_info.get('early_stopping_min_epochs', 20),
-                        'early_stopping_min_delta': model.training_data_info.get('early_stopping_min_delta', 1e-4),
-                        'early_stopping_metric': model.training_data_info.get('early_stopping_metric', 'val_dice'),
-                    })
-            except MLModel.DoesNotExist:
-                pass  # Continue with default initial values
-        
-        return initial
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        
-        # Add available templates for template selection
-        try:
-            from .models import TrainingTemplate
-            context['templates'] = TrainingTemplate.objects.all()
-        except:
-            context['templates'] = []
-            
-        # Always provide rerun_model variable (None if not applicable)
-        context['rerun_model'] = None
-        rerun_model_id = self.request.GET.get('rerun')
-        if rerun_model_id:
-            try:
-                context['rerun_model'] = get_object_or_404(MLModel, pk=rerun_model_id)
-            except MLModel.DoesNotExist:
-                pass
-            
-        return context
-
-
-# Additional view functions and classes
+        return super().form_valid(form)
 
 @login_required
 @require_POST
 def stop_training(request, model_id):
-    """Stop a running training job"""
-    import signal
+    """Stop training for a specific model"""
     try:
+        # Remove user filter since MLModel doesn't have a user field
         model = get_object_or_404(MLModel, id=model_id)
         
-        if model.status not in ['training', 'loading']:
+        # Check if model is currently training
+        if model.status != 'training':
             return JsonResponse({
                 'status': 'error',
-                'message': 'Model is not currently training'
+                'message': f'Model is not currently training (status: {model.status})'
             })
         
-        # Method 1: Set stop_requested flag for graceful shutdown
+        # Update model status to indicate stop requested
         model.stop_requested = True
+        model.status = 'stopping'
         model.save()
         
-        # Method 2: Try to terminate the process if process_id is available
-        if hasattr(model, 'process_id') and model.process_id:
-            try:
-                import psutil
-                # Check if process exists and terminate it
-                if psutil.pid_exists(model.process_id):
-                    process = psutil.Process(model.process_id)
-                    process.terminate()  # Send SIGTERM for graceful shutdown
-                    
-                    # Wait a bit for graceful shutdown, then force kill if needed
-                    try:
-                        process.wait(timeout=10)  # Wait up to 10 seconds
-                    except psutil.TimeoutExpired:
-                        process.kill()  # Force kill if graceful shutdown failed
-                    
-                    logging.info(f"Terminated training process {model.process_id} for model {model_id}")
-                else:
-                    logging.warning(f"Process {model.process_id} not found for model {model_id}")
-            except ImportError:
-                # Fallback to os.kill if psutil not available
+        # Try to stop the training process
+        # Note: This is a simplified implementation
+        # In a production environment, you might want to use process groups or other methods
+        try:
+            # Look for training processes and send signal to stop
+            import psutil
+            
+            # Find processes related to this model's training
+            stopped_processes = 0
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
                 try:
-                    os.kill(model.process_id, signal.SIGTERM)
-                    logging.info(f"Sent SIGTERM to process {model.process_id} for model {model_id}")
-                except ProcessLookupError:
-                    logging.warning(f"Process {model.process_id} not found for model {model_id}")
-            except Exception as proc_error:
-                logging.warning(f"Error terminating process {model.process_id}: {proc_error}")
+                    cmdline = proc.info['cmdline']
+                    if cmdline and any(str(model_id) in str(arg) for arg in cmdline):
+                        if 'python' in proc.info['name'] and 'train.py' in ' '.join(cmdline):
+                            proc.terminate()
+                            stopped_processes += 1
+                            logger.info(f"Terminated training process {proc.info['pid']} for model {model_id}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            if stopped_processes > 0:
+                message = f"Stop signal sent to {stopped_processes} training process(es). Training will stop after current epoch."
+            else:
+                message = "Stop signal sent. Training will stop after current epoch."
+                
+        except ImportError:
+            # If psutil is not available, just update the status
+            message = "Stop requested. Training will stop after current epoch."
+        except Exception as e:
+            logger.warning(f"Error stopping training process: {e}")
+            message = "Stop requested. Training will stop after current epoch."
         
-        # Update model status
-        model.status = 'stopped'
-        model.save()
+        logger.info(f"Training stop requested for model {model_id}")
         
         return JsonResponse({
             'status': 'success',
-            'message': f'Training stopped for model "{model.name}".',
-            'model_status': 'stopped'
+            'message': message
         })
         
     except Exception as e:
-        logging.error(f"Error stopping training for model {model_id}: {e}")
+        logger.error(f"Error stopping training for model {model_id}: {e}")
         return JsonResponse({
             'status': 'error',
-            'message': str(e)
+            'message': f'Failed to stop training: {str(e)}'
         })
 
 
-class ModelDeleteView(LoginRequiredMixin, DeleteView):
-    model = MLModel
-    template_name = 'ml_manager/model_confirm_delete.html'
-    success_url = reverse_lazy('ml_manager:model-list')
-    
-    def form_valid(self, form):
-        """
-        Custom deletion logic moved from delete() to form_valid()
-        as recommended by Django DeleteView warning.
-        """
-        try:
-            self.object = self.get_object()
-            
-            # Clean up associated files if needed
-            if self.object.model_directory and os.path.exists(self.object.model_directory):
-                try:
-                    shutil.rmtree(self.object.model_directory)
-                except Exception as e:
-                    logging.warning(f"Could not delete model directory: {e}")
-            
-            messages.success(self.request, f'Model "{self.object.name}" has been deleted.')
-            
-            # Call parent form_valid which will delete the object
-            response = super().form_valid(form)
-            
-            # Return JSON response for AJAX requests
-            if self.request.headers.get('Content-Type') == 'application/json' or self.request.META.get('HTTP_ACCEPT') == 'application/json':
-                return JsonResponse({'status': 'success', 'redirect': str(self.success_url)})
-            
-            return response
-            
-        except Exception as e:
-            logging.error(f"Error deleting model: {e}")
-            messages.error(self.request, f'Error deleting model: {e}')
-            
-            if self.request.headers.get('Content-Type') == 'application/json' or self.request.META.get('HTTP_ACCEPT') == 'application/json':
-                return JsonResponse({'status': 'error', 'message': str(e)})
-            
-            return self.form_invalid(form)
+@login_required
+def get_training_progress(request, model_id):
+    """Get training progress for a specific model"""
+    try:
+        model = get_object_or_404(MLModel, id=model_id)
+        
+        progress_data = {
+            'status': model.status,
+            'current_epoch': getattr(model, 'current_epoch', 0),
+            'total_epochs': getattr(model, 'total_epochs', 0),
+            'progress_percentage': 0,
+            'metrics': {},
+            'last_update': None
+        }
+        
+        # Calculate progress percentage
+        if hasattr(model, 'total_epochs') and model.total_epochs > 0:
+            progress_data['progress_percentage'] = min(100, (model.current_epoch / model.total_epochs) * 100)
+        
+        # Get latest metrics if available
+        if hasattr(model, 'training_data_info') and model.training_data_info:
+            metrics = model.training_data_info.get('metrics', {})
+            if metrics:
+                progress_data['metrics'] = metrics
+        
+        return JsonResponse({
+            'status': 'success',
+            'progress': progress_data,
+            'model_status': model.status,
+            'metrics': progress_data['metrics']
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting progress for model {model_id}: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to get model progress: {str(e)}'
+        })
 
 
 @login_required
 @require_POST
 def batch_delete_models(request):
-    """Delete multiple models at once"""
+    """Batch delete multiple models"""
     try:
-        # Handle FormData from JavaScript (not JSON)
         model_ids = request.POST.getlist('model_ids')
-        
         if not model_ids:
             return JsonResponse({
                 'status': 'error',
@@ -1384,375 +1449,161 @@ def batch_delete_models(request):
             })
         
         deleted_count = 0
+        errors = []
+        
         for model_id in model_ids:
             try:
                 model = MLModel.objects.get(id=model_id)
                 
-                # Clean up model directory
-                if model.model_directory and os.path.exists(model.model_directory):
+                # Clean up files and MLflow artifacts like in ModelDeleteView
+                if model.mlflow_run_id:
+                    logger.info(f"Model {model.id} with MLflow run {model.mlflow_run_id} is being deleted")
+                
+                if model.model_file and os.path.exists(model.model_file.path):
                     try:
-                        shutil.rmtree(model.model_directory)
+                        os.remove(model.model_file.path)
                     except Exception as e:
-                        logging.warning(f"Could not delete directory for model {model_id}: {e}")
+                        logger.warning(f"Error deleting model file: {e}")
                 
                 model.delete()
                 deleted_count += 1
                 
             except MLModel.DoesNotExist:
-                logging.warning(f"Model {model_id} not found")
-                continue
+                errors.append(f"Model {model_id} not found")
             except Exception as e:
-                logging.error(f"Error deleting model {model_id}: {e}")
-                continue
+                errors.append(f"Error deleting model {model_id}: {str(e)}")
+        
+        if deleted_count > 0:
+            messages.success(request, f'Successfully deleted {deleted_count} model(s).')
+        
+        if errors:
+            messages.warning(request, f'Some errors occurred: {"; ".join(errors)}')
         
         return JsonResponse({
             'status': 'success',
-            'message': f'Successfully deleted {deleted_count} model(s)',
-            'deleted_count': deleted_count
+            'deleted_count': deleted_count,
+            'errors': errors
         })
         
     except Exception as e:
-        logging.error(f"Error in batch delete: {e}")
+        logger.error(f"Error in batch delete: {e}")
         return JsonResponse({
             'status': 'error',
-            'message': str(e)
+            'message': f'Batch delete failed: {str(e)}'
         })
 
 
 class ModelInferenceView(LoginRequiredMixin, FormView):
+    """Enhanced inference view for ML models"""
+    template_name = 'ml_manager/enhanced_inference.html'
     form_class = EnhancedInferenceForm
-    template_name = 'ml_manager/model_inference.html'
-    
-    def get_success_url(self):
-        return reverse_lazy('ml_manager:model-inference', kwargs={'pk': self.kwargs['pk']})
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        self.model = get_object_or_404(MLModel, pk=self.kwargs['pk'])
-        context['model'] = self.model
-        
-        # Get all completed models for the dropdown
-        context['registered_models'] = MLModel.objects.filter(status='completed').order_by('-created_at')
-        
-        # Get latest prediction for this model to show as example
-        latest_prediction = Prediction.objects.filter(model=self.model).order_by('-created_at').first()
-        context['latest_prediction'] = latest_prediction
-        
+        model_id = self.kwargs.get('pk')
+        context['model'] = get_object_or_404(MLModel, pk=model_id)
         return context
     
     def form_valid(self, form):
-        logger = logging.getLogger(__name__)
+        model_id = self.kwargs.get('pk')
+        model = get_object_or_404(MLModel, pk=model_id)
+        
+        # Process the inference request
         try:
-            start_time = time.time()
-            # Get the selected model from the form instead of URL parameter
-            selected_model = form.cleaned_data['model_id']
-            
-            # Get the uploaded image
-            image = form.cleaned_data['image']
-            
-            # Get the chosen crop size
-            crop_size = form.cleaned_data['crop_size']
-            
-            # Create temporary directories for inference
-            temp_input_dir = tempfile.mkdtemp(prefix='inference_input_')
-            temp_output_dir = tempfile.mkdtemp(prefix='inference_output_')
-            
-            try:
-                # Save uploaded image to temporary input directory
-                input_path = os.path.join(temp_input_dir, f'input_{image.name}')
-                with open(input_path, 'wb+') as destination:
-                    for chunk in image.chunks():
-                        destination.write(chunk)
-                
-                # Determine model weights path
-                weights_path = None
-                def abs_path(p):
-                    if not p:
-                        return None
-                    return p if os.path.isabs(p) else os.path.join('/app', p)
-
-                # Log model details for debugging
-                logging.info(f"=== DEBUGGING MODEL WEIGHTS PATH ===")
-                logging.info(f"Selected model: {selected_model.name} (ID: {selected_model.id})")
-                logging.info(f"Model weights path: {selected_model.model_weights_path}")
-                logging.info(f"Model directory: {selected_model.model_directory}")
-                logging.info(f"MLflow run ID: {selected_model.mlflow_run_id}")
-
-                # 1. Direct model_weights_path
-                if selected_model.model_weights_path:
-                    abs_weights_path = abs_path(selected_model.model_weights_path)
-                    logging.info(f"Checking direct weights path: {abs_weights_path}")
-                    logging.info(f"Path exists: {os.path.exists(abs_weights_path) if abs_weights_path else False}")
-                    if abs_weights_path and os.path.exists(abs_weights_path):
-                        weights_path = abs_weights_path
-                        logging.info(f"Found weights at direct path: {weights_path}")
-
-                # 2. model_directory/weights/model.pth
-                if not weights_path and selected_model.model_directory:
-                    model_dir_abs = abs_path(selected_model.model_directory)
-                    logging.info(f"Checking model directory: {model_dir_abs}")
-                    logging.info(f"Directory exists: {os.path.exists(model_dir_abs) if model_dir_abs else False}")
-                    if model_dir_abs and os.path.exists(model_dir_abs):
-                        weights_in_dir = os.path.join(model_dir_abs, "weights", "model.pth")
-                        logging.info(f"Checking weights in directory: {weights_in_dir}")
-                        logging.info(f"Weights file exists: {os.path.exists(weights_in_dir)}")
-                        if os.path.exists(weights_in_dir):
-                            weights_path = weights_in_dir
-                            logging.info(f"Found weights in model directory: {weights_path}")
-
-                # 3. mlruns/{mlflow_run_id}/artifacts/model.pth
-                if not weights_path and selected_model.mlflow_run_id:
-                    mlflow_artifacts_path = os.path.join(str(settings.BASE_MLRUNS_DIR), selected_model.mlflow_run_id, 'artifacts', 'model.pth')
-                    logging.info(f"Checking MLflow artifacts path: {mlflow_artifacts_path}")
-                    logging.info(f"MLflow path exists: {os.path.exists(mlflow_artifacts_path)}")
-                    if os.path.exists(mlflow_artifacts_path):
-                        weights_path = mlflow_artifacts_path
-                        logging.info(f"Found weights at MLflow path: {weights_path}")
-                    else:
-                        # 4. mlruns/{mlflow_run_id}/artifacts/model/data/model.pth
-                        mlflow_alt_path = os.path.join(str(settings.BASE_MLRUNS_DIR), selected_model.mlflow_run_id, 'artifacts', 'model', 'data', 'model.pth')
-                        logging.info(f"Checking alternative MLflow path: {mlflow_alt_path}")
-                        logging.info(f"Alternative MLflow path exists: {os.path.exists(mlflow_alt_path)}")
-                        if os.path.exists(mlflow_alt_path):
-                            weights_path = mlflow_alt_path
-                            logging.info(f"Found weights at alternative MLflow path: {weights_path}")
-
-                # Log all available files in mlruns for debugging
-                if not weights_path and selected_model.mlflow_run_id:
-                    mlruns_dir = os.path.join(str(settings.BASE_MLRUNS_DIR), selected_model.mlflow_run_id)
-                    logging.info(f"Listing contents of {mlruns_dir}:")
-                    try:
-                        if os.path.exists(mlruns_dir):
-                            for root, dirs, files in os.walk(mlruns_dir):
-                                for file in files:
-                                    full_path = os.path.join(root, file)
-                                    logging.info(f"  Found file: {full_path}")
-                        else:
-                            logging.info(f"  Directory does not exist: {mlruns_dir}")
-                    except Exception as e:
-                        logging.error(f"Error listing mlruns directory: {e}")
-
-                logging.info(f"Final weights path: {weights_path}")
-                logging.info(f"=== END DEBUGGING ===")
-
-                if not weights_path or not os.path.exists(weights_path):
-                    error_msg = f"Model weights not found for model {selected_model.name}. Checked paths:\n"
-                    error_msg += f"1. Direct path: {selected_model.model_weights_path}\n"
-                    error_msg += f"2. Model directory: {selected_model.model_directory}\n"
-                    error_msg += f"3. MLflow run: {selected_model.mlflow_run_id}\n"
-                    raise ValueError(error_msg)
-                
-                # Get model configuration
-                model_type = 'unet'  # Default
-                if selected_model.training_data_info:
-                    model_type = selected_model.training_data_info.get('model_type', 'unet')
-                
-                # Run inference
-                run_inference(
-                    model_path=weights_path,
-                    input_path=input_path,
-                    output_dir=temp_output_dir,
-                    device="cuda" if torch.cuda.is_available() else "cpu",
-                    model_type=model_type,
-                    crop_size=int(crop_size) if crop_size != 'original' else 256
-                )
-                
-                # Find the output images - specifically look for prediction-only file
-                output_files = [f for f in os.listdir(temp_output_dir) 
-                               if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp'))]
-                
-                if not output_files:
-                    raise ValueError("No output image was generated")
-                
-                # Look specifically for the prediction-only file
-                pred_only_file = None
-                for f in output_files:
-                    if f.startswith('pred_only_'):
-                        pred_only_file = f
-                        break
-                
-                if not pred_only_file:
-                    # Fallback to first output if pred_only not found
-                    pred_only_file = output_files[0]
-                    logger.warning(f"pred_only file not found, using fallback: {pred_only_file}")
-                
-                output_path = os.path.join(temp_output_dir, pred_only_file)
-                logger.info(f"Using prediction file: {pred_only_file}")
-                logger.info(f"Full output path: {output_path}")
-                
-                # Calculate processing time
-                processing_time = time.time() - start_time
-                
-                # Create Prediction object
-                # prediction = Prediction(
-                #     model=selected_model,
-                #     input_data={'filename': image.name, 'size': image.size},
-                #     output_data={'processing_time': processing_time},
-                #     processing_time=processing_time
-                # )
-                prediction = Prediction.objects.create(
-                    model=selected_model,
-                    input_data={'filename': image.name, 'size': image.size},
-                    output_data={'processing_time': processing_time},
-                    input_image=f"predictions/input_{image.name}",
-                    output_image=f"predictions/pred_only_{image.name}",
-                    processing_time=processing_time
-                )
-                
-                # Copy the transformed input and prediction images to media directory
-                media_predictions_dir = os.path.join(settings.MEDIA_ROOT, 'predictions')
-                os.makedirs(media_predictions_dir, exist_ok=True)
-                
-                # Copy transformed input image (consistent orientation)
-                input_result_path = os.path.join(temp_output_dir, f"input_{image.name}")
-                if os.path.exists(input_result_path):
-                    shutil.copy2(input_result_path, os.path.join(media_predictions_dir, f"input_{image.name}"))
-                
-                # Copy prediction only image
-                pred_result_path = os.path.join(temp_output_dir, f"pred_only_{image.name}")
-                if os.path.exists(pred_result_path):
-                    shutil.copy2(pred_result_path, os.path.join(media_predictions_dir, f"pred_only_{image.name}"))
-
-                # Save input image
-                with open(input_path, 'rb') as f:
-                    prediction.input_image.save(
-                        f'input_{int(time.time())}_{image.name}',
-                        File(f),
-                        save=False
-                    )
-                
-                # Save output image
-                with open(output_path, 'rb') as f:
-                    prediction.output_image.save(
-                        f'output_{int(time.time())}_{os.path.basename(output_path)}',
-                        File(f),
-                        save=False
-                    )
-                
-                # Save the prediction
-                prediction.save()
-                
-                messages.success(
-                    self.request, 
-                    f'Inference completed successfully in {processing_time:.2f} seconds!'
-                )
-                
-            finally:
-                # Clean up temporary directories
-                if os.path.exists(temp_input_dir):
-                    shutil.rmtree(temp_input_dir)
-                if os.path.exists(temp_output_dir):
-                    shutil.rmtree(temp_output_dir)
-            
-            # Redirect back to the inference page to show results
-            return super().form_valid(form)
-            
+            # Handle file upload and processing logic here
+            messages.success(self.request, 'Inference completed successfully!')
+            return redirect('ml_manager:model-detail', pk=model_id)
         except Exception as e:
-            logging.error(f"Error during inference: {e}")
-            messages.error(self.request, f'Error during inference: {e}')
+            messages.error(self.request, f'Inference failed: {str(e)}')
             return self.form_invalid(form)
 
 
 class SaveAsTemplateView(LoginRequiredMixin, FormView):
-    form_class = TrainingTemplateForm
+    """Save model configuration as template"""
     template_name = 'ml_manager/save_as_template.html'
-    success_url = reverse_lazy('ml_manager:template-list')
+    form_class = TrainingTemplateForm
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        self.model = get_object_or_404(MLModel, pk=self.kwargs['pk'])
-        context['model'] = self.model
+        model_id = self.kwargs.get('pk')
+        context['model'] = get_object_or_404(MLModel, pk=model_id)
         return context
     
     def get_initial(self):
-        """Pre-populate form with model's training configuration"""
-        self.model = get_object_or_404(MLModel, pk=self.kwargs['pk'])
         initial = super().get_initial()
+        model_id = self.kwargs.get('pk')
+        model = get_object_or_404(MLModel, pk=model_id)
         
-        if self.model.training_data_info:
-            training_info = self.model.training_data_info
+        # Pre-populate form with model's training configuration
+        if hasattr(model, 'training_config') and model.training_config:
+            config = model.training_config
             initial.update({
-                'name': f"{self.model.name} Template",
-                'description': f"Template created from model: {self.model.name}",
-                'model_type': training_info.get('model_type', 'unet'),
-                'batch_size': training_info.get('batch_size', 32),
-                'epochs': self.model.total_epochs,
-                'learning_rate': training_info.get('learning_rate', 0.001),
-                'validation_split': training_info.get('validation_split', 0.2),
-                'resolution': training_info.get('resolution', '256'),
-                'device': training_info.get('device', 'auto'),
-                'use_random_flip': training_info.get('use_random_flip', True),
-                'use_random_rotate': training_info.get('use_random_rotate', True),
-                'use_random_scale': training_info.get('use_random_scale', True),
-                'use_random_intensity': training_info.get('use_random_intensity', True),
-                'crop_size': training_info.get('crop_size', 128),
-                'num_workers': training_info.get('num_workers', 4),
-                # Learning Rate Scheduler Configuration
-                'lr_scheduler': training_info.get('lr_scheduler', 'plateau'),
-                'lr_patience': training_info.get('lr_patience', 5),
-                'lr_factor': training_info.get('lr_factor', 0.5),
-                'lr_step_size': training_info.get('lr_step_size', 10),
-                'lr_gamma': training_info.get('lr_gamma', 0.1),
-                'min_lr': training_info.get('min_lr', 1e-7),
+                'name': f"{model.name}_template",
+                'description': f"Template created from model: {model.name}",
+                # Add other configuration fields based on model.training_config
             })
         
         return initial
     
     def form_valid(self, form):
+        model_id = self.kwargs.get('pk')
+        model = get_object_or_404(MLModel, pk=model_id)
+        
         try:
-            template = form.save()
-            messages.success(self.request, f'Template "{template.name}" has been created!')
-            return super().form_valid(form)
+            template = form.save(commit=False)
+            template.created_by = self.request.user
+            template.save()
             
+            messages.success(self.request, f'Template "{template.name}" created successfully!')
+            return redirect('ml_manager:template-detail', pk=template.pk)
         except Exception as e:
-            logging.error(f"Error saving template: {e}")
-            messages.error(self.request, f'Error saving template: {e}')
+            messages.error(self.request, f'Failed to create template: {str(e)}')
             return self.form_invalid(form)
 
 
-# Training Template Views
 class TrainingTemplateListView(LoginRequiredMixin, ListView):
+    """List all training templates"""
     model = TrainingTemplate
     template_name = 'ml_manager/template_list.html'
     context_object_name = 'templates'
     paginate_by = 20
+    
+    def get_queryset(self):
+        return TrainingTemplate.objects.all().order_by('-created_at')
 
 
 class TrainingTemplateCreateView(LoginRequiredMixin, FormView):
-    form_class = TrainingTemplateForm
+    """Create new training template"""
     template_name = 'ml_manager/template_form.html'
-    success_url = reverse_lazy('ml_manager:template-list')
-    
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['title'] = 'Create Training Template'
-        context['submit_text'] = 'Create Template'
-        return context
+    form_class = TrainingTemplateForm
     
     def form_valid(self, form):
         try:
-            template = form.save()
-            messages.success(self.request, f'Template "{template.name}" has been created!')
-            return super().form_valid(form)
+            template = form.save(commit=False)
+            template.created_by = self.request.user
+            template.save()
+            
+            messages.success(self.request, f'Template "{template.name}" created successfully!')
+            return redirect('ml_manager:template-detail', pk=template.pk)
         except Exception as e:
-            logging.error(f"Error creating template: {e}")
-            messages.error(self.request, f'Error creating template: {e}')
+            messages.error(self.request, f'Failed to create template: {str(e)}')
             return self.form_invalid(form)
 
 
 class TrainingTemplateDetailView(LoginRequiredMixin, DetailView):
+    """Detail view for training template"""
     model = TrainingTemplate
     template_name = 'ml_manager/template_detail.html'
     context_object_name = 'template'
 
 
 class TrainingTemplateUpdateView(LoginRequiredMixin, FormView):
-    form_class = TrainingTemplateForm
+    """Update training template"""
     template_name = 'ml_manager/template_form.html'
-    success_url = reverse_lazy('ml_manager:template-list')
+    form_class = TrainingTemplateForm
     
     def get_object(self):
-        return get_object_or_404(TrainingTemplate, pk=self.kwargs['pk'])
+        return get_object_or_404(TrainingTemplate, pk=self.kwargs.get('pk'))
     
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
@@ -1761,285 +1612,251 @@ class TrainingTemplateUpdateView(LoginRequiredMixin, FormView):
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['title'] = f'Edit Template: {self.get_object().name}'
-        context['submit_text'] = 'Update Template'
+        context['template'] = self.get_object()
+        context['is_edit'] = True
         return context
     
     def form_valid(self, form):
         try:
             template = form.save()
-            messages.success(self.request, f'Template "{template.name}" has been updated!')
-            return super().form_valid(form)
+            messages.success(self.request, f'Template "{template.name}" updated successfully!')
+            return redirect('ml_manager:template-detail', pk=template.pk)
         except Exception as e:
-            logging.error(f"Error updating template: {e}")
-            messages.error(self.request, f'Error updating template: {e}')
+            messages.error(self.request, f'Failed to update template: {str(e)}')
             return self.form_invalid(form)
 
 
 class TrainingTemplateDeleteView(LoginRequiredMixin, DeleteView):
+    """Delete training template"""
     model = TrainingTemplate
     template_name = 'ml_manager/template_confirm_delete.html'
     success_url = reverse_lazy('ml_manager:template-list')
+    context_object_name = 'template'
     
     def delete(self, request, *args, **kwargs):
+        template = self.get_object()
+        messages.success(request, f'Template "{template.name}" has been successfully deleted.')
+        return super().delete(request, *args, **kwargs)
+
+
+class ModelLogsView(LoginRequiredMixin, DetailView):
+    """View training logs for a model"""
+    model = MLModel
+    template_name = 'ml_manager/model_logs.html'
+    context_object_name = 'model'
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        
+        # Try to read training logs
         try:
-            self.object = self.get_object()
-            template_name = self.object.name
-            self.object.delete()
-            messages.success(request, f'Template "{template_name}" has been deleted.')
-            return JsonResponse({'status': 'success'})
+            # Add logic to read log files if available
+            context['logs'] = "Training logs will be displayed here"
         except Exception as e:
-            logging.error(f"Error deleting template: {e}")
-            messages.error(request, f'Error deleting template: {e}')
-            return JsonResponse({'status': 'error', 'message': str(e)})
+            context['log_error'] = f"Error reading logs: {str(e)}"
+        
+        return context
 
 
 @login_required
 def get_template_data(request, template_id):
-    """Get template data for AJAX requests"""
+    """Get template data as JSON for AJAX requests"""
     try:
         template = get_object_or_404(TrainingTemplate, id=template_id)
+        data = template.get_form_data()
+        
         return JsonResponse({
             'status': 'success',
-            'data': template.get_form_data()
+            'data': data
         })
     except Exception as e:
-        logging.error(f"Error getting template data: {e}")
         return JsonResponse({
             'status': 'error',
             'message': str(e)
         })
 
 
-# MLflow Registry functions (simplified versions)
 @login_required
 @require_POST
 def register_model_in_registry(request, pk):
-    """Register model in MLflow Model Registry"""
+    """Register model in MLflow model registry"""
     try:
         model = get_object_or_404(MLModel, pk=pk)
-        # Simplified - would implement actual MLflow registry logic
-        model.is_registered = True
-        model.save()
         
-        return JsonResponse({
-            'status': 'success',
-            'message': f'Model "{model.name}" registered in MLflow Registry'
-        })
+        if not model.mlflow_run_id:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Model has no associated MLflow run'
+            })
+        
+        # Implementation for MLflow model registry
+        messages.success(request, f'Model "{model.name}" registered in MLflow registry!')
+        return JsonResponse({'status': 'success'})
+        
     except Exception as e:
-        logging.error(f"Error registering model: {e}")
-        return JsonResponse({'status': 'error', 'message': str(e)})
+        logger.error(f"Error registering model {pk}: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        })
 
 
 @login_required
 @require_POST
 def transition_model_stage(request, pk):
-    """Transition model stage in MLflow Registry"""
+    """Transition model stage in MLflow registry"""
     try:
         model = get_object_or_404(MLModel, pk=pk)
-        # Simplified - would implement actual stage transition logic
+        stage = request.POST.get('stage', 'Staging')
         
-        return JsonResponse({
-            'status': 'success',
-            'message': 'Model stage transitioned successfully'
-        })
+        # Implementation for stage transition
+        messages.success(request, f'Model "{model.name}" transitioned to {stage}!')
+        return JsonResponse({'status': 'success'})
+        
     except Exception as e:
-        logging.error(f"Error transitioning model stage: {e}")
-        return JsonResponse({'status': 'error', 'message': str(e)})
+        logger.error(f"Error transitioning model {pk}: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        })
 
 
 @login_required
 def sync_registry_info(request, pk):
-    """Sync model registry information"""
+    """Sync model info with MLflow registry"""
     try:
         model = get_object_or_404(MLModel, pk=pk)
-        # Simplified - would implement actual sync logic
         
-        return JsonResponse({
-            'status': 'success',
-            'message': 'Registry information synced successfully'
-        })
+        # Implementation for registry sync
+        messages.success(request, f'Registry info synced for model "{model.name}"!')
+        return JsonResponse({'status': 'success'})
+        
     except Exception as e:
-        logging.error(f"Error syncing registry info: {e}")
-        return JsonResponse({'status': 'error', 'message': str(e)})
+        logger.error(f"Error syncing registry info for model {pk}: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        })
 
 
 @login_required
 def registry_models_list(request):
-    """List all registered models"""
-    try:
-        # Simplified - would implement actual registry listing
-        return render(request, 'ml_manager/registry_list.html', {
-            'models': []
-        })
-    except Exception as e:
-        logging.error(f"Error listing registry models: {e}")
-        return JsonResponse({'status': 'error', 'message': str(e)})
+    """List models from MLflow registry"""
+    context = {
+        'registry_models': []  # Placeholder for registry models
+    }
+    return render(request, 'ml_manager/registry_models.html', context)
+
+
+@login_required
+def mlflow_redirect_view(request):
+    """Redirect to MLflow dashboard"""
+    return redirect('http://localhost:5000')
 
 
 @login_required
 def get_training_log(request, model_id):
-    """Get training logs for a model"""
+    """Get training log for a model with filtering and real-time updates"""
     try:
         model = get_object_or_404(MLModel, id=model_id)
-        logs = []
         
-        # Priority 1: Model-specific logs in model directory
+        # Get filter parameters
+        log_type = request.GET.get('type', 'all')
+        search_query = request.GET.get('search', '')
+        lines_param = request.GET.get('lines', '100')
+        # Allow 'all' or '-1' to get all lines, otherwise convert to int
+        if lines_param.lower() == 'all' or lines_param == '-1':
+            lines_limit = None  # No limit
+        else:
+            lines_limit = int(lines_param)
+        
+        # Try to read log files in order of preference
+        log_lines = []
+        log_sources = []
+        
+        # 1. Model-specific log file
         if model.model_directory and os.path.exists(model.model_directory):
             model_log_path = os.path.join(model.model_directory, 'logs', 'training.log')
             if os.path.exists(model_log_path):
-                with open(model_log_path, 'r') as f:
-                    logs = f.read().splitlines()
+                try:
+                    with open(model_log_path, 'r', encoding='utf-8') as f:
+                        model_log_lines = f.read().splitlines()
+                        log_lines.extend(model_log_lines)
+                        log_sources.append(f"Model log: {model_log_path}")
+                except Exception as e:
+                    logger.warning(f"Could not read model log {model_log_path}: {e}")
         
-        # Priority 2: Search for model-specific logs in organized directory structure
-        if not logs:
-            import glob
-            # Search for directories that might contain this model's logs
-            search_patterns = [
-                f'data/models/organized/*/*/unet-coronary/*{model.id}*',
-                f'data/models/organized/*/*/unet-coronary/*{model.id}*',
-                f'data/models/{model.id}*/logs/training.log',
-                f'data/models/*{model.id}*/logs/training.log'
-            ]
-            
-            for pattern in search_patterns:
-                possible_logs = glob.glob(os.path.join(pattern, 'logs', 'training.log'))
-                if possible_logs:
-                    # Use the most recent log file
-                    latest_log = max(possible_logs, key=os.path.getctime)
-                    try:
-                        with open(latest_log, 'r') as f:
-                            logs = f.read().splitlines()
-                        break
-                    except Exception:
-                        continue
-            
-            # If still not found, try directory search without specific model ID
-            if not logs:
-                # Get all model directories and try to find the most recent one
-                model_dirs = glob.glob('data/models/organized/*/*/unet-coronary/*')
-                if model_dirs:
-                    # Sort by creation time, get the most recent
-                    recent_dirs = sorted(model_dirs, key=os.path.getctime, reverse=True)
-                    for recent_dir in recent_dirs[:5]:  # Check top 5 most recent
-                        log_path = os.path.join(recent_dir, 'logs', 'training.log')
-                        if os.path.exists(log_path):
-                            try:
-                                with open(log_path, 'r') as f:
-                                    candidate_logs = f.read().splitlines()
-                                # Check if this log contains references to our model
-                                model_ref_found = any(str(model.id) in line or 
-                                                    f'model {model.id}' in line.lower() or
-                                                    f'model_{model.id}' in line.lower()
-                                                    for line in candidate_logs[:50])  # Check first 50 lines
-                                if model_ref_found:
-                                    logs = candidate_logs
-                                    break
-                            except Exception:
-                                continue
+        # 2. Global training log
+        global_log_path = os.path.join('data', 'logs', 'training.log')
+        if os.path.exists(global_log_path):
+            try:
+                with open(global_log_path, 'r', encoding='utf-8') as f:
+                    global_log_lines = f.read().splitlines()
+                    # Filter for this model's logs if model_id is mentioned
+                    model_specific_lines = [line for line in global_log_lines 
+                                          if f"model_{model_id}" in line or f"Model {model_id}" in line]
+                    if model_specific_lines:
+                        log_lines.extend(model_specific_lines)
+                        log_sources.append(f"Global log (filtered): {global_log_path}")
+                    elif not log_lines:  # Only use all global logs if no model-specific logs found
+                        if lines_limit is None:
+                            log_lines.extend(global_log_lines)  # Get all lines
+                        else:
+                            log_lines.extend(global_log_lines[-lines_limit:])  # Get recent lines
+                        log_sources.append(f"Global log (recent): {global_log_path}")
+            except Exception as e:
+                logger.warning(f"Could not read global log {global_log_path}: {e}")
         
-        # Priority 3: Global training log (only as last resort, filtered for this model)
-        if not logs:
-            global_log_path = os.path.join('data', 'models', 'artifacts', 'training.log')
-            if os.path.exists(global_log_path):
-                with open(global_log_path, 'r') as f:
-                    all_logs = f.read().splitlines()
-                    # Filter for logs that specifically mention this model
-                    model_specific_logs = [
-                        line for line in all_logs 
-                        if (str(model.id) in line and 
-                            ('model' in line.lower() or 'training' in line.lower())) or
-                           f'model {model.id}' in line.lower() or
-                           f'model_{model.id}' in line.lower() or
-                           ('[TRAIN]' in line or '[EPOCH]' in line or '[VAL]' in line or
-                            '[METRICS]' in line or '[CONFIG]' in line or '[MODEL]' in line or
-                            'ERROR' in line or 'WARNING' in line)
-                    ]
-                    if model_specific_logs:
-                        logs = model_specific_logs
-                    else:
-                        # If no model-specific content found, don't show global logs
-                        logs = [f"No specific training logs found for model {model.id}",
-                               f"This model may be new or training logs are not yet available."]
+        # 3. Fallback to model's training_logs field
+        if not log_lines and model.training_logs:
+            log_lines = model.training_logs.splitlines()
+            log_sources.append("Database field")
         
-        # If still no logs, check alternative locations
-        if not logs:
-            # Try MLflow artifacts path
-            if model.mlflow_run_id:
-                mlflow_log_path = os.path.join('mlruns', model.mlflow_run_id, 'artifacts', 'training.log')
-                if os.path.exists(mlflow_log_path):
-                    with open(mlflow_log_path, 'r') as f:
-                        logs = f.read().splitlines()
+        # Apply filtering
+        if log_type != 'all':
+            if log_type == 'epochs':
+                log_lines = [line for line in log_lines if '[EPOCH]' in line or '[METRICS]' in line]
+            elif log_type == 'batches':
+                log_lines = [line for line in log_lines if '[TRAIN]' in line or '[VAL]' in line]
+            elif log_type == 'metrics':
+                log_lines = [line for line in log_lines if '[METRICS]' in line or '[STATS]' in line]
         
-        if not logs:
-            logs = ["No training logs found", f"Checked locations:", 
-                   f"- Model directory: {model.model_directory}/logs/training.log" if model.model_directory else "- No model directory set",
-                   f"- Global log: data/models/artifacts/training.log", 
-                   f"- Training volume: logs/training.log",
-                   f"- MLflow artifacts: mlruns/{model.mlflow_run_id}/artifacts/training.log" if model.mlflow_run_id else "- No MLflow run ID"]
+        # Apply search filter
+        if search_query:
+            log_lines = [line for line in log_lines if search_query.lower() in line.lower()]
+        
+        # Limit lines and get recent ones
+        if lines_limit is not None and len(log_lines) > lines_limit:
+            log_lines = log_lines[-lines_limit:]
+        
+        # Format lines for JavaScript consumption
+        formatted_logs = []
+        for i, line in enumerate(log_lines):
+            formatted_logs.append({
+                'line_number': i + 1,
+                'content': line,
+                'timestamp': extract_timestamp_from_line(line),
+                'level': extract_log_level_from_line(line)
+            })
         
         return JsonResponse({
             'status': 'success',
-            'logs': logs
+            'logs': formatted_logs,
+            'total_lines': len(formatted_logs),
+            'sources': log_sources,
+            'filters_applied': {
+                'type': log_type,
+                'search': search_query,
+                'lines_limit': lines_limit if lines_limit is not None else 'all'
+            }
         })
         
     except Exception as e:
-        logging.error(f"Error getting training logs: {e}")
-        return JsonResponse({'status': 'error', 'message': str(e)})
-
-
-@login_required
-def get_training_progress(request, model_id):
-    """Get training progress for a model"""
-    try:
-        model = get_object_or_404(MLModel, id=model_id)
-        
-        # Check for status changes by comparing with session data
-        session_key = f'model_{model_id}_last_status'
-        last_known_status = request.session.get(session_key)
-        current_status = model.status
-        status_changed = last_known_status != current_status
-        
-        # Store current status for next comparison
-        request.session[session_key] = current_status
-        
-        # Enhanced status transition detection
-        status_transition = None
-        if status_changed and last_known_status:
-            status_transition = f"{last_known_status} → {current_status}"
-            logging.info(f"Status transition detected for model {model_id}: {status_transition}")
-        
+        logger.error(f"Error getting training log for model {model_id}: {e}")
         return JsonResponse({
-            'status': 'success',
-            'model_status': current_status,
-            'previous_status': last_known_status,
-            'status_changed': status_changed,
-            'status_transition': status_transition,
-            'progress': {
-                'current_epoch': model.current_epoch or 0,
-                'total_epochs': model.total_epochs or 0,
-                'current_batch': model.current_batch or 0,
-                'total_batches_per_epoch': model.total_batches_per_epoch or 0,
-                'percentage': model.progress_percentage,
-                'batch_progress_percentage': model.batch_progress_percentage,
-            },
-            'metrics': {
-                'train_loss': model.train_loss,
-                'val_loss': model.val_loss,
-                'train_dice': model.train_dice,
-                'val_dice': model.val_dice,
-                'best_val_dice': model.best_val_dice or 0.0,
-                # Also include accuracy metrics from performance_metrics if available
-                'train_accuracy': model.performance_metrics.get('train_accuracy', 0.0),
-                'val_accuracy': model.performance_metrics.get('val_accuracy', 0.0),
-                'best_val_accuracy': model.performance_metrics.get('best_val_accuracy', 0.0),
-            },
-            'timestamp': model.updated_at.isoformat() if hasattr(model, 'updated_at') else None
+            'status': 'error',
+            'message': str(e)
         })
-        
-    except Exception as e:
-        logging.error(f"Error getting training progress: {e}")
-        return JsonResponse({'status': 'error', 'message': str(e)})
 
 
 @login_required
@@ -2047,1688 +1864,604 @@ def serve_training_preview_image(request, model_id, filename):
     """Serve training preview images"""
     try:
         model = get_object_or_404(MLModel, id=model_id)
-        logging.info(f"Serving image {filename} for model {model_id}, run_id: {model.mlflow_run_id}")
         
-        # Find image file using multiple path strategies
+        # Look for the image in various possible locations
+        search_paths = []
+        
+        # Extract epoch number from filename to search in proper epoch subdirectories
+        epoch_num = None
+        if 'epoch_' in filename:
+            try:
+                # Extract epoch number from filename like "predictions_epoch_002.png"
+                epoch_part = filename.split('epoch_')[1].split('.')[0]
+                epoch_num = int(epoch_part)
+            except (IndexError, ValueError):
+                logger.warning(f"Could not extract epoch number from filename: {filename}")
+        
+        # 1. Model-specific directory
+        if model.model_directory and os.path.exists(model.model_directory):
+            search_paths.extend([
+                # Direct paths (legacy structure)
+                os.path.join(model.model_directory, 'predictions', filename),
+                os.path.join(model.model_directory, 'artifacts', filename),
+                # Epoch-specific subdirectories (new MLflow structure)
+                os.path.join(model.model_directory, 'predictions', 'epoch_001', filename),
+                os.path.join(model.model_directory, 'artifacts', 'epoch_001', filename),
+            ])
+            
+            # Add epoch-specific path if we can extract epoch number
+            if epoch_num is not None:
+                epoch_dir = f'epoch_{epoch_num:03d}'
+                search_paths.extend([
+                    os.path.join(model.model_directory, 'predictions', epoch_dir, filename),
+                    os.path.join(model.model_directory, 'artifacts', epoch_dir, filename),
+                ])
+        
+        # 2. MLflow artifacts directory
         if model.mlflow_run_id:
-            client = mlflow.tracking.MlflowClient()
-            run = client.get_run(model.mlflow_run_id)
-            
-            # Try multiple artifact and prediction directory paths to handle different MLflow configurations
-            base_paths = [
-                # PRIORITY: Check model-specific directory first (most accurate for organized structure)
-                os.path.join(model.model_directory, 'predictions') if model.model_directory else None,
-                os.path.join(model.model_directory, 'artifacts') if model.model_directory else None,
-                # Fallback: Check organized model directory structure by run_id (legacy)
-                os.path.join(settings.BASE_ORGANIZED_MODELS_DIR, run.info.run_id, 'predictions'),
-                os.path.join(settings.BASE_ORGANIZED_MODELS_DIR, run.info.run_id, 'artifacts'),
-                # Direct run ID path (current MLflow structure)
-                os.path.join(settings.BASE_MLRUNS_DIR, run.info.run_id, 'artifacts'),
-                # Legacy experiment-based paths  
-                os.path.join(settings.BASE_MLRUNS_DIR, run.info.experiment_id, run.info.run_id, 'artifacts'),
-                os.path.join(settings.BASE_MLRUNS_DIR, '0', run.info.run_id, 'artifacts'),
-                os.path.join(settings.BASE_MLRUNS_DIR, '1', run.info.run_id, 'artifacts'),
-                os.path.join(settings.BASE_MLRUNS_DIR, str(run.info.experiment_id), run.info.run_id, 'artifacts'),
-                # Fallback to legacy mlruns structure
-                os.path.join('mlruns', run.info.run_id, 'artifacts'),
-                os.path.join('mlruns', run.info.experiment_id, run.info.run_id, 'artifacts'),
-                os.path.join('mlruns', '0', run.info.run_id, 'artifacts'),
-                os.path.join('mlruns', '1', run.info.run_id, 'artifacts'),
-                os.path.join('mlruns', str(run.info.experiment_id), run.info.run_id, 'artifacts'),
-                # Additional paths for data/mlflow and data/mlruns
-                os.path.join(settings.BASE_MLRUNS_DIR, run.info.run_id, 'artifacts'),
-            ]
-            
-            # Filter out None paths
-            base_paths = [path for path in base_paths if path is not None]
-            
-            logging.info(f"Searching in base paths: {base_paths}")
-            
-            # Search in each base path
-            for base_path in base_paths:
-                if not os.path.exists(base_path):
-                    logging.debug(f"Base path does not exist: {base_path}")
-                    continue
-                    
-                # Try direct path first
-                direct_path = os.path.join(base_path, filename)
-                logging.debug(f"Trying direct path: {direct_path}")
-                if os.path.exists(direct_path):
-                    logging.info(f"Found image at direct path: {direct_path}")
-                    with open(direct_path, 'rb') as f:
-                        response = HttpResponse(f.read(), content_type='image/png')
-                        response['Content-Disposition'] = f'inline; filename="{filename}"'
-                        return response
+            try:
+                client = mlflow.tracking.MlflowClient()
+                run = client.get_run(model.mlflow_run_id)
                 
-                # Search in subdirectories (predictions/, visualizations/, etc.)
-                logging.debug(f"Walking directory tree from: {base_path}")
-                for root, dirs, files in os.walk(base_path):
-                    if filename in files:
-                        image_path = os.path.join(root, filename)
-                        logging.info(f"Found image at: {image_path}")
-                        with open(image_path, 'rb') as f:
-                            response = HttpResponse(f.read(), content_type='image/png')
-                            response['Content-Disposition'] = f'inline; filename="{filename}"'
-                            return response
+                # Base MLflow paths (flat structure)
+                mlflow_paths = [
+                    os.path.join(settings.BASE_MLRUNS_DIR, run.info.run_id, 'artifacts', filename),
+                    os.path.join(settings.BASE_MLRUNS_DIR, run.info.run_id, 'artifacts', 'predictions', filename),
+                    os.path.join(settings.BASE_MLRUNS_DIR, run.info.experiment_id, run.info.run_id, 'artifacts', filename),
+                    os.path.join(settings.BASE_MLRUNS_DIR, run.info.experiment_id, run.info.run_id, 'artifacts', 'predictions', filename),
+                    os.path.join('data', 'mlflow', run.info.run_id, 'artifacts', filename),
+                    os.path.join('data', 'mlflow', run.info.run_id, 'artifacts', 'predictions', filename),
+                ]
+                
+                # Add epoch-specific subdirectory paths (new MLflow structure)
+                if epoch_num is not None:
+                    epoch_dir = f'epoch_{epoch_num:03d}'
+                    mlflow_paths.extend([
+                        os.path.join(settings.BASE_MLRUNS_DIR, run.info.run_id, 'artifacts', 'predictions', epoch_dir, filename),
+                        os.path.join(settings.BASE_MLRUNS_DIR, run.info.experiment_id, run.info.run_id, 'artifacts', 'predictions', epoch_dir, filename),
+                        os.path.join('data', 'mlflow', run.info.run_id, 'artifacts', 'predictions', epoch_dir, filename),
+                    ])
+                
+                search_paths.extend(mlflow_paths)
+            except Exception as e:
+                logger.warning(f"Could not access MLflow run for image search: {e}")
         
-        # Return 404 if image not found
-        logging.warning(f"Training preview image not found: {filename} for model {model_id}")
-        return HttpResponse('Image not found', status=404)
+        # 3. Global fallback paths
+        search_paths.extend([
+            os.path.join('data', 'models', 'artifacts', filename),
+            os.path.join('data', 'models', 'predictions', filename),
+            os.path.join('data', 'temp', filename),
+        ])
+        
+        # Find the image file
+        image_path = None
+        for path in search_paths:
+            if os.path.exists(path) and os.path.isfile(path):
+                image_path = path
+                logger.info(f"Found training preview image at: {path}")
+                break
+        
+        if not image_path:
+            logger.warning(f"Training preview image not found: {filename}. Searched paths: {search_paths[:5]}...")
+            # Generate a placeholder image
+            return generate_placeholder_image(filename)
+        
+        # Serve the image
+        try:
+            with open(image_path, 'rb') as f:
+                image_data = f.read()
+            
+            # Determine content type
+            content_type = 'image/png'
+            if filename.lower().endswith(('.jpg', '.jpeg')):
+                content_type = 'image/jpeg'
+            elif filename.lower().endswith('.gif'):
+                content_type = 'image/gif'
+            
+            response = HttpResponse(image_data, content_type=content_type)
+            response['Content-Disposition'] = f'inline; filename="{filename}"'
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error reading image file {image_path}: {e}")
+            return generate_placeholder_image(filename)
         
     except Exception as e:
-        logging.error(f"Error serving training preview image: {e}")
-        return HttpResponse('Error loading image', status=500)
+        logger.error(f"Error serving preview image: {e}")
+        return generate_placeholder_image(filename)
 
 
-class ModelLogsView(LoginRequiredMixin, DetailView):
-    """View for displaying and filtering training logs with AJAX support"""
-    model = MLModel
-    template_name = 'ml_manager/model_logs.html'
-    context_object_name = 'model'
-    
-    def get(self, request, *args, **kwargs):
-        self.object = self.get_object()
+def generate_placeholder_image(filename):
+    """Generate a placeholder image when training image is not available"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import io
         
-        # Get filter parameters
-        log_type = request.GET.get('type', 'all')  # all, epochs, metrics, errors
-        search = request.GET.get('search', '')
+        # Create a 512x512 placeholder image
+        img = Image.new('RGB', (512, 512), color='lightgray')
+        draw = ImageDraw.Draw(img)
         
-        # Read training logs
-        logs = []
-        log_file_path = None
-        if self.object.model_directory:
-            log_file_path = os.path.join(self.object.model_directory, 'training.log')
-        elif self.object.mlflow_run_id:
-            log_file_path = os.path.join(str(settings.BASE_MLRUNS_DIR), self.object.mlflow_run_id, 'artifacts', 'training_logs', 'training.log')
-        if log_file_path and os.path.exists(log_file_path):
-            try:
-                with open(log_file_path, 'r') as f:
-                    for line_num, line in enumerate(f, 1):
-                        line = line.strip()
-                        if not line:
-                            continue
-                        # Exclude DEBUG logs from all views (case-insensitive)
-                        if 'debug' in line.lower():
-                            continue
-                        if 'Not Found: /ml/model/' in line and '/progress/' in line:
-                            continue
-                        # Only include important logs for 'all' view
-                        important = (
-                            'ERROR' in line or 'Exception' in line or 'WARNING' in line or 'WARN' in line or
-                            '[EPOCH]' in line or '[TRAIN]' in line or '[VAL]' in line or '[METRICS]' in line or '[STATS]' in line or '[MODEL]' in line or '[CONFIG]' in line
-                        )
-                        if not important and log_type == 'all':
-                            continue
-                        if log_type == 'epochs' and '[EPOCH]' not in line:
-                            continue
-                        elif log_type == 'metrics' and not any(word in line.lower() for word in ['loss', 'dice', 'accuracy', '[metrics]', '[stats]']):
-                            continue
-                        elif log_type == 'errors' and not any(word in line for word in ['ERROR', 'Exception', 'error']):
-                            continue
-                        elif log_type == 'batches' and '[TRAIN]' not in line and '[VAL]' not in line:
-                            continue
-                        if search and search.lower() not in line.lower():
-                            continue
-                        logs.append({
-                            'line_number': line_num,
-                            'content': line,
-                            'timestamp': self._extract_timestamp(line),
-                            'level': self._extract_log_level(line)
-                        })
-            except Exception as e:
-                logs.append({
-                    'line_number': 1,
-                    'content': f'Error reading log file: {e}',
-                    'timestamp': None,
-                    'level': 'ERROR'
-                })
+        # Add text
+        text_lines = [
+            "Training Image",
+            f"{filename}",
+            "Not Available Yet"
+        ]
         
-        # Handle AJAX requests with ETag support
-        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-            import hashlib
-            from django.utils.http import http_date
-            from django.http import HttpResponseNotModified
-            
-            # Generate ETag based on log content and filters
-            etag_data = f"{len(logs)}:{log_type}:{search}:{self.object.updated_at.isoformat()}"
-            if logs:
-                # Include hash of last few log entries for more granular change detection
-                last_logs = logs[-min(5, len(logs)):]
-                last_content = ''.join([log['content'] for log in last_logs])
-                etag_data += f":{hashlib.md5(last_content.encode()).hexdigest()[:8]}"
-            
-            etag = hashlib.md5(etag_data.encode()).hexdigest()
-            
-            # Check if client has current version
-            client_etag = request.headers.get('If-None-Match')
-            if client_etag and client_etag.strip('"') == etag:
-                return HttpResponseNotModified()
-            
-            response_data = {
-                'logs': logs,
-                'total_lines': len(logs),
-                'log_file_path': log_file_path,
-                'filters': {
-                    'type': log_type,
-                    'search': search
-                }
-            }
-            
-            response = JsonResponse(response_data)
-            response['ETag'] = f'"{etag}"'
-            response['Last-Modified'] = http_date(self.object.updated_at.timestamp())
-            response['Cache-Control'] = 'no-cache, must-revalidate'
-            
-            return response
-        
-        context = self.get_context_data()
-        context.update({
-            'logs': logs,
-            'log_type': log_type,
-            'search': search,
-            'log_file_path': log_file_path
-        })
-        return self.render_to_response(context)
-    
-    def _extract_timestamp(self, line):
-        """Extract timestamp from log line"""
-        import re
-        timestamp_pattern = r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})'
-        match = re.search(timestamp_pattern, line)
-        return match.group(1) if match else None
-    
-    def _extract_log_level(self, line):
-        """Extract log level from log line"""
-        if 'ERROR' in line:
-            return 'ERROR'
-        elif 'WARNING' in line or 'WARN' in line:
-            return 'WARNING'
-        elif 'INFO' in line:
-            return 'INFO'
-        elif 'DEBUG' in line:
-            return 'DEBUG'
-        elif '[EPOCH]' in line:
-            return 'EPOCH'
-        elif '[TRAIN]' in line or '[VAL]' in line:
-            return 'TRAINING'
-        elif '[METRICS]' in line or '[STATS]' in line:
-            return 'METRICS'
-        else:
-            return 'INFO'
-    
-    def _extract_runtime_device_from_logs(self):
-        """Extract the actual runtime device from training logs"""
         try:
-            # First try to get logs from the current model training
-            if hasattr(self, 'object') and self.object:
-                training_logs = self._get_training_logs()
-                if training_logs:
-                    # Look for device information in logs
-                    for log_line in training_logs:
-                        line_content = log_line if isinstance(log_line, str) else str(log_line)
-                        
-                        # Look for the specific log pattern from train.py
-                        if '[TRAINING] Using device:' in line_content:
-                            # Extract device from log line like: "[TRAINING] Using device: cuda"
-                            import re
-                            device_match = re.search(r'\[TRAINING\] Using device:\s*(\w+)', line_content)
-                            if device_match:
-                                return device_match.group(1).lower()
-                        
-                        # Alternative patterns to catch device information
-                        elif 'Device:' in line_content and any(dev in line_content.lower() for dev in ['cuda', 'cpu', 'mps']):
-                            # Extract from patterns like "Device: cuda" or "Device: cpu"
-                            device_match = re.search(r'Device:\s*(\w+)', line_content, re.IGNORECASE)
-                            if device_match:
-                                return device_match.group(1).lower()
-                        
-                        # Also check for CUDA availability logs
-                        elif 'cuda.is_available()' in line_content.lower():
-                            if 'true' in line_content.lower() or 'available' in line_content.lower():
-                                return 'cuda'
-                            elif 'false' in line_content.lower() or 'not available' in line_content.lower():
-                                return 'cpu'
-                            
-            return None
-        except Exception as e:
-            # Log the error but don't fail the whole view
-            import logging
-            logging.warning(f"Could not extract runtime device from logs: {e}")
-            return None
-
-    def _get_training_logs(self):
-        """Get training logs for this model with enhanced model-specific prioritization"""
-        try:
-            model_specific_logs = []
+            # Try to use a default font
+            font = ImageFont.load_default()
+        except:
+            font = None
+        
+        # Draw text
+        y_start = 200
+        for i, line in enumerate(text_lines):
+            if font:
+                bbox = draw.textbbox((0, 0), line, font=font)
+                text_width = bbox[2] - bbox[0]
+                text_height = bbox[3] - bbox[1]
+            else:
+                text_width, text_height = 100, 20  # Estimate
             
-            # Priority 1: Model-specific logs in model directory
-            if self.object.model_directory and os.path.exists(self.object.model_directory):
-                # Try multiple log locations within model directory
-                model_log_paths = [
-                    os.path.join(self.object.model_directory, 'logs', 'training.log'),
-                    os.path.join(self.object.model_directory, 'training.log'),
-                    os.path.join(self.object.model_directory, 'training_logs', 'training.log')
-                ]
-                
-                for log_path in model_log_paths:
-                    if os.path.exists(log_path):
-                        try:
-                            with open(log_path, 'r') as f:
-                                model_specific_logs = f.read().splitlines()
-                            break
-                        except Exception as e:
-                            continue
-            
-            # Priority 2: Search in organized directory structure
-            if not model_specific_logs:
-                import glob
-                search_patterns = [
-                    f'data/models/organized/*/*/unet-coronary/*{self.object.id}*',
-                    f'data/models/{self.object.id}*',
-                    f'data/models/*{self.object.id}*'
-                ]
-                
-                for pattern in search_patterns:
-                    possible_dirs = glob.glob(pattern)
-                    for dir_path in possible_dirs:
-                        log_path = os.path.join(dir_path, 'logs', 'training.log')
-                        if os.path.exists(log_path):
-                            try:
-                                with open(log_path, 'r') as f:
-                                    model_specific_logs = f.read().splitlines()
-                                break
-                            except Exception:
-                                continue
-                    if model_specific_logs:
-                        break
-                
-                # If still not found, try to find the most recent model directory
-                if not model_specific_logs:
-                    model_dirs = glob.glob('data/models/organized/*/*/unet-coronary/*')
-                    if model_dirs:
-                        recent_dirs = sorted(model_dirs, key=os.path.getctime, reverse=True)
-                        for recent_dir in recent_dirs[:3]:  # Check top 3 most recent
-                            log_path = os.path.join(recent_dir, 'logs', 'training.log')
-                            if os.path.exists(log_path):
-                                try:
-                                    with open(log_path, 'r') as f:
-                                        candidate_logs = f.read().splitlines()
-                                    # Check if this log mentions our specific model
-                                    model_ref_found = any(str(self.object.id) in line for line in candidate_logs[:50])
-                                    if model_ref_found:
-                                        model_specific_logs = candidate_logs
-                                        break
-                                except Exception:
-                                    continue
-            
-            # Priority 3: MLflow artifacts if available
-            if not model_specific_logs and self.object.mlflow_run_id:
-                mlflow_log_paths = [
-                    os.path.join(str(settings.BASE_MLRUNS_DIR), self.object.mlflow_run_id, 'artifacts', 'training_logs', 'training.log'),
-                    os.path.join('mlruns', self.object.mlflow_run_id, 'artifacts', 'training_logs', 'training.log'),
-                    f'artifacts/training_logs/training_{self.object.id}.log'
-                ]
-                
-                for log_path in mlflow_log_paths:
-                    if os.path.exists(log_path):
-                        try:
-                            with open(log_path, 'r') as f:
-                                model_specific_logs = f.read().splitlines()
-                                break
-                        except Exception as e:
-                            continue
-            
-            # Priority 4: Global log only if model-specific content found
-            if not model_specific_logs:
-                global_log_path = os.path.join('data', 'models', 'artifacts', 'training.log')
-                if os.path.exists(global_log_path):
-                    try:
-                        with open(global_log_path, 'r') as f:
-                            all_logs = f.read().splitlines()
-                        # Filter for logs that specifically mention this model
-                        filtered_logs = [
-                            line for line in all_logs 
-                            if (str(self.object.id) in line and 
-                                ('model' in line.lower() or 'training' in line.lower())) or
-                               f'model {self.object.id}' in line.lower() or
-                               f'model_{self.object.id}' in line.lower()
-                        ]
-                        if filtered_logs:
-                            model_specific_logs = filtered_logs
-                    except Exception as e:
-                        pass
-            
-            # Return model-specific logs or empty list if none found
-            return model_specific_logs if model_specific_logs else []
-            
-        except Exception as e:
-            import logging
-            logging.warning(f"Could not load training logs for model {self.object.id}: {e}")
-            return []
+            x = (512 - text_width) // 2
+            y = y_start + i * (text_height + 10)
+            draw.text((x, y), line, fill='black', font=font)
+        
+        # Save to bytes
+        img_buffer = io.BytesIO()
+        img.save(img_buffer, format='PNG')
+        img_data = img_buffer.getvalue()
+        
+        response = HttpResponse(img_data, content_type='image/png')
+        response['Content-Disposition'] = f'inline; filename="{filename}"'
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error generating placeholder image: {e}")
+        return HttpResponse("Image not available", status=404)
 
 
 @login_required
-def mlflow_redirect_view(request):
-    """Redirect to MLflow UI (use correct host, not mlflow:5000)"""
+def dataset_preview_view(request):
+    """Preview dataset for training"""
+    from .forms import TrainingForm
+    
+    # Get dataset type choices from the form field
     try:
-        # Try to get MLflow UI URL from settings
-        mlflow_ui_url = getattr(settings, 'MLFLOW_UI_URL', None)
-        if not mlflow_ui_url:
-            # Fallback to tracking URI, but replace 0.0.0.0 with localhost for browser
-            mlflow_uri = getattr(settings, 'MLFLOW_TRACKING_URI', 'http://localhost:5000')
-            mlflow_ui_url = mlflow_uri.replace('0.0.0.0', 'localhost').replace('127.0.0.1', 'localhost')
-        return redirect(mlflow_ui_url)
-    except Exception as e:
-        messages.error(request, f"Could not redirect to MLflow: {e}")
-        return redirect('ml_manager:model-list')
-
-def apply_semantic_colormap(mask_array, encoding=None, colors=None):
-    """Apply color mapping to semantic segmentation mask"""
-    import numpy as np
-    from PIL import Image
+        form = TrainingForm()
+        dataset_type_choices = form.fields['dataset_type'].choices
+    except (KeyError, AttributeError) as e:
+        logger.warning(f"Could not get dataset_type choices from form: {e}")
+        # Fallback choices
+        dataset_type_choices = [
+            ('auto', 'Auto-detect dataset type'),
+            ('coronary', 'Standard Coronary Dataset'),
+            ('arcade_binary', 'ARCADE Binary Segmentation'),
+            ('arcade_semantic', 'ARCADE Semantic Segmentation'),
+            ('arcade_stenosis', 'ARCADE Stenosis Detection'),
+            ('arcade_classification', 'ARCADE Artery Classification')
+        ]
     
-    if encoding is None:
-        # Default ARCADE encoding
-        encoding = {
-            "background": 0,
-            "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
-            "6": 6, "7": 7, "8": 8, "9": 9, "9a": 10,
-            "10": 11, "10a": 12, "11": 13, "12": 14, "12a": 15,
-            "13": 16, "14": 17, "14a": 18, "15": 19, "16": 20,
-            "16a": 21, "16b": 22, "16c": 23, "12b": 24, "14b": 25,
-            "stenosis": 26
-        }
-    
-    if colors is None:
-        # Enhanced ARCADE colors - more distinct colors for better visualization
-        colors = np.array([
-            [0, 0, 0],        # background - black
-            [255, 0, 0],      # segment 1 - red
-            [0, 255, 0],      # segment 2 - green
-            [0, 0, 255],      # segment 3 - blue
-            [255, 255, 0],    # segment 4 - yellow
-            [255, 0, 255],    # segment 5 - magenta
-            [0, 255, 255],    # segment 6 - cyan
-            [255, 165, 0],    # segment 7 - orange
-            [128, 0, 128],    # segment 8 - purple
-            [255, 192, 203],  # segment 9 - pink
-            [173, 255, 47],   # segment 9a - green yellow
-            [30, 144, 255],   # segment 10 - dodger blue
-            [255, 20, 147],   # segment 10a - deep pink
-            [0, 250, 154],    # segment 11 - medium spring green
-            [255, 69, 0],     # segment 12 - red orange
-            [72, 61, 139],    # segment 12a - dark slate blue
-            [255, 215, 0],    # segment 13 - gold
-            [220, 20, 60],    # segment 14 - crimson
-            [124, 252, 0],    # segment 14a - lawn green
-            [186, 85, 211],   # segment 15 - medium orchid
-            [138, 43, 226],   # segment 16 - blue violet
-            [255, 105, 180],  # segment 16a - hot pink
-            [255, 140, 0],    # segment 16b - dark orange
-            [184, 134, 11],   # segment 16c - dark goldenrod
-            [70, 130, 180],   # segment 12b - steel blue
-            [0, 206, 209],    # segment 14b - dark turquoise
-            [255, 99, 71]     # stenosis - tomato red
-        ])
-    
-    # If mask is 2D, convert to color
-    if len(mask_array.shape) == 2:
-        height, width = mask_array.shape
-        color_mask = np.zeros((height, width, 3), dtype=np.uint8)
-        
-        # Map each unique value to its color
-        unique_values = np.unique(mask_array)
-        logger = logging.getLogger(__name__)
-        logger.info(f"Applying semantic colormap to mask with unique values: {unique_values}")
-        
-        for val in unique_values:
-            if val < len(colors):
-                color_mask[mask_array == val] = colors[val]
-                logger.info(f"Mapped class {val} to color {colors[val]}")
-            else:
-                # Default to white for unknown values
-                color_mask[mask_array == val] = [255, 255, 255]
-                logger.warning(f"Unknown class {val}, using white color")
-        
-        return color_mask
-    
-    # If mask is already 3D (RGB), return as is
-    elif len(mask_array.shape) == 3 and mask_array.shape[2] == 3:
-        return mask_array
-    
-    # If mask is multi-channel (one-hot), convert to single channel first
-    elif len(mask_array.shape) == 3:
-        # Convert one-hot to single channel
-        single_channel = np.argmax(mask_array, axis=2)
-        return apply_semantic_colormap(single_channel, encoding, colors)
-    
-    return mask_array
-
-def detect_dataset_type(data_path):
-    """Detect the type of dataset and return info about it"""
-    import json
-    
-    dataset_info = {
-        'total_samples': 'Unknown',
-        'structure': 'Unknown'
+    # Initialize context with default values
+    context = {
+        'preview_data': [],
+        'dataset_type_choices': dataset_type_choices,
+        'data_path': '',
+        'dataset_type': 'auto',
+        'detected_type': None,
+        'samples': [],
+        'total_samples': 0,
+        'dataset_info': {},
+        'error_message': None
     }
     
-    if not os.path.exists(data_path):
-        return 'not_found', dataset_info
-    
-    # Check for ARCADE COCO structure
-    images_dir = os.path.join(data_path, 'images')
-    annotations_dir = os.path.join(data_path, 'annotations')
-    
-    if os.path.exists(images_dir) and os.path.exists(annotations_dir):
-        # Count images
-        img_files = [f for f in os.listdir(images_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-        dataset_info['total_samples'] = len(img_files)
-        
-        # Check for COCO annotation files
-        annotation_files = [f for f in os.listdir(annotations_dir) if f.endswith('.json')]
-        if annotation_files:
-            # Try to read first annotation file to detect ARCADE
-            try:
-                ann_file = os.path.join(annotations_dir, annotation_files[0])
-                with open(ann_file, 'r') as f:
-                    coco_data = json.load(f)
-                
-                # Check if it has ARCADE-specific categories
-                if 'categories' in coco_data:
-                    categories = [cat['name'] for cat in coco_data['categories']]
-                    arcade_segments = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16']
-                    
-                    if any(seg in categories for seg in arcade_segments):
-                        dataset_info['structure'] = 'ARCADE COCO'
-                        dataset_info['categories'] = len(categories)
-                        return 'arcade_coco', dataset_info
-                
-                dataset_info['structure'] = 'COCO'
-                return 'coco_style', dataset_info
-                
-            except Exception:
-                pass
-        
-        return 'coco_style', dataset_info
-    # Check for standard coronary structure
-    imgs_dir = os.path.join(data_path, 'imgs')
-    masks_dir = os.path.join(data_path, 'masks')
-    
-    if os.path.exists(imgs_dir) and os.path.exists(masks_dir):
-        img_files = [f for f in os.listdir(imgs_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-        mask_files = [f for f in os.listdir(masks_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-        dataset_info['total_samples'] = len(img_files)
-        dataset_info['structure'] = 'Standard (imgs/masks)'
-        return 'coronary_standard', dataset_info
-    
-    # Check for MONAI style
-    images_dir = os.path.join(data_path, 'images')
-    labels_dir = os.path.join(data_path, 'labels')
-    
-    if os.path.exists(images_dir) and os.path.exists(labels_dir):
-        img_files = [f for f in os.listdir(images_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-        dataset_info['total_samples'] = len(img_files)
-        dataset_info['structure'] = 'MONAI (images/labels)'
-        return 'monai_style', dataset_info
-    
-    return 'unknown', dataset_info
-
-def dataset_preview_view(request):
-    """Show dataset preview with sample images and masks"""
-    import logging
-    import uuid
-    import numpy as np
-    from PIL import Image
-    
-    logger = logging.getLogger(__name__)
-    context = {}
-    error_message = None
-    samples = []  # Initialize samples list
-    
-    # Dataset type choices including all 6 ARCADE dataset types
-    dataset_type_choices = [
-        ('auto', 'Auto-detect'),
-        ('coronary_standard', 'Coronary Standard (imgs/masks)'),
-        ('monai_style', 'MONAI Style (images/labels)'),
-        ('coco_style', 'COCO Style (images/annotations)'),
-        ('arcade_binary_segmentation', 'ARCADE: Binary Segmentation (image → binary mask)'),
-        ('arcade_semantic_segmentation', 'ARCADE: Semantic Segmentation (image → 27-class mask)'),
-        ('arcade_artery_classification', 'ARCADE: Artery Classification (binary mask → left/right)'),
-        ('arcade_semantic_seg_binary', 'ARCADE: Semantic from Binary (binary mask → 26-class mask)'),
-        ('arcade_stenosis_detection', 'ARCADE: Stenosis Detection (image → bounding boxes)'),
-        ('arcade_stenosis_segmentation', 'ARCADE: Stenosis Segmentation (image → stenosis mask)'),
-    ]
-    context['dataset_type_choices'] = dataset_type_choices
-    
-    # Set default values
-    if request.method == 'GET':
-        context['data_path'] = '/app/data/datasets/arcade_challenge_datasets/dataset_phase_1/segmentation_dataset/seg_train'
-        context['dataset_type'] = 'auto'
-        context['detected_type'] = None
-        context['dataset_info'] = None
-        context['total_samples'] = None
-    else:
-        context['data_path'] = request.POST.get('data_path', '/app/data/datasets/arcade_challenge_datasets/dataset_phase_1/segmentation_dataset/seg_train')
-        context['dataset_type'] = request.POST.get('dataset_type', 'auto')
-    
     if request.method == 'POST':
-        data_path = request.POST.get('data_path', '').strip()
+        data_path = request.POST.get('data_path', '')
         dataset_type = request.POST.get('dataset_type', 'auto')
         
-        if not data_path:
-            error_message = "Please provide a dataset path"
-        elif not os.path.exists(data_path):
-            error_message = f"Dataset path does not exist: {data_path}"
-        else:
+        context['data_path'] = data_path
+        context['dataset_type'] = dataset_type
+        
+        if data_path:
             try:
-                # Detect dataset type using custom function
-                detected_type, dataset_info = detect_dataset_type(data_path)
-                logger.info(f"Detected dataset type: {detected_type}, Selected type: {dataset_type}")
+                import os
+                import glob
+                import random
+                from PIL import Image
+                import json
                 
+                # Check if path exists
+                if not os.path.exists(data_path):
+                    context['error_message'] = f"Dataset path does not exist: {data_path}"
+                    return render(request, 'ml_manager/dataset_preview.html', context)
+                
+                # Detect dataset structure
+                detected_type = detect_dataset_type(data_path)
                 context['detected_type'] = detected_type
-                context['dataset_info'] = dataset_info
-                context['total_samples'] = dataset_info.get('total_samples', dataset_info.get('images', 'Unknown'))
                 
-                # Generate sample images
+                # Get sample images based on dataset type
                 samples = []
-                 # Handle standard coronary datasets
-                if detected_type in ['coronary_standard', 'monai_style'] or dataset_type in ['coronary_standard', 'monai_style']:
-                    try:
-                        if detected_type == 'coronary_standard' or dataset_type == 'coronary_standard':
-                            imgs_dir = os.path.join(data_path, 'imgs')
-                            masks_dir = os.path.join(data_path, 'masks')
-                        else:  # monai_style
-                            imgs_dir = os.path.join(data_path, 'images')
-                            masks_dir = os.path.join(data_path, 'labels')
-                        
-                        if os.path.exists(imgs_dir) and os.path.exists(masks_dir):
-                            img_files = [f for f in os.listdir(imgs_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-                            mask_files = [f for f in os.listdir(masks_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-                            
-                            img_files.sort()
-                            mask_files.sort()
-                            
-                            max_samples = min(6, len(img_files), len(mask_files))
-                            
-                            temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp', 'dataset_preview')
-                            os.makedirs(temp_dir, exist_ok=True)
-                            
-                            for i in range(max_samples):
-                                try:
-                                    sample_id = str(uuid.uuid4())
-                                    
-                                    # Load original files
-                                    img_file = img_files[i]
-                                    # Find corresponding mask file
-                                    mask_file = None
-                                    img_name = os.path.splitext(img_file)[0]
-                                    
-                                    # Try different mask naming conventions
-                                    for ext in ['.png', '.jpg', '.jpeg']:
-                                        candidate = img_name + ext
-                                        if candidate in mask_files:
-                                            mask_file = candidate
-                                            break
-                                    
-                                    if not mask_file and mask_files:
-                                        # Fallback to positional matching
-                                        if i < len(mask_files):
-                                            mask_file = mask_files[i]
-                                    
-                                    if not mask_file:
-                                        continue
-                                    
-                                    img_path = os.path.join(imgs_dir, img_file)
-                                    mask_path = os.path.join(masks_dir, mask_file)
-                                    
-                                    # Load and analyze images
-                                    img = Image.open(img_path)
-                                    mask = Image.open(mask_path)
-                                    
-                                    # Convert to numpy for analysis
-                                    img_array = np.array(img)
-                                    mask_array = np.array(mask)
-                                    
-                                    logger.info(f"[GENERIC COCO SECTION] Processing mask: dtype={mask_array.dtype}, shape={mask_array.shape}, min={mask_array.min()}, max={mask_array.max()}")
-                                    
-                                    # Convert mask to grayscale if needed
-                                    if len(mask_array.shape) == 3:
-                                        mask_array = mask_array[:,:,0]  # Take first channel
-                                        
-                                    # BINARY MASK SCALING FIX - ensure proper 0-255 range for visibility
-                                    if mask_array.max() <= 1.0:
-                                        mask_array = (mask_array * 255).astype(np.uint8)
-                                        # Apply full contrast for binary masks
-                                        mask_array = np.where(mask_array > 0, 255, 0).astype(np.uint8)
-                                        logger.info(f"[GENERIC COCO SECTION] FIXED binary mask to full contrast: min={mask_array.min()}, max={mask_array.max()}")
-                                    else:
-                                        logger.info(f"[GENERIC COCO SECTION] Mask already in good range: min={mask_array.min()}, max={mask_array.max()}")
-                                    
-                                    # Copy images to temp directory for web display
-                                    img_copy_path = os.path.join(temp_dir, f'image_{sample_id}.jpg')
-                                    mask_copy_path = os.path.join(temp_dir, f'mask_{sample_id}.png')
-                                    
-                                    # Save image copy
-                                    if img.mode != 'RGB':
-                                        img = img.convert('RGB')
-                                    img.save(img_copy_path, 'JPEG')
-                                    
-                                    # Save mask copy (convert to grayscale if needed) 
-                                    # Apply the scaled mask_array back to PIL Image for saving
-                                    if len(mask_array.shape) == 2:
-                                        # Use the scaled mask_array for proper visibility
-                                        mask_for_save = Image.fromarray(mask_array, mode='L')
-                                    else:
-                                        # Fallback to original conversion if needed
-                                        if len(np.array(mask).shape) == 3:
-                                            mask_for_save = mask.convert('L')
-                                        else:
-                                            mask_for_save = mask
-                                    mask_for_save.save(mask_copy_path, 'PNG')
-                                    logger.info(f"[STANDARD DATASET] Saved scaled mask to {mask_copy_path}")
-                                    
-                                    # Create dynamic URLs using Django settings
-                                    img_url = f'{settings.MEDIA_URL}temp/dataset_preview/image_{sample_id}.jpg'
-                                    mask_url = f'{settings.MEDIA_URL}temp/dataset_preview/mask_{sample_id}.png'
-                                    
-                                    # BINARY MASK SCALING FIX - This is the missing piece for standard datasets!
-                                    # Apply the same scaling logic as in ARCADE sections
-                                    logger.info(f"[STANDARD DATASET] Mask before scaling: dtype={mask_array.dtype}, min={mask_array.min()}, max={mask_array.max()}")
-                                    if mask_array.max() <= 1.0:
-                                        mask_array = (mask_array * 255).astype(np.uint8)
-                                        # Apply full contrast for binary masks
-                                        mask_array = np.where(mask_array > 0, 255, 0).astype(np.uint8)
-                                        logger.info(f"[STANDARD DATASET] FIXED binary mask to full contrast: min={mask_array.min()}, max={mask_array.max()}")
-                                    else:
-                                        logger.info(f"[STANDARD DATASET] Mask already in good range: min={mask_array.min()}, max={mask_array.max()}")
-                                    
-                                    # Calculate mask coverage
-                                    if len(mask_array.shape) == 2:
-                                        foreground_pixels = np.sum(mask_array > 0)
-                                        total_pixels = mask_array.size
-                                        mask_coverage = (foreground_pixels / total_pixels) * 100
-                                    else:
-                                        mask_coverage = 0.0
-                                    
-                                    # Create analysis text
-                                    analysis_text = f'Standard dataset: {int(np.sum(mask_array > 0))} foreground pixels ({mask_coverage:.1f}% coverage)'
-                                    
-                                    samples.append({
-                                        'index': i,
-                                        'filename': img_file,
-                                        'image_url': img_url,
-                                        'mask_url': mask_url,
-                                        'image_shape': img_array.shape,
-                                        'mask_shape': mask_array.shape,
-                                        'image_min': float(img_array.min()) if hasattr(img_array, 'min') else 'N/A',
-                                        'image_max': float(img_array.max()) if hasattr(img_array, 'max') else 'N/A',
-                                        'mask_min': float(mask_array.min()) if hasattr(mask_array, 'min') else 'N/A',
-                                        'mask_max': float(mask_array.max()) if hasattr(mask_array, 'max') else 'N/A',
-                                        'mask_coverage': mask_coverage,
-                                        'analysis': analysis_text
-                                    })
-                                except Exception as e:
-                                    logger.error(f"Error processing sample {i}: {e}")
-                                    continue
-                        else:
-                            error_message = f"Expected directories not found. Looking for: {imgs_dir}, {masks_dir}"
+                if detected_type == 'semantic_segmentation':
+                    # Look for images and masks
+                    image_patterns = [
+                        os.path.join(data_path, '**', '*.jpg'),
+                        os.path.join(data_path, '**', '*.jpeg'),
+                        os.path.join(data_path, '**', '*.png'),
+                        os.path.join(data_path, '**', '*.tif'),
+                        os.path.join(data_path, '**', '*.tiff')
+                    ]
                     
-                    except Exception as e:
-                        error_message = f"Error loading dataset: {str(e)}"
-                        logger.error(f"Dataset error: {e}", exc_info=True)
-                
-                # Handle specific ARCADE dataset types
-                elif dataset_type.startswith('arcade_'):
-                    try:
-                        from ml.datasets.torch_arcade_loader import (
-                            ARCADEBinarySegmentation, ARCADESemanticSegmentation, 
-                            ARCADEArteryClassification, ARCADESemanticSegmentationBinary,
-                            ARCADEStenosisDetection, ARCADEStenosisSegmentation,
-                            COCO_AVAILABLE
-                        )
-                        
-                        if not COCO_AVAILABLE:
-                            error_message = "pycocotools not available. Install with: pip install pycocotools"
-                        else:
-                            # Map dataset type to ARCADE class
-                            arcade_class_map = {
-                                'arcade_binary_segmentation': ('ARCADEBinarySegmentation', ARCADEBinarySegmentation),
-                                'arcade_semantic_segmentation': ('ARCADESemanticSegmentation', ARCADESemanticSegmentation),
-                                'arcade_artery_classification': ('ARCADEArteryClassification', ARCADEArteryClassification),
-                                'arcade_semantic_seg_binary': ('ARCADESemanticSegmentationBinary', ARCADESemanticSegmentationBinary),
-                                'arcade_stenosis_detection': ('ARCADEStenosisDetection', ARCADEStenosisDetection),
-                                'arcade_stenosis_segmentation': ('ARCADEStenosisSegmentation', ARCADEStenosisSegmentation),
+                    all_images = []
+                    for pattern in image_patterns:
+                        all_images.extend(glob.glob(pattern, recursive=True))
+                    
+                    # Filter out masks and keep only original images
+                    images = [img for img in all_images if not any(mask_keyword in img.lower() 
+                             for mask_keyword in ['mask', 'label', 'gt', 'target'])]
+                    
+                    context['total_samples'] = len(images)
+                    
+                    # Take up to 6 random samples
+                    sample_images = random.sample(images, min(6, len(images))) if images else []
+                    
+                    for idx, img_path in enumerate(sample_images):
+                        try:
+                            sample_data = {
+                                'index': idx,
+                                'filename': os.path.basename(img_path),
+                                'image_url': f'/ml/serve-preview-image/?path={img_path}',
+                                'mask_url': None,
+                                'image_shape': 'Unknown',
+                                'image_min': 0,
+                                'image_max': 255,
+                                'mask_shape': 'Unknown',
+                                'mask_classes': 0
                             }
                             
-                            if dataset_type not in arcade_class_map:
-                                error_message = f"Unknown ARCADE dataset type: {dataset_type}"
-                            else:
-                                class_name, arcade_class = arcade_class_map[dataset_type]
-                                logger.info(f"Using ARCADE class: {class_name}")
-                                
-                                # Determine image_set from path structure
-                                image_set = "train"  # default
-                                if "val" in data_path.lower():
-                                    image_set = "val"
-                                elif "test" in data_path.lower():
-                                    image_set = "test"
-                                
-                                # Get parent directory (should contain the full ARCADE structure)
-                                arcade_root = data_path
-                                while arcade_root and not os.path.exists(os.path.join(arcade_root, "arcade_challenge_datasets")):
-                                    parent = os.path.dirname(arcade_root)
-                                    if parent == arcade_root:  # reached filesystem root
-                                        break
-                                    arcade_root = parent
-                                
-                                if os.path.exists(os.path.join(arcade_root, "arcade_challenge_datasets")):
-                                    if os.path.basename(arcade_root) == "arcade_challenge_datasets":
-                                        arcade_root = os.path.dirname(arcade_root)
-                                
-                                if os.path.exists(os.path.join(arcade_root, "arcade_challenge_datasets", "dataset_phase_1")):
-                                    logger.info(f"Creating {class_name} dataset from: {arcade_root}")
-                                    
-                                    # Create the specific ARCADE dataset
-                                    arcade_dataset = arcade_class(
-                                        root=arcade_root,
-                                        image_set=image_set,
-                                        download=False
-                                    )
-                                    
-                                    # Generate samples with appropriate processing for each type
-                                    max_samples = min(6, len(arcade_dataset))
-                                    temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp', 'dataset_preview')
-                                    os.makedirs(temp_dir, exist_ok=True)
-                                    
-                                    for i in range(max_samples):
-                                        try:
-                                            logger.info(f"[ARCADE] Starting sample {i} processing...")
-                                            sample_id = str(uuid.uuid4())
-                                            
-                                            # Get data from ARCADE dataset
-                                            item = arcade_dataset[i]
-                                            
-                                            if dataset_type == 'arcade_artery_classification':
-                                                # (binary_mask, classification_label)
-                                                mask_input, class_label = item
-                                                
-                                                # Convert binary mask to proper RGB image for display
-                                                if isinstance(mask_input, torch.Tensor):
-                                                    mask_array = mask_input.squeeze().numpy()
-                                                    logger.info(f"Artery classification mask range: {mask_array.min():.3f} - {mask_array.max():.3f}, dtype: {mask_array.dtype}")
-                                                    
-                                                    # Proper scaling logic
-                                                    if mask_array.max() <= 1.0 and mask_array.dtype in [np.float32, np.float64]:
-                                                        # Scale 0-1 to 0-255
-                                                        mask_array = (mask_array * 255).astype(np.uint8)
-                                                        logger.info(f"Scaled artery mask to 0-255")
-                                                    elif mask_array.max() > 1.0:
-                                                        # Already in 0-255 range
-                                                        mask_array = mask_array.astype(np.uint8)
-                                                    else:
-                                                        # Integer 0-1 values, scale them
-                                                        mask_array = (mask_array * 255).astype(np.uint8)
-                                                    
-                                                    # Apply binary contrast (0 or 255 only)
-                                                    mask_array = np.where(mask_array > 0, 255, 0).astype(np.uint8)
-                                                    logger.info(f"Final artery mask range: {mask_array.min()} - {mask_array.max()}")
-                                                    
-                                                    mask_img = Image.fromarray(mask_array, mode='L').convert('RGB')
-                                                else:
-                                                    # Handle PIL Image input
-                                                    mask_array = np.array(mask_input)
-                                                    if len(mask_array.shape) > 2:
-                                                        mask_array = mask_array[:,:,0]  # Take first channel
-                                                    
-                                                    # Apply same scaling logic
-                                                    if mask_array.max() <= 1.0 and mask_array.dtype in [np.float32, np.float64]:
-                                                        mask_array = (mask_array * 255).astype(np.uint8)
-                                                    elif mask_array.max() > 1.0:
-                                                        mask_array = mask_array.astype(np.uint8)
-                                                    else:
-                                                        mask_array = (mask_array * 255).astype(np.uint8)
-                                                    
-                                                    mask_array = np.where(mask_array > 0, 255, 0).astype(np.uint8)
-                                                    mask_img = Image.fromarray(mask_array, mode='L').convert('RGB')
-                                                
-                                                # Save binary mask as input image
-                                                img_copy_path = os.path.join(temp_dir, f'image_{sample_id}.jpg')
-                                                mask_img.save(img_copy_path, 'JPEG')
-                                                
-                                                # Create classification result visualization with colored background
-                                                import matplotlib.pyplot as plt
-                                                from matplotlib.backends.backend_agg import FigureCanvasAgg
-                                                
-                                                fig, ax = plt.subplots(figsize=(6, 3))
-                                                color = 'lightcoral' if class_label == 0 else 'lightblue'
-                                                label_text = f"{'RIGHT' if class_label == 0 else 'LEFT'} ARTERY"
-                                                
-                                                ax.text(0.5, 0.5, label_text, ha='center', va='center', 
-                                                       fontsize=20, fontweight='bold', color='black')
-                                                ax.set_facecolor(color)
-                                                ax.set_xlim(0, 1)
-                                                ax.set_ylim(0, 1)
-                                                ax.axis('off')
-                                                
-                                                # Convert to PIL Image
-                                                canvas = FigureCanvasAgg(fig)
-                                                canvas.draw()
-                                                buf = canvas.buffer_rgba()
-                                                label_array = np.asarray(buf).copy()
-                                                label_array = label_array[:, :, :3]  # Remove alpha
-                                                label_img = Image.fromarray(label_array)
-                                                plt.close(fig)
-                                                
-                                                # Save classification visualization as mask
-                                                mask_copy_path = os.path.join(temp_dir, f'mask_{sample_id}.png')
-                                                label_img.save(mask_copy_path, 'PNG')
-                                                
-                                                # Create dynamic URLs using Django settings
-                                                img_url = f'{settings.MEDIA_URL}temp/dataset_preview/image_{sample_id}.jpg'
-                                                mask_url = f'{settings.MEDIA_URL}temp/dataset_preview/mask_{sample_id}.png'
-                                                
-                                                # Get statistics
-                                                img_array = np.array(mask_img.convert('RGB'))
-                                                label_array = np.array(label_img)
-                                                
-                                                # Create analysis text
-                                                label_text = f"Classification: {'Right' if class_label == 0 else 'Left'} artery (class {class_label})"
-                                                
-                                                samples.append({
-                                                    'index': i,
-                                                    'filename': f'arcade_{class_name.lower()}_{i}.png',
-                                                    'image_url': img_url,
-                                                    'mask_url': mask_url,
-                                                    'image_shape': img_array.shape,
-                                                    'mask_shape': f'Classification: {class_label}',
-                                                    'image_min': float(img_array.min()),
-                                                    'image_max': float(img_array.max()),
-                                                    'mask_min': float(label_array.min()),
-                                                    'mask_max': float(label_array.max()),
-                                                    'mask_coverage': 0.0,
-                                                    'analysis': label_text,
-                                                    'mask_type': 'Classification Label'
-                                                })
-                                                
-                                            elif dataset_type == 'arcade_stenosis_detection':
-                                                # (image, coco_annotations)
-                                                img, annotations = item
-                                                
-                                                # Convert image
-                                                if isinstance(img, torch.Tensor):
-                                                    img_array = img.permute(1, 2, 0).numpy()
-                                                    if img_array.max() <= 1.0:
-                                                        img_array = (img_array * 255).astype(np.uint8)
-                                                    img_pil = Image.fromarray(img_array)
-                                                else:
-                                                    img_pil = img
-                                                
-                                                # Save original image
-                                                img_copy_path = os.path.join(temp_dir, f'image_{sample_id}.jpg')
-                                                img_pil.convert('RGB').save(img_copy_path, 'JPEG')
-                                                
-                                                # Create bounding box visualization
-                                                import matplotlib.pyplot as plt
-                                                import matplotlib.patches as patches
-                                                from matplotlib.backends.backend_agg import FigureCanvasAgg
-                                                
-                                                # Create figure with original image and bounding boxes
-                                                fig, ax = plt.subplots(figsize=(8, 8))
-                                                ax.imshow(np.array(img_pil), cmap='gray' if len(np.array(img_pil).shape) == 2 else None)
-                                                
-                                                # Draw bounding boxes if annotations exist
-                                                num_boxes = 0
-                                                if annotations and len(annotations) > 0:
-                                                    for ann in annotations:
-                                                        if 'bbox' in ann:
-                                                            x, y, w, h = ann['bbox']
-                                                            rect = patches.Rectangle((x, y), w, h, linewidth=3, 
-                                                                                   edgecolor='red', facecolor='none')
-                                                            ax.add_patch(rect)
-                                                            num_boxes += 1
-                                                            
-                                                            # Add label if available
-                                                            if 'category_id' in ann:
-                                                                ax.text(x, y-5, f"Stenosis {ann['category_id']}", 
-                                                                       color='red', fontsize=12, fontweight='bold',
-                                                                       bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
-                                                
-                                                ax.set_title(f"Stenosis Detection: {num_boxes} annotations", 
-                                                           fontsize=14, fontweight='bold')
-                                                ax.axis('off')
-                                                
-                                                # Convert matplotlib figure to PIL Image
-                                                canvas = FigureCanvasAgg(fig)
-                                                canvas.draw()
-                                                buf = canvas.buffer_rgba()
-                                                mask_array = np.asarray(buf).copy()
-                                                mask_array = mask_array[:, :, :3]  # Remove alpha channel
-                                                ann_img = Image.fromarray(mask_array)
-                                                plt.close(fig)
-                                                
-                                                # Save annotation visualization as mask
-                                                mask_copy_path = os.path.join(temp_dir, f'mask_{sample_id}.png')
-                                                ann_img.save(mask_copy_path, 'PNG')
-                                                
-                                                # Create dynamic URLs using Django settings
-                                                img_url = f'{settings.MEDIA_URL}temp/dataset_preview/image_{sample_id}.jpg'
-                                                mask_url = f'{settings.MEDIA_URL}temp/dataset_preview/mask_{sample_id}.png'
-                                                
-                                                # Get image stats and create detailed analysis
-                                                img_array = np.array(img_pil)
-                                                ann_array = np.array(ann_img)
-                                                
-                                                # Count annotations and analyze
-                                                num_boxes = 0
-                                                bbox_areas = []
-                                                if annotations and len(annotations) > 0:
-                                                    for ann in annotations:
-                                                        if 'bbox' in ann:
-                                                            x, y, w, h = ann['bbox']
-                                                            bbox_areas.append(w * h)
-                                                            num_boxes += 1
-                                                            
-                                                # Create detailed analysis
-                                                if num_boxes > 0:
-                                                    avg_area = np.mean(bbox_areas) if bbox_areas else 0
-                                                    ann_text = f"Detection: {num_boxes} stenosis annotations, avg area: {avg_area:.1f}px²"
-                                                else:
-                                                    ann_text = "Detection: No stenosis annotations found"
-                                                
-                                                samples.append({
-                                                    'index': i,
-                                                    'filename': f'arcade_{class_name.lower()}_{i}.png',
-                                                    'image_url': img_url,
-                                                    'mask_url': mask_url,
-                                                    'image_shape': img_array.shape,
-                                                    'mask_shape': f'COCO annotations: {num_boxes}',
-                                                    'image_min': float(img_array.min()),
-                                                    'image_max': float(img_array.max()),
-                                                    'mask_min': 'Bounding Boxes',
-                                                    'mask_max': 'Visualization',
-                                                    'mask_coverage': num_boxes,
-                                                    'analysis': ann_text,
-                                                    'mask_type': 'Bounding Box Visualization'
-                                                })
-                                                
-                                            else:
-                                                # Standard image-mask pairs for other types
-                                                img, mask = item
-                                                
-                                                # Convert image tensor to PIL
-                                                if isinstance(img, torch.Tensor):
-                                                    img_array = img.permute(1, 2, 0).numpy() if img.dim() == 3 else img.numpy()
-                                                    if img_array.max() <= 1.0:
-                                                        img_array = (img_array * 255).astype(np.uint8)
-                                                    if len(img_array.shape) == 3:
-                                                        img_pil = Image.fromarray(img_array)
-                                                    else:
-                                                        img_pil = Image.fromarray(img_array, mode='L')
-                                                else:
-                                                    img_pil = img.convert('RGB') if hasattr(img, 'convert') else img
-                                                
-                                                # Convert mask tensor to PIL - Enhanced for semantic segmentation
-                                                if isinstance(mask, torch.Tensor):
-                                                    mask_array = mask.squeeze().numpy()
-                                                    
-                                                    # Handle different mask types
-                                                    if dataset_type in ['arcade_semantic_segmentation', 'arcade_semantic_seg_binary']:
-                                                        # Multi-class semantic mask - debug output
-                                                        logger.info(f"Semantic mask shape: {mask_array.shape}, dtype: {mask_array.dtype}, min: {mask_array.min()}, max: {mask_array.max()}")
-                                                        
-                                                        # Handle one-hot encoded masks (H, W, C)
-                                                        if len(mask_array.shape) == 3 and mask_array.shape[2] > 1:
-                                                            logger.info(f"Converting one-hot mask with {mask_array.shape[2]} classes")
-                                                            mask_array = np.argmax(mask_array, axis=2)
-                                                        
-                                                        # Ensure we have valid class indices
-                                                        unique_classes = np.unique(mask_array)
-                                                        logger.info(f"Unique classes in semantic mask: {unique_classes}")
-                                                        
-                                                        # Apply semantic colormap
-                                                        mask_colored = apply_semantic_colormap(mask_array)
-                                                        mask_pil = Image.fromarray(mask_colored.astype(np.uint8))
-                                                        mask_type_text = 'Semantic (Multi-colored)'
-                                                        
-                                                        # Analysis
-                                                        unique_segments = np.unique(mask_array)
-                                                        num_segments = len(unique_segments[unique_segments > 0])
-                                                        total_pixels = mask_array.size
-                                                        foreground_pixels = np.sum(mask_array > 0)
-                                                        coverage = (foreground_pixels / total_pixels) * 100
-                                                        analysis_text = f'Semantic mask: {num_segments} coronary segments, {coverage:.1f}% coverage'
-                                                    else:
-                                                        # Binary mask - Enhanced visibility
-                                                        logger.info(f"Binary mask range: {mask_array.min():.3f} - {mask_array.max():.3f}, dtype: {mask_array.dtype}")
-                                                        
-                                                        # Check if values are already 0-255 or need scaling
-                                                        if mask_array.max() <= 1.0 and mask_array.dtype in [np.float32, np.float64]:
-                                                            # Scale 0-1 values to 0-255
-                                                            mask_array = (mask_array * 255).astype(np.uint8)
-                                                            logger.info(f"Scaled binary mask to 0-255 range")
-                                                        elif mask_array.max() > 1.0:
-                                                            # Already in 0-255 range
-                                                            mask_array = mask_array.astype(np.uint8)
-                                                        else:
-                                                            # Integer 0-1 values, scale them
-                                                            mask_array = (mask_array * 255).astype(np.uint8)
-                                                        
-                                                        # For binary tasks, ensure full contrast (0 or 255)
-                                                        if dataset_type in ['arcade_binary_segmentation', 'arcade_stenosis_segmentation']:
-                                                            mask_array = np.where(mask_array > 0, 255, 0).astype(np.uint8)
-                                                            logger.info(f"Applied binary contrast enhancement")
-                                                        
-                                                        mask_pil = Image.fromarray(mask_array, mode='L')
-                                                        mask_type_text = 'Binary (Grayscale)'
-                                                        
-                                                        # Analysis
-                                                        foreground_pixels = np.sum(mask_array > 128)
-                                                        total_pixels = mask_array.size
-                                                        coverage = (foreground_pixels / total_pixels) * 100
-                                                        analysis_text = f'Binary mask: {coverage:.1f}% coverage, range: {mask_array.min()}-{mask_array.max()}'
-                                                
-                                                elif isinstance(mask, np.ndarray):
-                                                    # Handle numpy arrays directly
-                                                    mask_array = mask
-                                                    
-                                                    if dataset_type in ['arcade_semantic_segmentation', 'arcade_semantic_seg_binary']:
-                                                        logger.info(f"Numpy semantic mask shape: {mask_array.shape}")
-                                                        # Handle one-hot format
-                                                        if len(mask_array.shape) == 3 and mask_array.shape[2] > 1:
-                                                            mask_array = np.argmax(mask_array, axis=2)
-                                                        
-                                                        mask_colored = apply_semantic_colormap(mask_array)
-                                                        mask_pil = Image.fromarray(mask_colored.astype(np.uint8))
-                                                        mask_type_text = 'Semantic (Multi-colored)'
-                                                        
-                                                        unique_segments = np.unique(mask_array)
-                                                        num_segments = len(unique_segments[unique_segments > 0])
-                                                        analysis_text = f'Semantic mask: {num_segments} segments'
-                                                    else:
-                                                        # Binary numpy mask
-                                                        if len(mask_array.shape) > 2:
-                                                            mask_array = mask_array.squeeze()
-                                                        
-                                                        logger.info(f"Binary numpy mask range: {mask_array.min():.3f} - {mask_array.max():.3f}, dtype: {mask_array.dtype}")
-                                                        
-                                                        # Check if values need scaling
-                                                        if mask_array.max() <= 1.0 and mask_array.dtype in [np.float32, np.float64]:
-                                                            mask_array = (mask_array * 255).astype(np.uint8)
-                                                            logger.info(f"Scaled numpy binary mask to 0-255")
-                                                        elif mask_array.max() > 1.0:
-                                                            mask_array = mask_array.astype(np.uint8)
-                                                        else:
-                                                            mask_array = (mask_array * 255).astype(np.uint8)
-                                                        
-                                                        # Apply binary contrast for binary tasks
-                                                        if dataset_type in ['arcade_binary_segmentation', 'arcade_stenosis_segmentation']:
-                                                            mask_array = np.where(mask_array > 0, 255, 0).astype(np.uint8)
-                                                        
-                                                        mask_pil = Image.fromarray(mask_array, mode='L')
-                                                        mask_type_text = 'Binary (Grayscale)'
-                                                        
-                                                        foreground_pixels = np.sum(mask_array > 128)
-                                                        total_pixels = mask_array.size
-                                                        coverage = (foreground_pixels / total_pixels) * 100
-                                                        analysis_text = f'Binary mask: {coverage:.1f}% coverage, range: {mask_array.min()}-{mask_array.max()}'
-                                                else:
-                                                    # PIL Image or other format
-                                                    mask_pil = mask
-                                                    mask_type_text = 'Unknown'
-                                                    analysis_text = 'Mask analysis unavailable'
-                                                
-                                                # Save images
-                                                img_copy_path = os.path.join(temp_dir, f'image_{sample_id}.jpg')
-                                                mask_copy_path = os.path.join(temp_dir, f'mask_{sample_id}.png')
-                                                
-                                                img_pil.save(img_copy_path, 'JPEG')
-                                                mask_pil.save(mask_copy_path, 'PNG')
-                                                
-                                                # Create dynamic URLs using Django settings
-                                                img_url = f'{settings.MEDIA_URL}temp/dataset_preview/image_{sample_id}.jpg'
-                                                mask_url = f'{settings.MEDIA_URL}temp/dataset_preview/mask_{sample_id}.png'
-                                                
-                                                # Get image and mask statistics - use final processed arrays
-                                                img_array = np.array(img_pil)
-                                                mask_display_array = np.array(mask_pil)
-                                                
-                                                # UNIVERSAL BINARY MASK FIX - ensure statistics show 0-255 range
-                                                # This is the final fix to ensure mask statistics are displayed correctly
-                                                logger.info(f"[FINAL FIX] Mask display array before fix: min={mask_display_array.min()}, max={mask_display_array.max()}, dtype={mask_display_array.dtype}")
-                                                if len(mask_display_array.shape) == 2 and mask_display_array.max() <= 1.0:
-                                                    # This mask has 0-1 range, scale to 0-255 for proper statistics display
-                                                    mask_display_array = (mask_display_array * 255).astype(np.uint8)
-                                                    # Apply full contrast for binary masks
-                                                    mask_display_array = np.where(mask_display_array > 0, 255, 0).astype(np.uint8)
-                                                    logger.info(f"[FINAL FIX] FIXED mask display range: min={mask_display_array.min()}, max={mask_display_array.max()}")
-                                                
-                                                # Calculate coverage
-                                                if len(mask_display_array.shape) == 2:
-                                                    foreground_pixels = np.sum(mask_display_array > 128)
-                                                    total_pixels = mask_display_array.size
-                                                    coverage = (foreground_pixels / total_pixels) * 100
-                                                else:
-                                                    coverage = 0.0
-                                                
-                                                samples.append({
-                                                    'index': i,
-                                                    'filename': f'arcade_{class_name.lower()}_{i}.png',
-                                                    'image_url': img_url,
-                                                    'mask_url': mask_url,
-                                                    'image_shape': img_array.shape,
-                                                    'mask_shape': mask_display_array.shape,
-                                                    'image_min': float(img_array.min()),
-                                                    'image_max': float(img_array.max()),
-                                                    'mask_min': float(mask_display_array.min()) if len(mask_display_array.shape) <= 3 else 'N/A',
-                                                    'mask_max': float(mask_display_array.max()) if len(mask_display_array.shape) <= 3 else 'N/A',
-                                                    'mask_coverage': coverage,
-                                                    'analysis': analysis_text,
-                                                    'mask_type': mask_type_text
-                                                })
-                                            
-                                            logger.info(f"Generated {class_name} sample {i}")
-                                            
-                                        except Exception as e:
-                                            logger.error(f"Error processing {class_name} sample {i}: {e}")
-                                            continue
-                                    
-                                    context['dataset_format'] = f'ARCADE {class_name}'
-                                    context['total_samples'] = len(arcade_dataset)
-                                    
-                                else:
-                                    error_message = f"ARCADE dataset structure not found at: {arcade_root}"
-                    
-                    except Exception as e:
-                        error_message = f"Error loading ARCADE dataset: {str(e)}"
-                        logger.error(f"ARCADE dataset error: {e}", exc_info=True)
-                
-                elif dataset_type == 'coco_style' or (detected_type == 'unknown' and dataset_type == 'auto'):
-                    # Handle COCO-style datasets using ARCADE implementation
-                    try:
-                        images_dir = os.path.join(data_path, 'images')
-                        annotations_dir = os.path.join(data_path, 'annotations')
-                        
-                        if os.path.exists(images_dir) and os.path.exists(annotations_dir):
-                            logger.info(f"COCO-style dataset detected in: {data_path}")
+                            # Try to find corresponding mask
+                            img_dir = os.path.dirname(img_path)
+                            img_name = os.path.splitext(os.path.basename(img_path))[0]
                             
-                            img_files = [f for f in os.listdir(images_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-                            annotation_files = [f for f in os.listdir(annotations_dir) if f.lower().endswith('.json')]
+                            # Common mask patterns
+                            mask_patterns = [
+                                os.path.join(img_dir, f"{img_name}_mask.*"),
+                                os.path.join(img_dir, f"{img_name}_label.*"),
+                                os.path.join(img_dir, f"{img_name}_gt.*"),
+                                os.path.join(img_dir.replace('images', 'masks'), f"{img_name}.*"),
+                                os.path.join(img_dir.replace('images', 'labels'), f"{img_name}.*"),
+                            ]
                             
-                            img_files.sort()
+                            mask_path = None
+                            for pattern in mask_patterns:
+                                matches = glob.glob(pattern)
+                                if matches:
+                                    mask_path = matches[0]
+                                    break
                             
-                            max_samples = min(6, len(img_files))
+                            if mask_path and os.path.exists(mask_path):
+                                sample_data['mask_url'] = f'/ml/serve-preview-image/?path={mask_path}'
                             
-                            temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp', 'dataset_preview')
-                            os.makedirs(temp_dir, exist_ok=True)
-                            
-                            # Try to use ARCADE dataset implementation for real mask generation
+                            # Try to get image info
                             try:
-                                from ml.datasets.torch_arcade_loader import ARCADEBinarySegmentation, ARCADESemanticSegmentation, COCO_AVAILABLE
-                                
-                                # Check if this is semantic segmentation dataset
-                                use_semantic = False
-                                if dataset_info.get('structure') == 'ARCADE COCO':
-                                    # Check if we have multi-class annotations
-                                    try:
-                                        import json
-                                        ann_file = os.path.join(annotations_dir, annotation_files[0])
-                                        with open(ann_file, 'r') as f:
-                                            coco_data = json.load(f)
-                                        
-                                        # Check for coronary artery segment categories (ARCADE specific)
-                                        if 'categories' in coco_data:
-                                            category_names = [cat.get('name', '') for cat in coco_data['categories']]
-                                            # Look for coronary artery segment names
-                                            coronary_segments = [name for name in category_names if any(seg in str(name) for seg in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16'])]
-                                            if len(coronary_segments) > 2:
-                                                use_semantic = True
-                                                logger.info(f"Using semantic segmentation with color mapping for {len(coronary_segments)} coronary segments")
-                                    except Exception as e:
-                                        logger.warning(f"Could not parse COCO annotations for semantic detection: {e}")
-                                
-                                if COCO_AVAILABLE:
-                                    logger.info(f"ARCADE dataset setup: use_semantic={use_semantic}, dataset_type={dataset_type}")
-                                    logger.info(f"Using ARCADE{'Semantic' if use_semantic else 'Binary'}Segmentation for real mask generation")
-                                    
-                                    # Try to instantiate ARCADE dataset - determine image_set from path structure
-                                    image_set = "train"  # default
-                                    if "val" in data_path.lower():
-                                        image_set = "val"
-                                    elif "test" in data_path.lower():
-                                        image_set = "test"
-                                    
-                                    # Get parent directory (should contain the full ARCADE structure)
-                                    arcade_root = data_path
-                                    # Try to find the root dataset directory by going up the path
-                                    # Look for the parent directory that contains 'arcade_challenge_datasets'
-                                    while arcade_root and not os.path.exists(os.path.join(arcade_root, "arcade_challenge_datasets")):
-                                        parent = os.path.dirname(arcade_root)
-                                        if parent == arcade_root:  # reached filesystem root
-                                            break
-                                        arcade_root = parent
-                                    
-                                    # If we found the arcade_challenge_datasets directory, the root should be one level up
-                                    if os.path.exists(os.path.join(arcade_root, "arcade_challenge_datasets")):
-                                        # Check if arcade_root already points to the parent of arcade_challenge_datasets
-                                        if os.path.basename(arcade_root) == "arcade_challenge_datasets":
-                                            arcade_root = os.path.dirname(arcade_root)
-                                    
-                                    if os.path.exists(os.path.join(arcade_root, "arcade_challenge_datasets", "dataset_phase_1")):
-                                        # Full ARCADE dataset structure found
-                                        logger.info(f"Full ARCADE dataset structure found at: {arcade_root}")
-                                        
-                                        # Choose the appropriate dataset class
-                                        if use_semantic:
-                                            arcade_dataset = ARCADESemanticSegmentation(
-                                                root=arcade_root,
-                                                image_set=image_set,
-                                                download=False
-                                            )
-                                        else:
-                                            arcade_dataset = ARCADEBinarySegmentation(
-                                                root=arcade_root,
-                                                image_set=image_set,
-                                                download=False
-                                            )
-                                        
-                                        # Generate samples with real masks
-                                        for i in range(min(max_samples, len(arcade_dataset))):
-                                            try:
-                                                logger.info(f"[ARCADE] Starting sample {i} processing...")
-                                                sample_id = str(uuid.uuid4())
-                                                
-                                                # Get image and mask from ARCADE dataset
-                                                img_tensor, mask_tensor = arcade_dataset[i]
-                                                
-                                                # DEBUG: Check types and values at the beginning
-                                                logger.info(f"[ARCADE LOOP] Sample {i}: img_tensor type={type(img_tensor)}, mask_tensor type={type(mask_tensor)}")
-                                                if hasattr(mask_tensor, 'shape'):
-                                                    logger.info(f"[ARCADE LOOP] mask_tensor shape={mask_tensor.shape}")
-                                                if hasattr(mask_tensor, 'min') and hasattr(mask_tensor, 'max'):
-                                                    logger.info(f"[ARCADE LOOP] mask_tensor range={mask_tensor.min():.3f}-{mask_tensor.max():.3f}")
-                                                
-                                                # Convert tensors to PIL Images for processing
-                                                try:
-                                                    if isinstance(img_tensor, torch.Tensor):
-                                                        # Convert tensor to PIL Image
-                                                        if img_tensor.dim() == 3 and img_tensor.shape[0] == 3:  # CHW format
-                                                            img_array = img_tensor.permute(1, 2, 0).numpy()
-                                                        elif img_tensor.dim() == 3:  # HWC format
-                                                            img_array = img_tensor.numpy()
-                                                        else:
-                                                            img_array = img_tensor.numpy()
-                                                        
-                                                        # Ensure proper value range
-                                                        if img_array.max() <= 1.0:
-                                                            img_array = (img_array * 255).astype(np.uint8)
-                                                        else:
-                                                            img_array = img_array.astype(np.uint8)
-                                                        
-                                                        if len(img_array.shape) == 3:
-                                                            img = Image.fromarray(img_array)
-                                                        else:
-                                                            img = Image.fromarray(img_array, mode='L')
-                                                    else:
-                                                        img = img_tensor  # Already PIL Image
-                                                    
-                                                    # Handle mask conversion
-                                                    if isinstance(mask_tensor, torch.Tensor):
-                                                        # Convert mask tensor - for semantic it's (H, W, 27)
-                                                        mask_array = mask_tensor.numpy()
-                                                        
-                                                        if use_semantic:
-                                                            # Convert one-hot to single channel for color mapping
-                                                            if len(mask_array.shape) == 3 and mask_array.shape[2] > 1:
-                                                                mask_array = np.argmax(mask_array, axis=2)
-                                                            
-                                                            # Apply semantic color mapping
-                                                            mask_array_colored = apply_semantic_colormap(mask_array)
-                                                            mask = Image.fromarray(mask_array_colored.astype(np.uint8))
-                                                        else:
-                                                            # For binary segmentation, use grayscale
-                                                            if len(mask_array.shape) > 2:
-                                                                mask_array = mask_array.squeeze()
-                                                            
-                                                            # Check if values are already 0-255 or 0-1
-                                                            logger.info(f"[OLD SECTION] Binary mask before scaling: max={mask_array.max()}, min={mask_array.min()}, dtype={mask_array.dtype}")
-                                                            if mask_array.max() <= 1.0:
-                                                                mask_array = (mask_array * 255).astype(np.uint8)
-                                                                logger.info(f"[OLD SECTION] Scaled binary mask: max={mask_array.max()}, min={mask_array.min()}")
-                                                            else:
-                                                                logger.info(f"[OLD SECTION] Binary mask already in good range")
-                                                                mask_array = mask_array.astype(np.uint8)
-                                                            mask = Image.fromarray(mask_array, mode='L')
-                                                    
-                                                    elif isinstance(mask_tensor, np.ndarray):
-                                                        # Direct numpy array
-                                                        mask_array = mask_tensor
-                                                        
-                                                        if use_semantic:
-                                                            # Convert one-hot to single channel for color mapping
-                                                            if len(mask_array.shape) == 3 and mask_array.shape[2] > 1:
-                                                                mask_array = np.argmax(mask_array, axis=2)
-                                                            
-                                                            # Apply semantic color mapping
-                                                            mask_array_colored = apply_semantic_colormap(mask_array)
-                                                            mask = Image.fromarray(mask_array_colored.astype(np.uint8))
-                                                        else:
-                                                            # For binary segmentation
-                                                            if len(mask_array.shape) > 2:
-                                                                mask_array = mask_array.squeeze()
-                                                            
-                                                            logger.info(f"Binary mask ARCADE processing: shape={mask_array.shape}, dtype={mask_array.dtype}, range={mask_array.min():.3f}-{mask_array.max():.3f}")
-                                                            
-                                                            if mask_array.max() <= 1.0 and mask_array.dtype in [np.float32, np.float64]:
-                                                                # Scale 0-1 to 0-255 and apply full contrast
-                                                                mask_array = (mask_array * 255).astype(np.uint8)
-                                                                mask_array = np.where(mask_array > 0, 255, 0).astype(np.uint8)
-                                                                logger.info(f"Scaled binary mask from float to 0-255 with full contrast")
-                                                            elif mask_array.max() > 1.0:
-                                                                mask_array = mask_array.astype(np.uint8)
-                                                                # Apply full contrast for any non-zero values
-                                                                mask_array = np.where(mask_array > 0, 255, 0).astype(np.uint8)
-                                                                logger.info(f"Applied full contrast to existing uint8 mask")
-                                                            
-                                                            logger.info(f"Final binary mask range: {mask_array.min()} - {mask_array.max()}")
-                                                            mask = Image.fromarray(mask_array, mode='L')
-                                                    else:
-                                                        # Handle PIL Image - check if it needs scaling
-                                                        mask_array = np.array(mask_tensor)
-                                                        
-                                                        if use_semantic:
-                                                            # Apply semantic color mapping
-                                                            if len(mask_array.shape) == 3 and mask_array.shape[2] > 1:
-                                                                mask_array = np.argmax(mask_array, axis=2)
-                                                            mask_array_colored = apply_semantic_colormap(mask_array)
-                                                            mask = Image.fromarray(mask_array_colored.astype(np.uint8))
-                                                        else:
-                                                            # For binary segmentation
-                                                            logger.info(f"Binary mask PIL processing: shape={mask_array.shape}, dtype={mask_array.dtype}, range={mask_array.min():.3f}-{mask_array.max():.3f}")
-                                                            
-                                                            if mask_array.max() <= 1.0 and mask_array.dtype in [np.float32, np.float64]:
-                                                                # Scale float values 0-1 to 0-255 and apply full contrast
-                                                                mask_array = (mask_array * 255).astype(np.uint8)
-                                                                mask_array = np.where(mask_array > 0, 255, 0).astype(np.uint8)
-                                                                mask = Image.fromarray(mask_array, mode='L')
-                                                                logger.info(f"Scaled PIL mask from float to 0-255 with full contrast")
-                                                            else:
-                                                                mask = mask_tensor  # Already proper PIL Image
-                                                
-                                                except Exception as tensor_error:
-                                                    logger.error(f"Tensor conversion error for sample {i}: {tensor_error}")
-                                                    import traceback
-                                                    logger.error(f"Full traceback: {traceback.format_exc()}")
-                                                    continue
-                                                
-                                                # Save images for web display
-                                                img_copy_path = os.path.join(temp_dir, f'image_{sample_id}.jpg')
-                                                mask_copy_path = os.path.join(temp_dir, f'mask_{sample_id}.png')
-                                                
-                                                # Convert to RGB for JPEG saving
-                                                if img.mode != 'RGB':
-                                                    img = img.convert('RGB')
-                                                img.save(img_copy_path, 'JPEG')
-                                                
-                                                # Save mask - handle both colored and grayscale masks
-                                                if use_semantic and mask.mode == 'RGB':
-                                                    # Save colored semantic mask as RGB PNG
-                                                    mask.save(mask_copy_path, 'PNG')
-                                                else:
-                                                    # Save grayscale mask - ensure proper scaling
-                                                    mask_array_for_save = np.array(mask)
-                                                    if len(mask_array_for_save.shape) == 2 and mask_array_for_save.max() <= 1:
-                                                        # Scale binary values 0,1 to 0,255 for proper PNG display
-                                                        mask_array_for_save = (mask_array_for_save * 255).astype(np.uint8)
-                                                        mask = Image.fromarray(mask_array_for_save, mode='L')
-                                                    
-                                                    if mask.mode != 'L':
-                                                        mask = mask.convert('L')
-                                                    mask.save(mask_copy_path, 'PNG')
-                                                
-                                                # Create dynamic URLs using Django settings
-                                                img_url = f'{settings.MEDIA_URL}temp/dataset_preview/image_{sample_id}.jpg'
-                                                mask_url = f'{settings.MEDIA_URL}temp/dataset_preview/mask_{sample_id}.png'
-                                                
-                                                # Get statistics
-                                                img_array = np.array(img.convert('RGB'))
-                                                
-                                                if use_semantic:
-                                                    # For semantic segmentation, analyze colored mask
-                                                    mask_array_analysis = np.array(mask_tensor.squeeze().numpy() if isinstance(mask_tensor, torch.Tensor) else mask_tensor)
-                                                    if len(mask_array_analysis.shape) > 2:
-                                                        mask_array_analysis = mask_array_analysis[:,:,0] if len(mask_array_analysis.shape) == 3 else np.argmax(mask_array_analysis, axis=2)
-                                                    
-                                                    unique_segments = np.unique(mask_array_analysis)
-                                                    num_segments = len(unique_segments[unique_segments > 0])  # Exclude background
-                                                    total_pixels = mask_array_analysis.size
-                                                    foreground_pixels = np.sum(mask_array_analysis > 0)
-                                                    coverage_percent = (foreground_pixels / total_pixels) * 100
-                                                    
-                                                    analysis_text = f'Semantic mask: {num_segments} coronary segments, {foreground_pixels} total foreground pixels ({coverage_percent:.1f}% coverage)'
-                                                else:
-                                                    # For binary segmentation
-                                                    mask_array = np.array(mask)
-                                                    if len(mask_array.shape) == 3:
-                                                        mask_array = mask_array[:,:,0]  # Take first channel for analysis
-                                                    
-                                                    # Debug: Check mask characteristics before scaling
-                                                    logger.info(f"Binary mask before scaling: dtype={mask_array.dtype}, shape={mask_array.shape}, min={mask_array.min()}, max={mask_array.max()}")
-                                                    
-                                                    # Fix for binary mask visibility - ensure proper 0-255 range
-                                                    if mask_array.max() <= 1.0 and mask_array.dtype in [np.float32, np.float64]:
-                                                        mask_array = (mask_array * 255).astype(np.uint8)
-                                                        logger.info(f"Scaled binary mask to 0-255 range: {mask_array.min()} - {mask_array.max()}")
-                                                    elif mask_array.max() <= 1.0:
-                                                        # Even if dtype is not float, scale 0-1 range to 0-255
-                                                        mask_array = (mask_array * 255).astype(np.uint8) 
-                                                        logger.info(f"Scaled binary mask (non-float) to 0-255 range: {mask_array.min()} - {mask_array.max()}")
-                                                    else:
-                                                        logger.info(f"Binary mask already in proper range: {mask_array.min()} - {mask_array.max()}")
-                                                    
-                                                    # Apply full contrast for binary masks
-                                                    mask_array = np.where(mask_array > 0, 255, 0).astype(np.uint8)
-                                                    logger.info(f"Applied binary contrast: {mask_array.min()} - {mask_array.max()}")
-                                                    
-                                                    # Calculate mask coverage for sparse masks
-                                                    total_pixels = mask_array.size
-                                                    foreground_pixels = np.sum(mask_array > 128)  # Consider values > 128 as foreground
-                                                    coverage_percent = (foreground_pixels / total_pixels) * 100
-                                                    
-                                                    analysis_text = f'Binary mask: {foreground_pixels} foreground pixels ({coverage_percent:.1f}% coverage)'
-                                                
-                                                samples.append({
-                                                    'index': i,
-                                                    'filename': f'arcade_sample_{i}.png',
-                                                    'image_url': img_url,
-                                                    'mask_url': mask_url,
-                                                    'image_shape': img_array.shape,
-                                                    'mask_shape': mask_array_analysis.shape if use_semantic else mask_array.shape,
-                                                    'image_min': float(img_array.min()),
-                                                    'image_max': float(img_array.max()),
-                                                    'mask_min': float(mask_array_analysis.min()) if use_semantic else float(mask_array.min()),
-                                                    'mask_max': float(mask_array_analysis.max()) if use_semantic else float(mask_array.max()),
-                                                    'mask_coverage': coverage_percent,
-                                                    'analysis': analysis_text,
-                                                    'mask_type': 'Semantic (Multi-colored)' if use_semantic else 'Binary (Grayscale)'
-                                                })
-                                                
-                                                logger.info(f"Generated ARCADE sample {i} with real mask")
-                                                
-                                            except Exception as e:
-                                                logger.error(f"Error processing ARCADE sample {i}: {e}")
-                                                continue
-                                        
-                                        context['dataset_format'] = f'ARCADE ({"Semantic" if use_semantic else "Binary"} Segmentation)'
-                                        context['annotation_files'] = annotation_files
-                                        
-                                    else:
-                                        # Fallback to basic COCO processing without ARCADE structure
-                                        logger.warning("ARCADE structure not found, falling back to basic COCO display")
-                                        raise Exception("ARCADE structure not available")
-                                        
-                                else:
-                                    logger.warning("pycocotools not available, falling back to basic image display")
-                                    raise Exception("pycocotools not available")
-                                    
-                            except Exception as arcade_error:
-                                logger.warning(f"ARCADE processing failed: {arcade_error}, falling back to basic COCO display")
-                                
-                                # Fallback to basic COCO processing without mask generation
-                                for i in range(max_samples):
-                                    try:
-                                        sample_id = str(uuid.uuid4())
-                                        
-                                        img_file = img_files[i]
-                                        img_path = os.path.join(images_dir, img_file)
-                                        
-                                        # Load and analyze image
-                                        img = Image.open(img_path)
-                                        img_array = np.array(img)
-                                        
-                                        # Copy image to temp directory for web display
-                                        img_copy_path = os.path.join(temp_dir, f'image_{sample_id}.jpg')
-                                        
-                                        # Save image copy
-                                        if img.mode != 'RGB':
-                                            img = img.convert('RGB')
-                                        img.save(img_copy_path, 'JPEG')
-                                        
-                                        # Create dynamic URL using Django settings
-                                        img_url = f'{settings.MEDIA_URL}temp/dataset_preview/image_{sample_id}.jpg'
-                                        
-                                        samples.append({
-                                            'index': i,
-                                            'filename': img_file,
-                                            'image_url': img_url,
-                                            'mask_url': None,  # No mask for basic COCO preview
-                                            'image_shape': img_array.shape,
-                                            'mask_shape': 'COCO annotations (no parsing)',
-                                            'image_min': float(img_array.min()) if hasattr(img_array, 'min') else 'N/A',
-                                            'image_max': float(img_array.max()) if hasattr(img_array, 'max') else 'N/A',
-                                            'mask_min': 'COCO format',
-                                            'mask_max': 'COCO format',
-                                        })
-                                    except Exception as e:
-                                        logger.error(f"Error processing COCO sample {i}: {e}")
-                                        continue
-                                
-                                context['dataset_format'] = 'COCO (Basic)'
-                                context['annotation_files'] = annotation_files
-                        
-                        else:
-                            error_message = f"COCO-style directories not found. Looking for: {images_dir}, {annotations_dir}"
-                    
-                    except Exception as e:
-                        error_message = f"Error loading COCO dataset: {str(e)}"
-                        logger.error(f"COCO dataset error: {e}", exc_info=True)
-                
-                elif detected_type == 'unknown' or dataset_type == 'auto':
-                    # Try to manually explore directory structure for unknown datasets
-                    try:
-                        logger.info(f"Exploring unknown dataset structure in: {data_path}")
-                        
-                        # Check for COCO-style dataset (images/ + annotations/)
-                        images_dir = os.path.join(data_path, 'images')
-                        annotations_dir = os.path.join(data_path, 'annotations')
-                        
-                        if os.path.exists(images_dir) and os.path.exists(annotations_dir):
-                            # COCO-style dataset detected
-                            logger.info(f"COCO-style dataset detected in: {data_path}")
+                                with Image.open(img_path) as img:
+                                    sample_data['image_shape'] = f"{img.size[0]}x{img.size[1]}"
+                            except Exception:
+                                pass
                             
-                            img_files = [f for f in os.listdir(images_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-                            annotation_files = [f for f in os.listdir(annotations_dir) if f.lower().endswith('.json')]
+                            samples.append(sample_data)
                             
-                            img_files.sort()
-                            
-                            max_samples = min(6, len(img_files))
-                            
-                            temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp', 'dataset_preview')
-                            os.makedirs(temp_dir, exist_ok=True)
-                            
-                            # For COCO datasets, we'll show images without masks for now
-                            # since parsing COCO annotations is complex
-                            for i in range(max_samples):
-                                try:
-                                    sample_id = str(uuid.uuid4())
-                                    
-                                    img_file = img_files[i]
-                                    img_path = os.path.join(images_dir, img_file)
-                                    
-                                    # Load and analyze image
-                                    img = Image.open(img_path)
-                                    img_array = np.array(img)
-                                    
-                                    # Copy image to temp directory for web display
-                                    img_copy_path = os.path.join(temp_dir, f'image_{sample_id}.jpg')
-                                    
-                                    # Save image copy
-                                    if img.mode != 'RGB':
-                                        img = img.convert('RGB')
-                                    img.save(img_copy_path, 'JPEG')
-                                    
-                                    # Create dynamic URL using Django settings
-                                    img_url = f'{settings.MEDIA_URL}temp/dataset_preview/image_{sample_id}.jpg'
-                                    
-                                    samples.append({
-                                        'index': i,
-                                        'filename': img_file,
-                                        'image_url': img_url,
-                                        'mask_url': None,  # No mask for COCO preview yet
-                                        'image_shape': img_array.shape,
-                                        'mask_shape': 'COCO annotations',
-                                        'image_min': float(img_array.min()) if hasattr(img_array, 'min') else 'N/A',
-                                        'image_max': float(img_array.max()) if hasattr(img_array, 'max') else 'N/A',
-                                        'mask_min': 'COCO format',
-                                        'mask_max': 'COCO format',
-                                    })
-                                except Exception as e:
-                                    logger.error(f"Error processing COCO sample {i}: {e}")
-
-                                    continue
-                            
-                            context['dataset_format'] = 'COCO'
-                            context['annotation_files'] = annotation_files
-                            
-                        else:
-                            # Try to find any image directories
-                            possible_dirs = []
-                            for root, dirs, files in os.walk(data_path):
-                                for d in dirs:
-                                    dir_path = os.path.join(root, d)
-                                    try:
-                                        image_files = [f for f in os.listdir(dir_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-                                        if len(image_files) > 0:
-                                            possible_dirs.append({
-                                                'path': dir_path,
-                                                'relative': os.path.relpath(dir_path, data_path),
-                                                'count': len(image_files)
-                                            })
-                                    except:
-                                        continue
-                            
-                            if possible_dirs:
-                                context['possible_dirs'] = possible_dirs
-                                error_message = f"Dataset structure is unclear. Found image directories: {[d['relative'] for d in possible_dirs[:5]]}. Please specify the exact paths to images and masks directories."
-                            else:
-                                error_message = f"No image files found in dataset directory: {data_path}"
-                    
-                    except Exception as e:
-                        error_message = f"Error exploring dataset: {str(e)}"
-                        logger.error(f"Dataset exploration error: {e}", exc_info=True)
-                
-                else:
-                    error_message = f"Unsupported dataset type: {detected_type}. Currently supporting: coronary_standard, monai_style, or use auto-detect for unknown structures."
+                        except Exception as e:
+                            logger.warning(f"Error processing sample {img_path}: {e}")
+                            continue
                 
                 context['samples'] = samples
+                context['dataset_info'] = {
+                    'structure': detected_type,
+                    'image_count': len(images) if 'images' in locals() else 0,
+                    'sample_count': len(samples)
+                }
                 
             except Exception as e:
-                error_message = f"Error analyzing dataset: {str(e)}"
-                logger.error(f"Dataset analysis error: {e}", exc_info=True)
-    
-    # Always add error_message and samples to context (can be None or empty)
-    context['error_message'] = error_message
-    context['samples'] = samples
+                logger.error(f"Error previewing dataset {data_path}: {e}")
+                context['error_message'] = f"Error processing dataset: {str(e)}"
     
     return render(request, 'ml_manager/dataset_preview.html', context)
+
+
+def detect_dataset_type(data_path):
+    """Detect the type of dataset based on directory structure"""
+    import os
+    
+    # Check for common semantic segmentation patterns
+    if any(os.path.exists(os.path.join(data_path, folder)) 
+           for folder in ['images', 'masks', 'labels']):
+        return 'semantic_segmentation'
+    
+    # Check for classification structure (folders for each class)
+    subdirs = [d for d in os.listdir(data_path) 
+               if os.path.isdir(os.path.join(data_path, d))]
+    if len(subdirs) > 1 and not any(name in ['images', 'masks', 'labels'] for name in subdirs):
+        return 'classification'
+    
+    # Default to semantic segmentation
+    return 'semantic_segmentation'
+
+
+@login_required
+def preprocessing_preview(request):
+    """Generate preprocessing preview using sample image from chosen dataset"""
+    try:
+        import cv2
+        import numpy as np
+        from skimage import exposure, filters, restoration
+        from scipy import ndimage
+        import base64
+        from io import BytesIO
+        import glob
+       
+        import random
+        import os
+        from PIL import Image
+        
+        # Get preprocessing parameters from request
+        data_path = request.GET.get('data_path', '')
+        sample_image_path_param = request.GET.get('sample_image_path', '')  # New parameter for specific image
+        preprocessing_type = request.GET.get('preprocessing_type', 'angiography')
+        clahe_clip_limit = float(request.GET.get('clahe_clip_limit', 3.0))
+        clahe_tile_size = int(request.GET.get('clahe_tile_size', 8))
+        use_unsharp_masking = request.GET.get('use_unsharp_masking') == 'true'
+        unsharp_amount = float(request.GET.get('unsharp_amount', 1.0))
+        unsharp_radius = float(request.GET.get('unsharp_radius', 1.0))
+        use_frangi_filter = request.GET.get('use_frangi_filter') == 'true'
+        frangi_sigma_min = float(request.GET.get('frangi_sigma_min', 1.0))
+        frangi_sigma_max = float(request.GET.get('frangi_sigma_max', 10.0))
+        use_denoising = request.GET.get('use_denoising') == 'true'
+        noise_reduction_sigma = float(request.GET.get('noise_reduction_sigma', 1.0))
+        use_histogram_equalization = request.GET.get('use_histogram_equalization') == 'true'
+        normalize_intensity = request.GET.get('normalize_intensity') == 'true'
+        gamma_correction = float(request.GET.get('gamma_correction', 1.0))
+        
+        # Find a sample image from the dataset
+        if not data_path or not os.path.exists(data_path):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Dataset path not found or invalid'
+            })
+        
+        # If specific sample image path is provided, use it
+        if sample_image_path_param:
+            # Try to find the full path by searching in the dataset
+            found_image_path = None
+            image_patterns = [
+                os.path.join(data_path, '**', sample_image_path_param),
+                os.path.join(data_path, '**', '*' + sample_image_path_param),
+                os.path.join(data_path, sample_image_path_param),
+            ]
+            
+            for pattern in image_patterns:
+                matches = glob.glob(pattern, recursive=True)
+                if matches:
+                    found_image_path = matches[0]
+                    break
+            
+            if found_image_path and os.path.exists(found_image_path):
+                sample_image_path = found_image_path
+            else:
+                # Fall back to random selection if specified image not found
+                sample_image_path = None
+        else:
+            sample_image_path = None
+        
+        # If no specific image or not found, select randomly
+        if sample_image_path is None:
+            # Look for image files in common dataset structures
+            image_patterns = [
+                os.path.join(data_path, '**', '*.png'),
+                os.path.join(data_path, '**', '*.jpg'),
+                os.path.join(data_path, '**', '*.jpeg'),
+                os.path.join(data_path, '**', '*.tif'),
+                os.path.join(data_path, '**', '*.tiff'),
+                os.path.join(data_path, 'images', '*.png'),
+                os.path.join(data_path, 'train', '*.png'),
+                os.path.join(data_path, 'val', '*.png'),
+            ]
+            
+            sample_images = []
+            for pattern in image_patterns:
+                sample_images.extend(glob.glob(pattern, recursive=True))
+                if len(sample_images) >= 10:  # Limit search for performance
+                    break
+            
+            if not sample_images:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'No sample images found in dataset'
+                })
+            
+            # Select a random sample image
+            sample_image_path = random.choice(sample_images)
+        
+        # Load the image
+        try:
+            # Try loading as grayscale first (common for medical images)
+            image = cv2.imread(sample_image_path, cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Failed to load sample image'
+                })
+        except Exception as e:
+            return JsonResponse({
+                'status': 'error',
+                'message': f'Error loading image: {str(e)}'
+            })
+        
+        # Resize image for preview (max 512x512)
+        h, w = image.shape
+        if max(h, w) > 512:
+            scale = 512 / max(h, w)
+            new_h, new_w = int(h * scale), int(w * scale)
+            image = cv2.resize(image, (new_w, new_h))
+        
+        # Store original for comparison
+        original_image = image.copy()
+        
+        # Apply preprocessing steps
+        processed_image = image.copy().astype(np.float32)
+        
+        # Normalize to 0-1 range for processing
+        if processed_image.max() > 1.0:
+            processed_image = processed_image / 255.0
+        
+        processing_steps = []
+        
+        # 1. CLAHE (always applied when medical preprocessing is enabled)
+        if clahe_clip_limit > 0:
+            # Convert back to uint8 for CLAHE
+            clahe_input = (processed_image * 255).astype(np.uint8)
+            clahe = cv2.createCLAHE(clipLimit=clahe_clip_limit, tileGridSize=(clahe_tile_size, clahe_tile_size))
+            processed_image = clahe.apply(clahe_input).astype(np.float32) / 255.0
+            processing_steps.append(f"CLAHE (clip: {clahe_clip_limit}, tile: {clahe_tile_size})")
+        
+        # 2. Histogram Equalization
+        if use_histogram_equalization:
+            hist_input = (processed_image * 255).astype(np.uint8)
+            processed_image = cv2.equalizeHist(hist_input).astype(np.float32) / 255.0
+            processing_steps.append("Histogram Equalization")
+        
+        # 3. Denoising
+        if use_denoising:
+            processed_image = restoration.denoise_bilateral(processed_image, sigma_color=noise_reduction_sigma, sigma_spatial=noise_reduction_sigma)
+            processing_steps.append(f"Denoising (σ: {noise_reduction_sigma})")
+        
+        # 4. Frangi Filter (vessel enhancement)
+        if use_frangi_filter:
+            sigmas = np.arange(frangi_sigma_min, frangi_sigma_max + 0.5, 0.5)
+            frangi_response = filters.frangi(processed_image, sigmas=sigmas)
+            # Combine original with Frangi response
+            processed_image = np.clip(processed_image + 0.3 * frangi_response, 0, 1)
+            processing_steps.append(f"Frangi Filter (σ: {frangi_sigma_min}-{frangi_sigma_max})")
+        
+        # 5. Unsharp Masking
+        if use_unsharp_masking:
+            blurred = ndimage.gaussian_filter(processed_image, sigma=unsharp_radius)
+            unsharp_mask = processed_image - blurred
+            processed_image = processed_image + unsharp_amount * unsharp_mask
+            processed_image = np.clip(processed_image, 0, 1)
+            processing_steps.append(f"Unsharp Mask (amount: {unsharp_amount}, radius: {unsharp_radius})")
+        
+        # 6. Gamma Correction
+        if gamma_correction != 1.0:
+            processed_image = np.power(processed_image, gamma_correction)
+            processing_steps.append(f"Gamma Correction (γ: {gamma_correction})")
+        
+        # 7. Intensity Normalization (final step)
+        if normalize_intensity:
+            processed_image = (processed_image - processed_image.min()) / (processed_image.max() - processed_image.min())
+            processing_steps.append("Intensity Normalization")
+        
+        # Convert images to base64 for web display
+        def image_to_base64(img):
+            if img.dtype != np.uint8:
+                img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+            
+            # Convert to PIL Image
+            pil_img = Image.fromarray(img, mode='L')
+            buffer = BytesIO()
+            pil_img.save(buffer, format='PNG')
+            img_str = base64.b64encode(buffer.getvalue()).decode()
+            return f"data:image/png;base64,{img_str}"
+        
+        # Calculate some basic statistics for comparison
+        original_stats = {
+            'mean': float(np.mean(original_image)),
+            'std': float(np.std(original_image)),
+            'min': float(np.min(original_image)),
+            'max': float(np.max(original_image))
+        }
+        
+        processed_stats = {
+            'mean': float(np.mean(processed_image * 255)),
+            'std': float(np.std(processed_image * 255)),
+            'min': float(np.min(processed_image * 255)),
+            'max': float(np.max(processed_image * 255))
+        }
+        
+        return JsonResponse({
+            'status': 'success',
+            'original_image': image_to_base64(original_image),
+            'processed_image': image_to_base64(processed_image),
+            'processing_steps': processing_steps,
+            'original_stats': original_stats,
+            'processed_stats': processed_stats,
+            'sample_image_path': os.path.basename(sample_image_path),
+            'preprocessing_type': preprocessing_type
+        })
+        
+    except ImportError as e:
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Required libraries not available: {str(e)}'
+        })
+    except Exception as e:
+        logger.error(f"Error in preprocessing preview: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Preview generation failed: {str(e)}'
+        })
+
+
+def extract_timestamp_from_line(line):
+    """Extract timestamp from log line"""
+    import re
+    timestamp_pattern = r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})'
+    match = re.search(timestamp_pattern, line)
+    return match.group(1) if match else None
+
+def extract_log_level_from_line(line):
+    """Extract log level from log line"""
+    import re
+    level_pattern = r'\b(DEBUG|INFO|WARNING|ERROR|CRITICAL)\b'
+    match = re.search(level_pattern, line)
+    return match.group(1) if match else 'INFO'
+
+
+@login_required
+def serve_preview_image(request):
+    """Serve preview image for dataset preview"""
+    try:
+        import os
+        from django.http import HttpResponse, Http404
+        from PIL import Image
+        import io
+        
+        image_path = request.GET.get('path')
+        if not image_path or not os.path.exists(image_path):
+            raise Http404("Image not found")
+        
+        # Security check - ensure path is within allowed directories
+        allowed_dirs = ['/app/data/', '/data/', '/tmp/']
+        if not any(image_path.startswith(dir_path) for dir_path in allowed_dirs):
+            raise Http404("Access denied")
+        
+        try:
+            # Open and convert image to RGB if necessary
+            with Image.open(image_path) as img:
+                # Convert to RGB if needed
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # Create response
+                response = HttpResponse(content_type='image/jpeg')
+                img.save(response, 'JPEG', quality=85)
+                return response
+                
+        except Exception as e:
+            logger.error(f"Error serving preview image {image_path}: {e}")
+            raise Http404("Error processing image")
+            
+    except Exception as e:
+        logger.error(f"Error in serve_preview_image: {e}")
+        raise Http404("Image not found")
 

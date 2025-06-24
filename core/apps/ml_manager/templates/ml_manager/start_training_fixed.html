@@ -1,0 +1,1316 @@
+{% extends "ml_manager/base.html" %}
+
+{% block title %}Start Training - ML Manager{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Main Layout */
+    .training-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+    
+    .training-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 12px;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    }
+    
+    .training-header h1 {
+        margin: 0;
+        font-size: 2.5rem;
+        font-weight: 700;
+    }
+    
+    .training-header p {
+        margin: 0.5rem 0 0;
+        opacity: 0.9;
+        font-size: 1.1rem;
+    }
+    
+    /* Step Navigation */
+    .step-nav {
+        display: flex;
+        justify-content: center;
+        margin-bottom: 2rem;
+        padding: 0;
+        list-style: none;
+    }
+    
+    .step-nav li {
+        position: relative;
+        margin: 0 1rem;
+    }
+    
+    .step-nav li:not(:last-child)::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        right: -2rem;
+        width: 2rem;
+        height: 2px;
+        background: #dee2e6;
+        transform: translateY(-50%);
+    }
+    
+    .step-nav a {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 3rem;
+        height: 3rem;
+        border-radius: 50%;
+        background: #f8f9fa;
+        color: #212529;
+        text-decoration: none;
+        font-weight: 800;
+        transition: all 0.3s ease;
+        border: 2px solid #dee2e6;
+        text-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
+        font-size: 1.1rem;
+    }
+    
+    .step-nav a.active {
+        background: #0d6efd;
+        color: white;
+        border-color: #0d6efd;
+        text-shadow: 0 0 3px rgba(0, 0, 0, 0.5);
+        font-weight: 800;
+    }
+    
+    .step-nav a:hover {
+        background: #e9ecef;
+        color: #000000;
+        border-color: #adb5bd;
+        text-shadow: 0 0 3px rgba(255, 255, 255, 1);
+        transform: translateZ(0) scale(1.05);
+    }
+    
+    .step-nav a.completed {
+        background: #28a745;
+        color: white;
+        border-color: #28a745;
+        text-shadow: 0 0 3px rgba(0, 0, 0, 0.5);
+        font-weight: 800;
+    }
+    
+    /* Form Sections */
+    .form-section {
+        background: white;
+        border-radius: 12px;
+        padding: 2rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        border: 1px solid #e9ecef;
+        display: none;
+    }
+    
+    .form-section.active {
+        display: block;
+    }
+    
+    .section-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 2rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid #e9ecef;
+    }
+    
+    .section-header .icon {
+        width: 4rem;
+        height: 4rem;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 1.5rem;
+        font-size: 1.5rem;
+    }
+    
+    .section-header h3 {
+        margin: 0 0 0.5rem;
+        font-size: 1.75rem;
+        font-weight: 700;
+    }
+    
+    .section-header p {
+        margin: 0;
+        color: #6c757d;
+        font-size: 1rem;
+    }
+    
+    /* Toggle Items */
+    .toggle-group {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 1rem;
+        margin: 1rem 0;
+    }
+    
+    .toggle-item {
+        border: 2px solid #e9ecef;
+        border-radius: 8px;
+        padding: 1.5rem;
+        background: white;
+        transition: all 0.3s ease;
+        cursor: pointer;
+    }
+    
+    .toggle-item:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+    
+    .toggle-item.active {
+        border-color: #28a745;
+        background: #f8fff9;
+    }
+    
+    .form-switch {
+        display: flex;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+    
+    .form-switch input[type="checkbox"] {
+        width: 3rem;
+        height: 1.5rem;
+        margin-right: 0.75rem;
+        cursor: pointer;
+        border: 2px solid #dee2e6;
+        border-radius: 0.75rem;
+        background-color: #fff;
+        position: relative;
+        appearance: none;
+        -webkit-appearance: none;
+        transition: all 0.3s ease;
+    }
+    
+    .form-switch input[type="checkbox"]:checked {
+        background-color: #0d6efd;
+        border-color: #0d6efd;
+    }
+    
+    .form-switch input[type="checkbox"]::before {
+        content: '';
+        position: absolute;
+        width: 1.1rem;
+        height: 1.1rem;
+        background-color: white;
+        border-radius: 50%;
+        top: 0.1rem;
+        left: 0.1rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+    
+    .form-switch input[type="checkbox"]:checked::before {
+        transform: translateX(1.4rem);
+    }
+    
+    .form-switch input[type="checkbox"]:focus {
+        outline: none;
+        box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+    }
+    
+    .form-switch label {
+        font-weight: 600;
+        margin: 0;
+        cursor: pointer;
+        color: #495057;
+    }
+    
+    /* Medical Preprocessing Toggle - Enhanced Visibility */
+    #{{ form.use_medical_preprocessing.id_for_label }} {
+        width: 3.5rem !important;
+        height: 2rem !important;
+        border: 3px solid #0d6efd !important;
+        border-radius: 1rem !important;
+        background-color: #fff !important;
+        position: relative !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        cursor: pointer !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked {
+        background-color: #0d6efd !important;
+        border-color: #0d6efd !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}::before {
+        content: '' !important;
+        position: absolute !important;
+        width: 1.4rem !important;
+        height: 1.4rem !important;
+        background-color: white !important;
+        border-radius: 50% !important;
+        top: 0.2rem !important;
+        left: 0.2rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:checked::before {
+        transform: translateX(1.5rem) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 0.3rem rgba(13, 110, 253, 0.4) !important;
+    }
+    
+    #{{ form.use_medical_preprocessing.id_for_label }}:hover {
+        border-color: #0b5ed7 !important;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    
+    /* Augmentation Cards */
+    .augmentation-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 1.5rem;
+        margin: 1.5rem 0;
+    }
+    
+    .augmentation-card {
+        background: white;
+        border-radius: 12px;
+        padding: 0;
+        border: 2px solid #e9ecef;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        overflow: hidden;
+    }
+    
+    .augmentation-card .card-header {
+        padding: 1rem 1.5rem;
+        background: #f8f9fa;
+        border-bottom: 1px solid #e9ecef;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    
+    .augmentation-card .card-title {
+        margin: 0;
+        font-weight: 600;
+        font-size: 1rem;
+    }
+    
+    .augmentation-card .card-body {
+        padding: 1.5rem;
+        display: none;
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .augmentation-card.enabled {
+        border-color: #007bff;
+        background: rgba(0, 123, 255, 0.05);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+    
+    .augmentation-card.enabled .card-body {
+        display: block;
+        opacity: 1;
+        max-height: 500px;
+    }
+    
+    /* Preprocessing Cards */
+    .preprocessing-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 1.5rem;
+        margin: 2rem 0;
+    }
+    
+    .preprocessing-card {
+        background: white;
+        border-radius: 12px;
+        border: 2px solid #e9ecef;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .preprocessing-card .card-header {
+        padding: 1rem 1.5rem;
+        background: #f8f9fa;
+        border-bottom: 1px solid #e9ecef;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    
+    .preprocessing-card .card-body {
+        padding: 1.5rem;
+    }
+    
+    .preprocessing-card.clahe-card { 
+        border-color: #28a745; 
+        background: rgba(40, 167, 69, 0.05);
+    }
+    
+    .preprocessing-card.unsharp-card { 
+        border-color: #007bff; 
+        background: rgba(0, 123, 255, 0.05);
+    }
+    
+    .preprocessing-card.frangi-card { 
+        border-color: #6f42c1; 
+        background: rgba(111, 66, 193, 0.05);
+    }
+    
+    .preprocessing-card.denoising-card { 
+        border-color: #dc3545; 
+        background: rgba(220, 53, 69, 0.05);
+    }
+    
+    .preprocessing-card.additional-card { 
+        border-color: #fd7e14; 
+        background: rgba(253, 126, 20, 0.05);
+    }
+    
+    .preprocessing-card.custom-card { 
+        border-color: #17a2b8; 
+        background: rgba(23, 162, 184, 0.05);
+    }
+    
+    /* Responsive Design */
+    @media (max-width: 768px) {
+        .training-container {
+            padding: 1rem;
+        }
+        
+        .training-header {
+            padding: 1.5rem;
+        }
+        
+        .training-header h1 {
+            font-size: 2rem;
+        }
+        
+        .step-nav {
+            flex-wrap: wrap;
+        }
+        
+        .step-nav li {
+            margin: 0.5rem;
+        }
+        
+        .form-section {
+            padding: 1.5rem;
+        }
+        
+        .augmentation-grid {
+            grid-template-columns: 1fr;
+        }
+        
+        .preprocessing-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="training-container">
+    <!-- Header -->
+    <div class="training-header">
+        <h1><i class="fas fa-brain me-3"></i>Start Training</h1>
+        <p>Configure and launch your machine learning model training</p>
+    </div>
+    
+    <!-- Step Navigation with Arrows -->
+    <div class="step-navigation d-flex align-items-center justify-content-center mb-4">
+        <!-- Previous Arrow -->
+        <button type="button" id="step-prev-arrow" class="btn btn-outline-secondary btn-sm me-3" style="display: none;">
+            <i class="fas fa-chevron-left"></i>
+        </button>
+        
+        <!-- Step Numbers -->
+        <ul class="step-nav mb-0">
+            <li><a href="#" class="step-link active" data-step="1">1</a></li>
+            <li><a href="#" class="step-link" data-step="2">2</a></li>
+            <li><a href="#" class="step-link" data-step="3">3</a></li>
+            <li><a href="#" class="step-link" data-step="4">4</a></li>
+            <li><a href="#" class="step-link" data-step="5">5</a></li>
+            <li><a href="#" class="step-link" data-step="6">6</a></li>
+        </ul>
+        
+        <!-- Next Arrow -->
+        <button type="button" id="step-next-arrow" class="btn btn-outline-primary btn-sm ms-3">
+            <i class="fas fa-chevron-right"></i>
+        </button>
+    </div>
+
+    <form method="post" id="training-form">
+        {% csrf_token %}
+        
+        <!-- Step 1: Basic Configuration -->
+        <div class="form-section active" id="step-1">
+            <div class="section-header">
+                <div class="icon" style="background: linear-gradient(135deg, #007bff 0%, #0056b3 100%); color: white;">
+                    <i class="fas fa-cog"></i>
+                </div>
+                <div>
+                    <h3>Basic Configuration</h3>
+                    <p>Set up basic training parameters and dataset</p>
+                </div>
+            </div>
+            
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group mb-3">
+                        <label for="{{ form.name.id_for_label }}" class="form-label">
+                            <i class="fas fa-tag me-2"></i>Training Name
+                        </label>
+                        {{ form.name }}
+                    </div>
+                    <div class="form-group mb-3">
+                        <label for="{{ form.model_type.id_for_label }}" class="form-label">
+                            <i class="fas fa-brain me-2"></i>Model Type
+                        </label>
+                        {{ form.model_type }}
+                    </div>
+                    <div class="form-group mb-3">
+                        <label for="{{ form.data_path.id_for_label }}" class="form-label">
+                            <i class="fas fa-folder me-2"></i>Dataset Path
+                        </label>
+                        {{ form.data_path }}
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group mb-3">
+                        <label for="{{ form.resolution.id_for_label }}" class="form-label">
+                            <i class="fas fa-expand me-2"></i>Resolution
+                        </label>
+                        {{ form.resolution }}
+                    </div>
+                    <div class="form-group mb-3">
+                        <label for="{{ form.threshold.id_for_label }}" class="form-label">
+                            <i class="fas fa-sliders-h me-2"></i>Threshold
+                        </label>
+                        {{ form.threshold }}
+                    </div>
+                    <div class="form-group mb-3">
+                        <label for="{{ form.device.id_for_label }}" class="form-label">
+                            <i class="fas fa-microchip me-2"></i>Device
+                        </label>
+                        {{ form.device }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2: Model Configuration -->
+        <div class="form-section" id="step-2">
+            <div class="section-header">
+                <div class="icon" style="background: linear-gradient(135deg, #28a745 0%, #155724 100%); color: white;">
+                    <i class="fas fa-brain"></i>
+                </div>
+                <div>
+                    <h3>Model Configuration</h3>
+                    <p>Configure model architecture and parameters</p>
+                </div>
+            </div>
+            
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group mb-3">
+                        <label for="{{ form.epochs.id_for_label }}" class="form-label">
+                            <i class="fas fa-sync me-2"></i>Epochs
+                        </label>
+                        {{ form.epochs }}
+                    </div>
+                    <div class="form-group mb-3">
+                        <label for="{{ form.batch_size.id_for_label }}" class="form-label">
+                            <i class="fas fa-layer-group me-2"></i>Batch Size
+                        </label>
+                        {{ form.batch_size }}
+                    </div>
+                    <div class="form-group mb-3">
+                        <label for="{{ form.learning_rate.id_for_label }}" class="form-label">
+                            <i class="fas fa-tachometer-alt me-2"></i>Learning Rate
+                        </label>
+                        {{ form.learning_rate }}
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group mb-3">
+                        <label for="{{ form.optimizer.id_for_label }}" class="form-label">
+                            <i class="fas fa-rocket me-2"></i>Optimizer
+                        </label>
+                        {{ form.optimizer }}
+                    </div>
+                    <div class="form-group mb-3">
+                        <label for="{{ form.validation_split.id_for_label }}" class="form-label">
+                            <i class="fas fa-chart-pie me-2"></i>Validation Split (%)
+                        </label>
+                        {{ form.validation_split }}
+                    </div>
+                    <div class="form-group mb-3">
+                        <label for="{{ form.loss_function.id_for_label }}" class="form-label">
+                            <i class="fas fa-calculator me-2"></i>Loss Function
+                        </label>
+                        {{ form.loss_function }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Training Parameters -->
+        <div class="form-section" id="step-3">
+            <div class="section-header">
+                <div class="icon" style="background: linear-gradient(135deg, #ffc107 0%, #e0a800 100%); color: white;">
+                    <i class="fas fa-sliders-h"></i>
+                </div>
+                <div>
+                    <h3>Training Parameters</h3>
+                    <p>Advanced training configuration options</p>
+                </div>
+            </div>
+            
+            <div class="toggle-group">
+                <div class="toggle-item">
+                    <div class="form-switch">
+                        <input type="checkbox" id="{{ form.use_early_stopping.id_for_label }}" name="{{ form.use_early_stopping.html_name }}" {% if form.use_early_stopping.value %}checked{% endif %}>
+                        <label for="{{ form.use_early_stopping.id_for_label }}">
+                            <i class="fas fa-stop me-2"></i>Early Stopping
+                        </label>
+                    </div>
+                    <p class="text-muted small mb-0">Stop training when validation loss stops improving</p>
+                </div>
+                
+                <div class="toggle-item">
+                    <div class="form-switch">
+                        <input type="checkbox" id="{{ form.use_enhanced_training.id_for_label }}" name="{{ form.use_enhanced_training.html_name }}" {% if form.use_enhanced_training.value %}checked{% endif %}>
+                        <label for="{{ form.use_enhanced_training.id_for_label }}">
+                            <i class="fas fa-magic me-2"></i>Enhanced Training
+                        </label>
+                    </div>
+                    <p class="text-muted small mb-0">Enable advanced training features</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 4: Data Augmentation -->
+        <div class="form-section" id="step-4">
+            <div class="section-header">
+                <div class="icon" style="background: linear-gradient(135deg, #6f42c1 0%, #e83e8c 100%); color: white;">
+                    <i class="fas fa-magic"></i>
+                </div>
+                <div>
+                    <h3>Data Augmentation</h3>
+                    <p>Configure data augmentation techniques</p>
+                </div>
+            </div>
+
+            <div class="augmentation-grid">
+                <!-- Flip Augmentation -->
+                <div class="augmentation-card flip" id="flip-card">
+                    <div class="card-header">
+                        <div class="form-switch">
+                            <input type="checkbox" id="{{ form.use_flip.id_for_label }}" name="{{ form.use_flip.html_name }}" {% if form.use_flip.value %}checked{% endif %}>
+                            <label for="{{ form.use_flip.id_for_label }}" class="card-title">
+                                <i class="fas fa-exchange-alt me-2"></i>Flip
+                            </label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small">Random horizontal and vertical flips</p>
+                    </div>
+                </div>
+
+                <!-- Rotation Augmentation -->
+                <div class="augmentation-card rotate" id="rotate-card">
+                    <div class="card-header">
+                        <div class="form-switch">
+                            <input type="checkbox" id="{{ form.use_rotation.id_for_label }}" name="{{ form.use_rotation.html_name }}" {% if form.use_rotation.value %}checked{% endif %}>
+                            <label for="{{ form.use_rotation.id_for_label }}" class="card-title">
+                                <i class="fas fa-redo me-2"></i>Rotation
+                            </label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small">Random rotations</p>
+                        <div class="form-group">
+                            <label for="{{ form.rotation_degrees.id_for_label }}" class="form-label">Max Degrees</label>
+                            {{ form.rotation_degrees }}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Scale Augmentation -->
+                <div class="augmentation-card scale" id="scale-card">
+                    <div class="card-header">
+                        <div class="form-switch">
+                            <input type="checkbox" id="{{ form.use_scale.id_for_label }}" name="{{ form.use_scale.html_name }}" {% if form.use_scale.value %}checked{% endif %}>
+                            <label for="{{ form.use_scale.id_for_label }}" class="card-title">
+                                <i class="fas fa-search-plus me-2"></i>Scale
+                            </label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small">Random scaling</p>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="{{ form.scale_min.id_for_label }}" class="form-label">Min Scale</label>
+                                    {{ form.scale_min }}
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="{{ form.scale_max.id_for_label }}" class="form-label">Max Scale</label>
+                                    {{ form.scale_max }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Intensity Augmentation -->
+                <div class="augmentation-card contrast" id="intensity-card">
+                    <div class="card-header">
+                        <div class="form-switch">
+                            <input type="checkbox" id="{{ form.use_intensity.id_for_label }}" name="{{ form.use_intensity.html_name }}" {% if form.use_intensity.value %}checked{% endif %}>
+                            <label for="{{ form.use_intensity.id_for_label }}" class="card-title">
+                                <i class="fas fa-adjust me-2"></i>Intensity
+                            </label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small">Brightness and contrast adjustments</p>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="{{ form.brightness_factor.id_for_label }}" class="form-label">Brightness</label>
+                                    {{ form.brightness_factor }}
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="{{ form.contrast_factor.id_for_label }}" class="form-label">Contrast</label>
+                                    {{ form.contrast_factor }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Elastic Transform Augmentation -->
+                <div class="augmentation-card blur" id="elastic-card">
+                    <div class="card-header">
+                        <div class="form-switch">
+                            <input type="checkbox" id="{{ form.use_elastic.id_for_label }}" name="{{ form.use_elastic.html_name }}" {% if form.use_elastic.value %}checked{% endif %}>
+                            <label for="{{ form.use_elastic.id_for_label }}" class="card-title">
+                                <i class="fas fa-wave-square me-2"></i>Elastic Transform
+                            </label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small">Elastic deformations for medical images</p>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="{{ form.elastic_alpha.id_for_label }}" class="form-label">Alpha</label>
+                                    {{ form.elastic_alpha }}
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="{{ form.elastic_sigma.id_for_label }}" class="form-label">Sigma</label>
+                                    {{ form.elastic_sigma }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Noise Augmentation -->
+                <div class="augmentation-card noise" id="noise-card">
+                    <div class="card-header">
+                        <div class="form-switch">
+                            <input type="checkbox" id="{{ form.use_noise.id_for_label }}" name="{{ form.use_noise.html_name }}" {% if form.use_noise.value %}checked{% endif %}>
+                            <label for="{{ form.use_noise.id_for_label }}" class="card-title">
+                                <i class="fas fa-random me-2"></i>Gaussian Noise
+                            </label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small">Add Gaussian noise to images</p>
+                        <div class="form-group">
+                            <label for="{{ form.noise_std.id_for_label }}" class="form-label">Noise Standard Deviation</label>
+                            {{ form.noise_std }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 5: Medical Preprocessing -->
+        <div class="form-section" id="step-5">
+            <div class="section-header">
+                <div class="icon" style="background: linear-gradient(135deg, #17a2b8 0%, #6f42c1 100%); color: white;">
+                    <i class="fas fa-microscope"></i>
+                </div>
+                <div>
+                    <h3>Medical Preprocessing</h3>
+                    <p>Advanced medical image preprocessing for better model performance</p>
+                </div>
+            </div>
+
+            <!-- Medical Preprocessing Toggle -->
+            <div class="form-group mb-4">
+                <div class="d-flex align-items-center justify-content-between p-3 border rounded bg-light">
+                    <div>
+                        <h6 class="mb-1"><i class="fas fa-stethoscope me-2"></i>Enable Medical Preprocessing</h6>
+                        <p class="text-muted mb-0 small">Apply specialized medical image preprocessing techniques</p>
+                    </div>
+                    <div class="form-switch">
+                        <input type="checkbox" 
+                               name="{{ form.use_medical_preprocessing.html_name }}"
+                               class="form-check-input"
+                               id="{{ form.use_medical_preprocessing.id_for_label }}"
+                               {% if form.use_medical_preprocessing.value %}checked{% endif %}
+                               onchange="toggleMedicalPreprocessingFields(this.checked)">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Medical Preprocessing Fields -->
+            <div id="medical-preprocessing-fields" style="display: {% if form.use_medical_preprocessing.value %}block{% else %}none{% endif %};">
+                
+                <!-- Preprocessing Type Selection -->
+                <div class="form-group mb-4">
+                    <label for="{{ form.preprocessing_type.id_for_label }}" class="form-label">
+                        <i class="fas fa-list-alt me-2"></i>Preprocessing Type
+                    </label>
+                    {{ form.preprocessing_type }}
+                    <div class="form-text">Select the medical imaging modality for optimized preprocessing</div>
+                </div>
+
+                <!-- Preprocessing Options Grid -->
+                <div class="preprocessing-grid">
+                    
+                    <!-- CLAHE Enhancement -->
+                    <div class="preprocessing-card clahe-card">
+                        <div class="card-header">
+                            <h6 class="card-title">
+                                <i class="fas fa-adjust"></i> CLAHE Enhancement
+                            </h6>
+                            <span class="badge bg-success">Always Active</span>
+                        </div>
+                        <div class="card-body">
+                            <p class="text-muted small mb-3">Contrast Limited Adaptive Histogram Equalization for local contrast enhancement</p>
+                            
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <label for="{{ form.clahe_clip_limit.id_for_label }}" class="form-label">Clip Limit</label>
+                                        {{ form.clahe_clip_limit }}
+                                        <div class="form-text">Controls contrast enhancement strength (1.0-8.0)</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <label for="{{ form.clahe_tile_size.id_for_label }}" class="form-label">Tile Size</label>
+                                        {{ form.clahe_tile_size }}
+                                        <div class="form-text">Size of contextual regions (4-16)</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Unsharp Masking -->
+                    <div class="preprocessing-card unsharp-card" id="unsharp-card">
+                        <div class="card-header">
+                            <h6 class="card-title">
+                                <i class="fas fa-search-plus"></i> Unsharp Masking
+                            </h6>
+                            <div class="form-switch">
+                                <input type="checkbox" id="{{ form.use_unsharp_masking.id_for_label }}" name="{{ form.use_unsharp_masking.html_name }}" {% if form.use_unsharp_masking.value %}checked{% endif %}>
+                                <label for="{{ form.use_unsharp_masking.id_for_label }}"></label>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <p class="text-muted small mb-3">Enhance edges and fine details in medical images</p>
+                            
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <label for="{{ form.unsharp_amount.id_for_label }}" class="form-label">Amount</label>
+                                        {{ form.unsharp_amount }}
+                                        <div class="form-text">Sharpening strength (0.5-3.0)</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <label for="{{ form.unsharp_radius.id_for_label }}" class="form-label">Radius</label>
+                                        {{ form.unsharp_radius }}
+                                        <div class="form-text">Blur radius (0.5-3.0)</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Frangi Filter -->
+                    <div class="preprocessing-card frangi-card" id="frangi-card">
+                        <div class="card-header">
+                            <h6 class="card-title">
+                                <i class="fas fa-project-diagram"></i> Frangi Filter
+                            </h6>
+                            <div class="form-switch">
+                                <input type="checkbox" id="{{ form.use_frangi_filter.id_for_label }}" name="{{ form.use_frangi_filter.html_name }}" {% if form.use_frangi_filter.value %}checked{% endif %}>
+                                <label for="{{ form.use_frangi_filter.id_for_label }}"></label>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <p class="text-muted small mb-3">Enhance tubular structures like blood vessels</p>
+                            
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <div class="form-group">
+                                        <label for="{{ form.frangi_sigma_min.id_for_label }}" class="form-label">Min Sigma</label>
+                                        {{ form.frangi_sigma_min }}
+                                        <div class="form-text">Minimum vessel size</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="form-group">
+                                        <label for="{{ form.frangi_sigma_max.id_for_label }}" class="form-label">Max Sigma</label>
+                                        {{ form.frangi_sigma_max }}
+                                        <div class="form-text">Maximum vessel size</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="form-group">
+                                        <label for="{{ form.frangi_sigma_step.id_for_label }}" class="form-label">Step</label>
+                                        {{ form.frangi_sigma_step }}
+                                        <div class="form-text">Sigma step size</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Denoising -->
+                    <div class="preprocessing-card denoising-card" id="denoising-card">
+                        <div class="card-header">
+                            <h6 class="card-title">
+                                <i class="fas fa-magic"></i> Denoising
+                            </h6>
+                            <div class="form-switch">
+                                <input type="checkbox" id="{{ form.use_denoising.id_for_label }}" name="{{ form.use_denoising.html_name }}" {% if form.use_denoising.value %}checked{% endif %}>
+                                <label for="{{ form.use_denoising.id_for_label }}"></label>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <p class="text-muted small mb-3">Reduce noise while preserving important structures</p>
+                            
+                            <div class="form-group">
+                                <label for="{{ form.noise_reduction_sigma.id_for_label }}" class="form-label">Sigma</label>
+                                {{ form.noise_reduction_sigma }}
+                                <div class="form-text">Gaussian blur sigma for denoising (0.5-3.0)</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Additional Options -->
+                    <div class="preprocessing-card additional-card">
+                        <div class="card-header">
+                            <h6 class="card-title">
+                                <i class="fas fa-cogs"></i> Additional Options
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-group mb-3">
+                                <div class="form-switch">
+                                    <input type="checkbox" id="{{ form.use_histogram_equalization.id_for_label }}" name="{{ form.use_histogram_equalization.html_name }}" {% if form.use_histogram_equalization.value %}checked{% endif %}>
+                                    <label for="{{ form.use_histogram_equalization.id_for_label }}">Histogram Equalization</label>
+                                </div>
+                                <div class="form-text">Global histogram equalization</div>
+                            </div>
+                            
+                            <div class="form-group mb-3">
+                                <div class="form-switch">
+                                    <input type="checkbox" id="{{ form.normalize_intensity.id_for_label }}" name="{{ form.normalize_intensity.html_name }}" {% if form.normalize_intensity.value %}checked{% endif %}>
+                                    <label for="{{ form.normalize_intensity.id_for_label }}">Normalize Intensity</label>
+                                </div>
+                                <div class="form-text">Normalize pixel intensities to [0,1]</div>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="{{ form.gamma_correction.id_for_label }}" class="form-label">Gamma Correction</label>
+                                {{ form.gamma_correction }}
+                                <div class="form-text">Gamma value for intensity correction (0.5-2.0)</div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- Preview Section -->
+                <div class="mt-4">
+                    <div class="card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h6><i class="fas fa-eye me-2"></i>Preprocessing Preview</h6>
+                            <button type="button" class="btn btn-sm btn-primary" onclick="generatePreprocessingPreview()">
+                                Generate Preview
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div id="preview-loading" style="display: none;">
+                                <div class="text-center py-4">
+                                    <div class="spinner-border text-primary" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                    <p class="mt-3">Generating preview...</p>
+                                </div>
+                            </div>
+                            <div id="preview-error" style="display: none;" class="alert alert-danger"></div>
+                            <div id="preview-container" style="display: none;">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="text-center">
+                                            <h6>Original Image</h6>
+                                            <img id="original-preview" class="img-fluid border rounded" style="max-height: 300px;">
+                                            <div id="original-stats" class="small text-muted mt-2"></div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="text-center">
+                                            <h6>Processed Image</h6>
+                                            <img id="processed-preview" class="img-fluid border rounded" style="max-height: 300px;">
+                                            <div id="processed-stats" class="small text-muted mt-2"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="mt-3">
+                                    <h6>Processing Steps</h6>
+                                    <div id="processing-steps" class="small text-muted bg-light p-2 rounded"></div>
+                                </div>
+                                <div class="mt-2">
+                                    <small class="text-muted">Sample: <span id="sample-filename"></span></small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 6: Review & Launch -->
+        <div class="form-section" id="step-6">
+            <div class="section-header">
+                <div class="icon" style="background: linear-gradient(135deg, #dc3545 0%, #fd7e14 100%); color: white;">
+                    <i class="fas fa-rocket"></i>
+                </div>
+                <div>
+                    <h3>Review & Launch</h3>
+                    <p>Review your configuration and start the training process</p>
+                </div>
+            </div>
+
+            <div class="alert alert-info">
+                <h6><i class="fas fa-info-circle me-2"></i>Ready to Launch</h6>
+                <p class="mb-0">Please review your configuration above. Once you click "Start Training", the process will begin.</p>
+            </div>
+
+            <div class="text-center">
+                <button type="submit" class="btn btn-success btn-lg">
+                    <i class="fas fa-play me-2"></i>Start Training
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<script>
+console.log('Start Training Script Loading...');
+
+let currentStep = 1;
+const totalSteps = 6;
+
+// Navigation Functions
+function showStep(stepNumber) {
+    console.log('showStep called with:', stepNumber);
+    
+    if (stepNumber < 1 || stepNumber > totalSteps) {
+        console.error('Invalid step number:', stepNumber);
+        return;
+    }
+    
+    // Hide all sections
+    document.querySelectorAll('.form-section').forEach(section => {
+        section.classList.remove('active');
+    });
+    
+    // Show current section
+    const currentSection = document.getElementById(`step-${stepNumber}`);
+    if (currentSection) {
+        currentSection.classList.add('active');
+    }
+    
+    // Update step navigation
+    document.querySelectorAll('.step-link').forEach((link, index) => {
+        link.classList.remove('active', 'completed');
+        if (index + 1 < stepNumber) {
+            link.classList.add('completed');
+        } else if (index + 1 === stepNumber) {
+            link.classList.add('active');
+        }
+    });
+    
+    // Update arrow navigation
+    const stepPrevArrow = document.getElementById('step-prev-arrow');
+    const stepNextArrow = document.getElementById('step-next-arrow');
+    
+    if (stepPrevArrow) {
+        stepPrevArrow.style.display = stepNumber === 1 ? 'none' : 'inline-block';
+    }
+    
+    if (stepNextArrow) {
+        stepNextArrow.style.display = stepNumber === totalSteps ? 'none' : 'inline-block';
+    }
+    
+    console.log('showStep completed for step:', stepNumber);
+}
+
+function nextStep() {
+    console.log('nextStep called. Current step:', currentStep);
+    if (currentStep < totalSteps) {
+        currentStep++;
+        showStep(currentStep);
+    }
+}
+
+function previousStep() {
+    console.log('previousStep called. Current step:', currentStep);
+    if (currentStep > 1) {
+        currentStep--;
+        showStep(currentStep);
+    }
+}
+
+function goToStep(stepNumber) {
+    console.log('goToStep called with:', stepNumber);
+    currentStep = stepNumber;
+    showStep(currentStep);
+    return false; // Prevent default link behavior
+}
+
+// Medical Preprocessing Functions
+function toggleMedicalPreprocessingFields(enabled) {
+    console.log('Toggling medical preprocessing fields:', enabled);
+    const fieldsContainer = document.getElementById('medical-preprocessing-fields');
+    if (fieldsContainer) {
+        fieldsContainer.style.display = enabled ? 'block' : 'none';
+    }
+}
+
+function generatePreprocessingPreview() {
+    console.log('Generating preprocessing preview...');
+    
+    // Use "arcade" as default dataset
+    const dataPath = 'arcade';
+    const preprocessingEnabled = document.getElementById('{{ form.use_medical_preprocessing.id_for_label }}')?.checked;
+    
+    if (!preprocessingEnabled) {
+        alert('Please enable medical preprocessing to see preview.');
+        return;
+    }
+    
+    // Show loading state
+    document.getElementById('preview-loading').style.display = 'block';
+    document.getElementById('preview-container').style.display = 'none';
+    document.getElementById('preview-error').style.display = 'none';
+    
+    // Collect all preprocessing parameters
+    const params = new URLSearchParams({
+        data_path: dataPath,
+        preprocessing_type: document.getElementById('{{ form.preprocessing_type.id_for_label }}')?.value || 'angiography',
+        clahe_clip_limit: document.getElementById('{{ form.clahe_clip_limit.id_for_label }}')?.value || '3.0',
+        clahe_tile_size: document.getElementById('{{ form.clahe_tile_size.id_for_label }}')?.value || '8',
+        use_unsharp_masking: document.getElementById('{{ form.use_unsharp_masking.id_for_label }}')?.checked || false,
+        unsharp_amount: document.getElementById('{{ form.unsharp_amount.id_for_label }}')?.value || '1.0',
+        unsharp_radius: document.getElementById('{{ form.unsharp_radius.id_for_label }}')?.value || '1.0',
+        use_frangi_filter: document.getElementById('{{ form.use_frangi_filter.id_for_label }}')?.checked || false,
+        frangi_sigma_min: document.getElementById('{{ form.frangi_sigma_min.id_for_label }}')?.value || '1.0',
+        frangi_sigma_max: document.getElementById('{{ form.frangi_sigma_max.id_for_label }}')?.value || '10.0',
+        use_denoising: document.getElementById('{{ form.use_denoising.id_for_label }}')?.checked || false,
+        noise_reduction_sigma: document.getElementById('{{ form.noise_reduction_sigma.id_for_label }}')?.value || '1.0',
+        use_histogram_equalization: document.getElementById('{{ form.use_histogram_equalization.id_for_label }}')?.checked || false,
+        normalize_intensity: document.getElementById('{{ form.normalize_intensity.id_for_label }}')?.checked || true,
+        gamma_correction: document.getElementById('{{ form.gamma_correction.id_for_label }}')?.value || '1.0'
+    });
+    
+    // Make AJAX request to generate preview
+    fetch(`{% url 'ml_manager:preprocessing-preview' %}?${params.toString()}`, {
+        method: 'GET',
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        document.getElementById('preview-loading').style.display = 'none';
+        
+        if (data.status === 'success') {
+            // Show preview images
+            document.getElementById('original-preview').src = data.original_image;
+            document.getElementById('processed-preview').src = data.processed_image;
+            
+            // Show processing steps
+            const stepsText = data.processing_steps.length > 0 ? 
+                data.processing_steps.join(' → ') : 'No processing steps applied';
+            document.getElementById('processing-steps').textContent = stepsText;
+            
+            // Show statistics
+            const origStats = data.original_stats;
+            const procStats = data.processed_stats;
+            
+            document.getElementById('original-stats').innerHTML = `
+                <strong>Statistics:</strong><br>
+                Mean: ${origStats.mean.toFixed(1)}, Std: ${origStats.std.toFixed(1)}<br>
+                Range: ${origStats.min.toFixed(1)} - ${origStats.max.toFixed(1)}
+            `;
+            
+            document.getElementById('processed-stats').innerHTML = `
+                <strong>Statistics:</strong><br>
+                Mean: ${procStats.mean.toFixed(1)}, Std: ${procStats.std.toFixed(1)}<br>
+                Range: ${procStats.min.toFixed(1)} - ${procStats.max.toFixed(1)}
+            `;
+            
+            // Show sample filename
+            if (data.sample_image_path) {
+                document.getElementById('sample-filename').textContent = data.sample_image_path;
+            }
+            
+            // Show preview container
+            document.getElementById('preview-container').style.display = 'block';
+            
+            console.log('Preview generated successfully');
+        } else {
+            // Show error
+            document.getElementById('preview-error').textContent = data.message;
+            document.getElementById('preview-error').style.display = 'block';
+            console.log('Preview generation failed:', data.message);
+        }
+    })
+    .catch(error => {
+        document.getElementById('preview-loading').style.display = 'none';
+        document.getElementById('preview-error').textContent = `Error: ${error.message}`;
+        document.getElementById('preview-error').style.display = 'block';
+        console.log('Preview request failed:', error);
+    });
+}
+
+// Augmentation Functions
+function toggleAugmentationCard(cardId, enabled) {
+    console.log('toggleAugmentationCard called:', cardId, 'enabled:', enabled);
+    const card = document.getElementById(cardId);
+    if (card) {
+        if (enabled) {
+            card.classList.add('enabled');
+        } else {
+            card.classList.remove('enabled');
+        }
+    }
+}
+
+// Initialize Navigation
+function initializeNavigation() {
+    console.log('Initializing navigation...');
+    
+    // Add event listeners for navigation arrows
+    const stepPrevArrow = document.getElementById('step-prev-arrow');
+    const stepNextArrow = document.getElementById('step-next-arrow');
+    
+    if (stepPrevArrow) {
+        stepPrevArrow.addEventListener('click', function(e) {
+            e.preventDefault();
+            console.log('Previous arrow clicked');
+            previousStep();
+        });
+    }
+    
+    if (stepNextArrow) {
+        stepNextArrow.addEventListener('click', function(e) {
+            e.preventDefault();
+            console.log('Next arrow clicked');
+            nextStep();
+        });
+    }
+    
+    // Add event listeners for step links
+    document.querySelectorAll('.step-link').forEach((link, index) => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            const stepNumber = parseInt(link.getAttribute('data-step')) || (index + 1);
+            console.log(`Step link ${stepNumber} clicked`);
+            goToStep(stepNumber);
+        });
+    });
+    
+    // Initialize augmentation cards
+    document.querySelectorAll('.augmentation-card input[type="checkbox"]').forEach(checkbox => {
+        const card = checkbox.closest('.augmentation-card');
+        if (card) {
+            const cardId = card.id;
+            const isChecked = checkbox.checked;
+            
+            // Apply initial state
+            toggleAugmentationCard(cardId, isChecked);
+            
+            // Add change event listener
+            checkbox.addEventListener('change', function(e) {
+                console.log(`Augmentation ${cardId} toggled:`, e.target.checked);
+                toggleAugmentationCard(cardId, e.target.checked);
+            });
+        }
+    });
+    
+    // Show initial step
+    showStep(currentStep);
+    
+    console.log('Navigation initialized successfully');
+}
+
+// Initialize when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('DOM Content Loaded - initializing...');
+    
+    // Initialize medical preprocessing visibility
+    const medicalPreprocessingCheckbox = document.getElementById('{{ form.use_medical_preprocessing.id_for_label }}');
+    if (medicalPreprocessingCheckbox) {
+        toggleMedicalPreprocessingFields(medicalPreprocessingCheckbox.checked);
+    }
+    
+    // Initialize navigation
+    initializeNavigation();
+});
+
+// Also initialize on window load
+window.addEventListener('load', function() {
+    console.log('Window loaded - initializing...');
+    initializeNavigation();
+});
+
+console.log('Start Training Script Loaded Successfully');
+</script>
+{% endblock %}

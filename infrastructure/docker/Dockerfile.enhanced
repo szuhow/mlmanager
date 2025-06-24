@@ -22,6 +22,13 @@ RUN apt-get update && apt-get install -y \
     curl \
     wget \
     git \
+    ffmpeg \
+    libavformat-dev \
+    libavcodec-dev \
+    libavdevice-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libavfilter-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first for better Docker layer caching
@@ -31,10 +38,11 @@ WORKDIR /app
 COPY requirements/base.txt ./requirements/base.txt
 
 # Install Python packages with enhanced dependencies for ML Manager
+# Use pip with retries and timeout handling for large packages like PyTorch
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements/base.txt && \
-    pip install --no-cache-dir django uvicorn && \
-    pip install --no-cache-dir flower && \
+    pip install --no-cache-dir --timeout=300 --retries=5 -r requirements/base.txt && \
+    pip install --no-cache-dir --timeout=300 --retries=5 django uvicorn && \
+    pip install --no-cache-dir --timeout=300 --retries=5 flower && \
     # Clear pip cache to reduce image size
     pip cache purge
 

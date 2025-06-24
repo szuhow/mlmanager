@@ -51,6 +51,22 @@ class ModelLogsManager {
             });
         }
 
+        // Modal refresh button (for modal view)
+        const modalRefreshBtn = document.getElementById('modal-refresh-logs');
+        if (modalRefreshBtn) {
+            modalRefreshBtn.addEventListener('click', () => {
+                this.loadLogs();
+            });
+        }
+
+        // Load All Lines button (for modal view)
+        const loadAllBtn = document.getElementById('modal-load-all-logs');
+        if (loadAllBtn) {
+            loadAllBtn.addEventListener('click', () => {
+                this.loadAllLogs();
+            });
+        }
+
         // Auto-refresh toggle
         const autoRefreshToggle = document.getElementById('auto-refresh-logs');
         if (autoRefreshToggle) {
@@ -76,15 +92,21 @@ class ModelLogsManager {
         }
     }
 
-    async loadLogs() {
+    async loadLogs(linesLimit = null) {
         const logsContainer = document.getElementById('training-logs-container');
-        if (!logsContainer) return;
+        const modalLogsContainer = document.getElementById('modal-logs-content');
+        
+        if (!logsContainer && !modalLogsContainer) return;
 
         // Show loading indicator
         this.showLoading();
 
         try {
             const params = new URLSearchParams(this.currentFilters);
+            if (linesLimit !== null) {
+                params.set('lines', linesLimit);
+            }
+            
             const response = await fetch(`/ml/model/${this.modelId}/logs/?${params}`, {
                 headers: {
                     'X-Requested-With': 'XMLHttpRequest'

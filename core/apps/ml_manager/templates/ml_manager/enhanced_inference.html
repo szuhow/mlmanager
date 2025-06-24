@@ -1,4 +1,4 @@
-{% extends 'base.html' %}
+{% extends 'ml_manager/base.html' %}
 {% load static %}
 
 {% block title %}Enhanced Inference{% endblock %}
@@ -79,6 +79,36 @@
         border-left: 4px solid #ffc107;
         padding: 10px 15px;
         margin: 15px 0;
+    }
+    
+    .augmentation-section {
+        background: #e8f5e8;
+        border: 1px solid #c3e6c3;
+        border-radius: 6px;
+        padding: 15px;
+        margin: 15px 0;
+    }
+    
+    .augmentation-section h5 {
+        color: #2d5a2d;
+        margin-bottom: 10px;
+    }
+    
+    .form-check {
+        margin-bottom: 8px;
+    }
+    
+    .form-check-label {
+        font-weight: 500;
+        color: #495057;
+    }
+    
+    #tta-options {
+        background: rgba(255, 255, 255, 0.8);
+        border-radius: 4px;
+        padding: 15px;
+        margin-top: 15px;
+        border: 1px solid #dee2e6;
     }
 </style>
 {% endblock %}
@@ -164,11 +194,11 @@
                         
                         <!-- Image Upload -->
                         <div class="inference-config">
-                            <h5><i class="fas fa-images"></i> Input Images</h5>
+                            <h5><i class="fas fa-image"></i> Input Image</h5>
                             <div class="form-group">
-                                <label for="{{ form.images.id_for_label }}">{{ form.images.label }}</label>
-                                {{ form.images }}
-                                <div class="help-text">{{ form.images.help_text }}</div>
+                                <label for="{{ form.image.id_for_label }}">{{ form.image.label }}</label>
+                                {{ form.image }}
+                                <div class="help-text">{{ form.image.help_text }}</div>
                             </div>
                         </div>
                         
@@ -246,6 +276,68 @@
                             </div>
                         </div>
                         
+                        <!-- Test Time Augmentation Section -->
+                        <div class="augmentation-section">
+                            <h5><i class="fas fa-magic"></i> Test Time Augmentation (TTA)</h5>
+                            <p class="text-muted">Apply multiple augmentations to improve prediction accuracy</p>
+                            
+                            <div class="form-group">
+                                <div class="form-check">
+                                    {{ form.use_tta }}
+                                    <label class="form-check-label" for="{{ form.use_tta.id_for_label }}">
+                                        {{ form.use_tta.label }}
+                                    </label>
+                                    <div class="help-text">{{ form.use_tta.help_text }}</div>
+                                </div>
+                            </div>
+                            
+                            <div id="tta-options" style="display: none;">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="form-check">
+                                            {{ form.tta_flip_horizontal }}
+                                            <label class="form-check-label" for="{{ form.tta_flip_horizontal.id_for_label }}">
+                                                {{ form.tta_flip_horizontal.label }}
+                                            </label>
+                                            <div class="help-text">{{ form.tta_flip_horizontal.help_text }}</div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col-md-6">
+                                        <div class="form-check">
+                                            {{ form.tta_flip_vertical }}
+                                            <label class="form-check-label" for="{{ form.tta_flip_vertical.id_for_label }}">
+                                                {{ form.tta_flip_vertical.label }}
+                                            </label>
+                                            <div class="help-text">{{ form.tta_flip_vertical.help_text }}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="form-check">
+                                            {{ form.tta_rotate_90 }}
+                                            <label class="form-check-label" for="{{ form.tta_rotate_90.id_for_label }}">
+                                                {{ form.tta_rotate_90.label }}
+                                            </label>
+                                            <div class="help-text">{{ form.tta_rotate_90.help_text }}</div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col-md-6">
+                                        <div class="form-check">
+                                            {{ form.tta_scale }}
+                                            <label class="form-check-label" for="{{ form.tta_scale.id_for_label }}">
+                                                {{ form.tta_scale.label }}
+                                            </label>
+                                            <div class="help-text">{{ form.tta_scale.help_text }}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
                         <!-- Submit Button -->
                         <div class="text-center">
                             <button type="submit" class="btn btn-primary btn-lg">
@@ -275,9 +367,9 @@ $(document).ready(function() {
     
     // Form validation
     $('#inference-form').submit(function(e) {
-        var images = $('#id_images')[0].files;
-        if (images.length === 0) {
-            alert('Please select at least one image for inference.');
+        var image = $('#id_image')[0].files;
+        if (image.length === 0) {
+            alert('Please select an image for inference.');
             e.preventDefault();
             return false;
         }
@@ -287,6 +379,31 @@ $(document).ready(function() {
             '<i class="fas fa-spinner fa-spin"></i> Starting Inference...'
         );
     });
+    
+    // TTA toggle functionality
+    function toggleTTAOptions() {
+        const ttaCheckbox = $('#{{ form.use_tta.id_for_label }}');
+        const ttaOptions = $('#tta-options');
+        const isChecked = ttaCheckbox.is(':checked');
+        
+        console.log('TTA toggle - checkbox checked:', isChecked);
+        console.log('TTA options element found:', ttaOptions.length > 0);
+        
+        if (isChecked) {
+            ttaOptions.slideDown(300);
+        } else {
+            ttaOptions.slideUp(300);
+        }
+    }
+    
+    // Bind TTA toggle event
+    $('#{{ form.use_tta.id_for_label }}').change(toggleTTAOptions);
+    
+    // Initialize TTA options visibility on page load
+    setTimeout(function() {
+        console.log('Initializing TTA options...');
+        toggleTTAOptions();
+    }, 100); // Small delay to ensure DOM is fully ready
     
     // Dynamic model selection (if all_models view)
     $('#id_model_id').change(function() {
