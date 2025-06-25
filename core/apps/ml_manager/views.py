@@ -9,6 +9,7 @@ from django.http import JsonResponse, HttpResponse
 from django.utils.http import http_date
 from .forms import TrainingForm, InferenceForm, EnhancedInferenceForm, TrainingTemplateForm
 from .models import MLModel, Prediction, TrainingTemplate
+from .utils.training_utils import TrainingController, create_enhanced_training_config
 import mlflow
 import subprocess
 import sys
@@ -47,6 +48,9 @@ except ImportError:
     # Fallback if import fails
     def run_inference(*args, **kwargs):
         raise ImportError("run_inference function not available")
+
+# Global storage for active training controllers
+_active_training_controllers = {}
 
 # Create your views here.
 
@@ -1219,110 +1223,62 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 'custom_preprocessing_pipeline': form_data.get('custom_preprocessing_pipeline', ''),
             }
             
-            # Start training using subprocess instead of direct_training manager
-            logger.info(f"Starting training subprocess for model {ml_model.id}")
+            # Use TrainingController instead of manual subprocess management
+            logger.info(f"Starting training with TrainingController for model {ml_model.id}")
             
-            # Build command arguments
-            training_args = [
-                sys.executable, 'ml/training/train.py',
-                '--mode', 'train',
-                '--model-id', str(ml_model.id),
-                '--mlflow-run-id', str(mlflow_run_id),
-                '--model-family', form_data.get('model_family', 'UNet-Coronary'),
-                '--model-type', form_data['model_type'],
-                '--data-path', form_data['data_path'],
-                '--dataset-type', form_data['dataset_type'],
-                '--batch-size', str(form_data['batch_size']),
-                '--epochs', str(form_data['epochs']),
-                '--learning-rate', str(form_data['learning_rate']),
-                '--optimizer', form_data['optimizer'],
-                '--validation-split', str(form_data['validation_split']),
-                '--crop-size', str(form_data['crop_size']),
-                '--threshold', str(form_data.get('threshold', 0.5)),
-                '--loss-function', form_data.get('loss_function', 'combined'),
-                '--dice-weight', str(form_data.get('dice_weight', 0.7)),
-                '--bce-weight', str(form_data.get('bce_weight', 0.3)),
-                '--num-workers', str(form_data['num_workers']),
-                '--lr-scheduler', form_data['lr_scheduler'],
-                '--lr-patience', str(form_data.get('lr_patience', 5)),
-            ]
+            # Create enhanced training configuration
+            training_config = create_enhanced_training_config(form_data)
             
-            # Only enable mixed precision on GPU devices
-            device = form_data.get('device', 'auto')
-            if form_data.get('use_mixed_precision', False) and device != 'cpu':
-                training_args.extend(['--use-mixed-precision', 'True'])
-            elif form_data.get('use_mixed_precision', False) and device == 'cpu':
-                logger.info("Mixed precision disabled for CPU device")
+            # Add MLflow run ID to config
+            training_config['mlflow_run_id'] = str(mlflow_run_id)
             
-            # Add enhanced training flags
-            if form_data.get('use_enhanced_training', True):
-                training_args.append('--use-enhanced-training')
-            
-            # Add augmentation flags
-            if form_data.get('use_random_flip', False):
-                training_args.append('--random-flip')
-            if form_data.get('use_random_rotate', False):
-                training_args.append('--random-rotate')
-            if form_data.get('use_random_scale', False):
-                training_args.append('--random-scale')
-            if form_data.get('use_random_intensity', False):
-                training_args.append('--random-intensity')
-            
-            # Add medical preprocessing flags
-            if form_data.get('use_medical_preprocessing', False):
-                training_args.extend([
-                    '--use-medical-preprocessing',
-                    '--medical-preprocessing-type', form_data.get('preprocessing_type', 'angiography'),
-                    '--preprocessing-clahe-clip-limit', str(form_data.get('clahe_clip_limit', 3.0)),
-                    '--preprocessing-clahe-tile-size', str(form_data.get('clahe_tile_size', 8)),
-                ])
+            try:
+                # Initialize TrainingController
+                controller = TrainingController(ml_model, training_config)
                 
-                # Unsharp masking
-                if form_data.get('use_unsharp_masking', False):
-                    training_args.extend([
-                        '--preprocessing-use-unsharp-masking',
-                        '--preprocessing-unsharp-amount', str(form_data.get('unsharp_amount', 1.0)),
-                        '--preprocessing-unsharp-radius', str(form_data.get('unsharp_radius', 1.0)),
-                    ])
+                # Store controller in global storage for later access
+                _active_training_controllers[ml_model.id] = controller
                 
-                # Frangi filter
-                if form_data.get('use_frangi_filter', False):
-                    training_args.extend([
-                        '--preprocessing-use-frangi',
-                        '--preprocessing-frangi-scale-range', f"{form_data.get('frangi_sigma_min', 1.0)},{form_data.get('frangi_sigma_max', 10.0)}",
-                        '--preprocessing-frangi-scale-step', str(form_data.get('frangi_sigma_step', 2.0)),
-                    ])
+                # Start training with monitoring
+                def progress_callback(epoch, total_epochs, metrics):
+                    """Callback to handle training progress updates"""
+                    logger.info(f"Training progress: Epoch {epoch}/{total_epochs}, Metrics: {metrics}")
+                    # You can add WebSocket or database updates here if needed
                 
-                # Denoising
-                if form_data.get('use_denoising', False):
-                    training_args.extend([
-                        '--preprocessing-use-denoising',
-                        '--preprocessing-noise-variance', str(form_data.get('noise_reduction_sigma', 1.0)),
-                    ])
+                # Start training asynchronously (in background)
+                import threading
+                def run_training():
+                    try:
+                        result = controller.train_with_monitoring(progress_callback)
+                        if result['success']:
+                            ml_model.status = 'completed'
+                            ml_model.model_path = result.get('model_path')
+                            logger.info(f"Training completed successfully for model {ml_model.id}")
+                        else:
+                            ml_model.status = 'failed'
+                            logger.error(f"Training failed for model {ml_model.id}: {result.get('error')}")
+                    except Exception as e:
+                        ml_model.status = 'failed'
+                        logger.error(f"Training exception for model {ml_model.id}: {e}")
+                    finally:
+                        # Clean up controller from storage
+                        if ml_model.id in _active_training_controllers:
+                            del _active_training_controllers[ml_model.id]
+                        ml_model.save()
                 
-                # Histogram equalization
-                if form_data.get('use_histogram_equalization', False):
-                    training_args.append('--preprocessing-use-histogram-equalization')
+                # Start training in background thread
+                training_thread = threading.Thread(target=run_training)
+                training_thread.daemon = True
+                training_thread.start()
                 
-                # Gamma correction
-                gamma_value = form_data.get('gamma_correction', 1.0)
-                if gamma_value != 1.0:
-                    training_args.extend([
-                        '--preprocessing-gamma-correction', str(gamma_value)
-                    ])
+                messages.success(self.request, f"Training started successfully for model '{ml_model.name}' using TrainingController.")
                 
-                # Custom preprocessing pipeline
-                custom_pipeline = form_data.get('custom_preprocessing_pipeline', '').strip()
-                if custom_pipeline:
-                    training_args.extend([
-                        '--preprocessing-custom-pipeline', custom_pipeline
-                    ])
-
-            # Start training process
-            logger.info(f"Training command: {' '.join(training_args)}")
-            subprocess.Popen(training_args)
-            
-            messages.success(self.request, f"Training started successfully for model '{ml_model.name}'.")
+            except Exception as e:
+                logger.error(f"Error starting training with TrainingController: {e}")
+                messages.error(self.request, f"Failed to start training: {e}")
+                ml_model.status = 'failed'
+                ml_model.save()
+        
         except Exception as e:
             logger.error(f"Error starting training: {e}")
             messages.error(self.request, f"Failed to start training: {e}")
@@ -1349,37 +1305,51 @@ def stop_training(request, model_id):
         model.status = 'stopping'
         model.save()
         
-        # Try to stop the training process
-        # Note: This is a simplified implementation
-        # In a production environment, you might want to use process groups or other methods
-        try:
-            # Look for training processes and send signal to stop
-            import psutil
+        # Try to find and stop the TrainingController first
+        controller = _active_training_controllers.get(model_id)
+        if controller:
+            try:
+                controller.stop_training()
+                message = "Training stop signal sent via TrainingController. Training will stop gracefully."
+                logger.info(f"Successfully sent stop signal to TrainingController for model {model_id}")
+            except Exception as e:
+                logger.error(f"Error stopping training via TrainingController: {e}")
+                message = f"Error stopping training: {e}"
+        else:
+            # Fallback to the old method if controller not found
+            logger.warning(f"TrainingController not found for model {model_id}, falling back to process termination")
             
-            # Find processes related to this model's training
-            stopped_processes = 0
-            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                try:
-                    cmdline = proc.info['cmdline']
-                    if cmdline and any(str(model_id) in str(arg) for arg in cmdline):
-                        if 'python' in proc.info['name'] and 'train.py' in ' '.join(cmdline):
-                            proc.terminate()
-                            stopped_processes += 1
-                            logger.info(f"Terminated training process {proc.info['pid']} for model {model_id}")
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            
-            if stopped_processes > 0:
-                message = f"Stop signal sent to {stopped_processes} training process(es). Training will stop after current epoch."
-            else:
-                message = "Stop signal sent. Training will stop after current epoch."
+            # Try to stop the training process
+            # Note: This is a simplified implementation
+            # In a production environment, you might want to use process groups or other methods
+            try:
+                # Look for training processes and send signal to stop
+                import psutil
                 
-        except ImportError:
-            # If psutil is not available, just update the status
-            message = "Stop requested. Training will stop after current epoch."
-        except Exception as e:
-            logger.warning(f"Error stopping training process: {e}")
-            message = "Stop requested. Training will stop after current epoch."
+                # Find processes related to this model's training
+                stopped_processes = 0
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    try:
+                        cmdline = proc.info['cmdline']
+                        if cmdline and any(str(model_id) in str(arg) for arg in cmdline):
+                            if 'python' in proc.info['name'] and 'train.py' in ' '.join(cmdline):
+                                proc.terminate()
+                                stopped_processes += 1
+                                logger.info(f"Terminated training process {proc.info['pid']} for model {model_id}")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                
+                if stopped_processes > 0:
+                    message = f"Stop signal sent to {stopped_processes} training process(es). Training will stop after current epoch."
+                else:
+                    message = "Stop signal sent. Training will stop after current epoch."
+                    
+            except ImportError:
+                # If psutil is not available, just update the status
+                message = "Stop requested. Training will stop after current epoch."
+            except Exception as e:
+                logger.warning(f"Error stopping training process: {e}")
+                message = "Stop requested. Training will stop after current epoch."
         
         logger.info(f"Training stop requested for model {model_id}")
         
@@ -1501,7 +1471,30 @@ class ModelInferenceView(LoginRequiredMixin, FormView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         model_id = self.kwargs.get('pk')
-        context['model'] = get_object_or_404(MLModel, pk=model_id)
+        model = get_object_or_404(MLModel, pk=model_id)
+        context['model'] = model
+        
+        # Add available checkpoints to context
+        available_checkpoints = []
+        try:
+            # Look for model files in the model's directory
+            model_dir = Path(settings.MEDIA_ROOT) / 'models' / str(model_id)
+            if model_dir.exists():
+                # Find .pth files (PyTorch model checkpoints)
+                checkpoint_files = list(model_dir.glob('*.pth'))
+                available_checkpoints = [
+                    {
+                        'name': f.name,
+                        'path': str(f.relative_to(settings.MEDIA_ROOT)),
+                        'size': f.stat().st_size if f.exists() else 0
+                    }
+                    for f in checkpoint_files
+                ]
+        except Exception as e:
+            logger.warning(f"Could not load checkpoints for model {model_id}: {e}")
+            available_checkpoints = []
+        
+        context['available_checkpoints'] = available_checkpoints
         return context
     
     def form_valid(self, form):

@@ -1868,7 +1868,7 @@ def parse_args():
     parser.add_argument('--random-scale', action='store_true', help='Enable random scaling augmentation')
     parser.add_argument('--random-intensity', action='store_true', help='Enable random intensity scaling')
     parser.add_argument('--crop-size', type=int, default=128, help='Size of random crop and target resolution')
-    parser.add_argument('--threshold', type=float, default=0.5, help='Binary segmentation threshold for hard predictions')
+    parser.add_argument('--threshold', type=lambda x: None if x.lower() == 'none' else float(x), default=0.5, help='Binary segmentation threshold for hard predictions')
     parser.add_argument('--num-workers', type=int, default=2, help='Number of data loading workers (reduced for Docker)')
     
     # Learning rate scheduler parameters
@@ -2337,7 +2337,8 @@ def train_model(args):
     
     # Log device and processing parameters
     mlflow.log_param("device", getattr(args, 'device', 'auto'))
-    mlflow.log_param("threshold", args.threshold)
+    threshold = args.threshold if args.threshold is not None else 0.5
+    mlflow.log_param("threshold", threshold)
     
     # Log augmentation parameters
     mlflow.log_param("random_flip", getattr(args, 'random_flip', False))
@@ -3176,7 +3177,8 @@ def train_model(args):
                         # Apply proper thresholding for binary segmentation
                         if outputs.shape[1] == 1:
                             val_outputs_soft = torch.sigmoid(outputs)
-                            val_outputs_hard = (val_outputs_soft > args.threshold).float()
+                            threshold = args.threshold if args.threshold is not None else 0.5
+                            val_outputs_hard = (val_outputs_soft > threshold).float()
                             dice_metric(y_pred=val_outputs_hard, y=labels)
                         else:
                             # Multi-class - apply softmax and argmax
@@ -3413,7 +3415,8 @@ def train_model(args):
                         if num_output_channels == 1:
                             # Binary segmentation - apply sigmoid then threshold
                             val_outputs_soft = torch.sigmoid(val_outputs)
-                            val_outputs_hard = (val_outputs_soft > args.threshold).float()
+                            threshold = args.threshold if args.threshold is not None else 0.5
+                            val_outputs_hard = (val_outputs_soft > threshold).float()
                             # Use hard predictions for metric calculation
                             val_outputs = val_outputs_hard
                         else:
@@ -3512,7 +3515,8 @@ def train_model(args):
                 
                 # Save sample predictions every epoch (not just every 5 epochs)
                 try:
-                    pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir, class_info=class_info, threshold=args.threshold)
+                    threshold = args.threshold if args.threshold is not None else 0.5
+                    pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir, class_info=class_info, threshold=threshold)
                     if pred_file and os.path.exists(pred_file):
                         epoch_artifacts['predictions'] = pred_file
                         mlflow.log_artifact(pred_file, artifact_path=f"predictions/epoch_{epoch+1:03d}")
@@ -3589,7 +3593,8 @@ def train_model(args):
                 logger.warning(f"[MLFLOW] Enhanced artifact logging failed, falling back to basic logging: {e}")
                 
                 # Fallback to original artifact logging - Generate predictions every epoch
-                pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir, class_info=class_info, threshold=args.threshold)
+                threshold = args.threshold if args.threshold is not None else 0.5
+                pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir, class_info=class_info, threshold=threshold)
                 if pred_file:
                     mlflow.log_artifact(pred_file, artifact_path=f"predictions/epoch_{epoch+1:03d}")
                     logger.info(f"[MLFLOW] Fallback: Successfully logged prediction samples for epoch {epoch+1}")

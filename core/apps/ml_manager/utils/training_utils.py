@@ -58,16 +58,31 @@ class TrainingController:
     def _prepare_training_command(self) -> list:
         """Prepare the training command with all necessary arguments."""
         
-        # Base training script path - use absolute path within container
-        # In Docker container, we know the structure is /app/ml/training/train.py
-        training_script = Path('/app/ml/training/train.py')
+        # Base training script path - check multiple possible locations
+        possible_paths = [
+            Path('/app/ml/training/train.py'),  # Docker container path
+            Path('ml/training/train.py'),  # Relative path
+            Path('../ml/training/train.py'),  # Relative path from core
+            Path(__file__).parent.parent.parent.parent / 'ml' / 'training' / 'train.py'  # Absolute path
+        ]
+        
+        training_script = None
+        for path in possible_paths:
+            if path.exists():
+                training_script = path
+                break
+        
+        if not training_script:
+            raise FileNotFoundError(f"Training script not found in any of: {[str(p) for p in possible_paths]}")
+        
+        logger.info(f"Using training script: {training_script}")
         
         # Base command
         cmd = [
             sys.executable,
             str(training_script),
-            '--mode=train',  # Required mode argument
-            '--model_id', str(self.model.id)
+            '--mode', 'train',  # Required mode argument
+            '--model-id', str(self.model.id)
         ]
         
         # Add training configuration parameters
@@ -75,7 +90,7 @@ class TrainingController:
         
         # Dataset parameters
         if 'dataset_name' in config:
-            cmd.extend(['--dataset_name', config['dataset_name']])
+            cmd.extend(['--dataset-name', config['dataset_name']])
         if 'data_path' in config:
             cmd.extend(['--data-path', config['data_path']])
         if 'dataset_type' in config:
@@ -85,9 +100,9 @@ class TrainingController:
         if 'epochs' in config:
             cmd.extend(['--epochs', str(config['epochs'])])
         if 'batch_size' in config:
-            cmd.extend(['--batch_size', str(config['batch_size'])])
+            cmd.extend(['--batch-size', str(config['batch_size'])])
         if 'learning_rate' in config:
-            cmd.extend(['--learning_rate', str(config['learning_rate'])])
+            cmd.extend(['--learning-rate', str(config['learning_rate'])])
         if 'validation_split' in config:
             cmd.extend(['--validation-split', str(config['validation_split'])])
         if 'optimizer' in config:
@@ -96,6 +111,8 @@ class TrainingController:
             cmd.extend(['--device', config['device']])
         if 'crop_size' in config:
             cmd.extend(['--crop-size', str(config['crop_size'])])
+        if 'threshold' in config:
+            cmd.extend(['--threshold', str(config['threshold'])])
         if 'num_workers' in config:
             # CPU training fix: force num_workers=0 to prevent deadlocks
             num_workers = config['num_workers']
@@ -105,38 +122,68 @@ class TrainingController:
             cmd.extend(['--num-workers', str(num_workers)])
         if 'resolution' in config:
             cmd.extend(['--resolution', str(config['resolution'])])
+        if 'lr_scheduler' in config:
+            cmd.extend(['--lr-scheduler', config['lr_scheduler']])
+        if 'lr_patience' in config:
+            cmd.extend(['--lr-patience', str(config['lr_patience'])])
+        if 'model_family' in config:
+            cmd.extend(['--model-family', config['model_family']])
+        if 'loss_function' in config:
+            cmd.extend(['--loss-function', config['loss_function']])
+        if 'bce_weight' in config:
+            cmd.extend(['--bce-weight', str(config['bce_weight'])])
+        
+        # Augmentation flags
+        if config.get('use_random_flip', False):
+            cmd.append('--random-flip')
+        if config.get('use_random_rotate', False):
+            cmd.append('--random-rotate')
+        if config.get('use_random_scale', False):
+            cmd.append('--random-scale')
+        if config.get('use_random_intensity', False):
+            cmd.append('--random-intensity')
+        
+        # Enhanced training flags
+        if config.get('use_enhanced_training', True):
+            cmd.append('--use-enhanced-training')
+        
+        # Mixed precision (only for GPU)
+        if config.get('use_mixed_precision', False) and config.get('device') != 'cpu':
+            cmd.extend(['--use-mixed-precision', 'True'])
+        elif config.get('use_mixed_precision', False) and config.get('device') == 'cpu':
+            logger.info("Mixed precision disabled for CPU device")
             
         # Model parameters
         if 'model_type' in config:
-            cmd.extend(['--model_type', config['model_type']])
+            cmd.extend(['--model-type', config['model_type']])
         if 'architecture' in config:
             cmd.extend(['--architecture', config['architecture']])
             
         # Loss function parameters (enhanced)
         if 'loss_function' in config:
-            cmd.extend(['--loss_function', config['loss_function']])
+            cmd.extend(['--loss-function', config['loss_function']])
         if 'dice_weight' in config:
-            cmd.extend(['--dice_weight', str(config['dice_weight'])])
+            cmd.extend(['--dice-weight', str(config['dice_weight'])])
         if 'focal_alpha' in config:
-            cmd.extend(['--focal_alpha', str(config['focal_alpha'])])
+            cmd.extend(['--focal-alpha', str(config['focal_alpha'])])
         if 'focal_gamma' in config:
-            cmd.extend(['--focal_gamma', str(config['focal_gamma'])])
+            cmd.extend(['--focal-gamma', str(config['focal_gamma'])])
             
         # Regularization parameters
         if 'weight_decay' in config:
-            cmd.extend(['--weight_decay', str(config['weight_decay'])])
+            cmd.extend(['--weight-decay', str(config['weight_decay'])])
         if 'dropout_rate' in config:
-            cmd.extend(['--dropout_rate', str(config['dropout_rate'])])
+            cmd.extend(['--dropout-rate', str(config['dropout_rate'])])
             
         # Early stopping parameters
         if 'early_stopping_patience' in config:
-            cmd.extend(['--early_stopping_patience', str(config['early_stopping_patience'])])
+            cmd.extend(['--early-stopping-patience', str(config['early_stopping_patience'])])
         if 'early_stopping_metric' in config:
-            cmd.extend(['--early_stopping_metric', config['early_stopping_metric']])
+            cmd.extend(['--early-stopping-metric', config['early_stopping_metric']])
             
         # Output directories
         output_dir = Path('data/models') / str(self.model.id)
-        cmd.extend(['--output_dir', str(output_dir)])
+        cmd.extend(['--output-dir', str(output_dir)])
         
         # MLflow tracking
         if 'mlflow_run_id' in config and config['mlflow_run_id']:
@@ -146,7 +193,57 @@ class TrainingController:
         
         # Add stop file path for graceful stopping
         stop_file = output_dir / 'stop_training.flag'
-        cmd.extend(['--stop_file', str(stop_file)])
+        cmd.extend(['--stop-file', str(stop_file)])
+        
+        # Medical preprocessing parameters
+        if config.get('use_medical_preprocessing', False):
+            cmd.extend([
+                '--use-medical-preprocessing',
+                '--medical-preprocessing-type', config.get('preprocessing_type', 'angiography'),
+                '--preprocessing-clahe-clip-limit', str(config.get('clahe_clip_limit', 3.0)),
+                '--preprocessing-clahe-tile-size', str(config.get('clahe_tile_size', 8)),
+            ])
+            
+            # Unsharp masking
+            if config.get('use_unsharp_masking', False):
+                cmd.extend([
+                    '--preprocessing-use-unsharp-masking',
+                    '--preprocessing-unsharp-amount', str(config.get('unsharp_amount', 1.0)),
+                    '--preprocessing-unsharp-radius', str(config.get('unsharp_radius', 1.0)),
+                ])
+            
+            # Frangi filter
+            if config.get('use_frangi_filter', False):
+                cmd.extend([
+                    '--preprocessing-use-frangi',
+                    '--preprocessing-frangi-scale-range', f"{config.get('frangi_sigma_min', 1.0)},{config.get('frangi_sigma_max', 10.0)}",
+                    '--preprocessing-frangi-scale-step', str(config.get('frangi_sigma_step', 2.0)),
+                ])
+            
+            # Denoising
+            if config.get('use_denoising', False):
+                cmd.extend([
+                    '--preprocessing-use-denoising',
+                    '--preprocessing-noise-variance', str(config.get('noise_reduction_sigma', 1.0)),
+                ])
+            
+            # Histogram equalization
+            if config.get('use_histogram_equalization', False):
+                cmd.append('--preprocessing-use-histogram-equalization')
+            
+            # Gamma correction
+            gamma_value = config.get('gamma_correction', 1.0)
+            if gamma_value != 1.0:
+                cmd.extend([
+                    '--preprocessing-gamma-correction', str(gamma_value)
+                ])
+            
+            # Custom preprocessing pipeline
+            custom_pipeline = config.get('custom_preprocessing_pipeline', '').strip()
+            if custom_pipeline:
+                cmd.extend([
+                    '--preprocessing-custom-pipeline', custom_pipeline
+                ])
         
         return cmd
     
@@ -279,21 +376,14 @@ class TrainingController:
                     start_idx = line.find(pattern) + len(pattern)
                     remaining = line[start_idx:].strip()
                     
-                    # Extract the numeric value (handle comma-separated values)
-                    value_str = ''
-                    for char in remaining:
-                        if char.isdigit() or char in '.e-+':
-                            value_str += char
-                        elif char == ',' and value_str:  # Stop at comma
-                            break
-                        elif char == ' ' and value_str:  # Stop at space
-                            break
-                        elif value_str and not char.isspace():  # Stop at non-numeric, non-space
-                            break
-                    
-                    if value_str:
+                    # Extract the numeric value using regex for better accuracy
+                    import re
+                    # Look for float patterns: 0.1234, 1e-5, etc.
+                    match = re.search(r'([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)', remaining)
+                    if match:
+                        value_str = match.group(1)
                         metrics[metric_name] = float(value_str)
-                except (ValueError, IndexError):
+                except (ValueError, IndexError, AttributeError):
                     continue
         
         if metrics:
@@ -367,6 +457,66 @@ class TrainingController:
             
             self.process = None
 
+    def test_training_script_connectivity(self) -> Dict[str, Any]:
+        """
+        Test if the training script can be called and responds correctly.
+        
+        Returns:
+            Dict with test results
+        """
+        try:
+            # Try to call the training script with --help to see if it works
+            possible_paths = [
+                Path('/app/ml/training/train.py'),
+                Path('ml/training/train.py'),
+                Path('../ml/training/train.py'),
+                Path(__file__).parent.parent.parent.parent / 'ml' / 'training' / 'train.py'
+            ]
+            
+            training_script = None
+            for path in possible_paths:
+                if path.exists():
+                    training_script = path
+                    break
+            
+            if not training_script:
+                return {
+                    'status': 'error',
+                    'message': f'Training script not found in any of: {[str(p) for p in possible_paths]}'
+                }
+            
+            # Test if the script can be executed
+            result = subprocess.run(
+                [sys.executable, str(training_script), '--help'],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode == 0:
+                return {
+                    'status': 'ok',
+                    'message': f'Training script accessible at: {training_script}',
+                    'help_output': result.stdout[:500] + '...' if len(result.stdout) > 500 else result.stdout
+                }
+            else:
+                return {
+                    'status': 'error',
+                    'message': f'Training script failed with return code {result.returncode}',
+                    'error_output': result.stderr
+                }
+                
+        except subprocess.TimeoutExpired:
+            return {
+                'status': 'error',
+                'message': 'Training script test timed out after 30 seconds'
+            }
+        except Exception as e:
+            return {
+                'status': 'error',
+                'message': f'Failed to test training script: {str(e)}'
+            }
+        
 
 class EnhancedLossFunction:
     """
@@ -498,3 +648,67 @@ def create_enhanced_training_config(base_config: Dict[str, Any]) -> Dict[str, An
         enhanced_config['augmentation_probability'] = 0.5
     
     return enhanced_config
+
+
+def debug_training_config(config: Dict[str, Any], model_id: int) -> Dict[str, Any]:
+    """
+    Debug training configuration and validate all parameters.
+    
+    Returns:
+        Dict with validation results and suggestions
+    """
+    debug_info = {
+        'status': 'ok',
+        'warnings': [],
+        'errors': [],
+        'suggestions': []
+    }
+    
+    # Check required parameters
+    required_params = ['epochs', 'batch_size', 'learning_rate']
+    for param in required_params:
+        if param not in config:
+            debug_info['errors'].append(f"Missing required parameter: {param}")
+    
+    # Check data path
+    if 'data_path' in config:
+        data_path = Path(config['data_path'])
+        if not data_path.exists():
+            debug_info['errors'].append(f"Data path does not exist: {data_path}")
+        else:
+            # Check if it has images and masks
+            has_images = any(data_path.glob('**/*.png')) or any(data_path.glob('**/*.jpg'))
+            if not has_images:
+                debug_info['warnings'].append(f"No image files found in data path: {data_path}")
+    
+    # Check batch size vs available memory
+    batch_size = config.get('batch_size', 32)
+    crop_size = config.get('crop_size', 128)
+    if batch_size > 16 and crop_size > 256:
+        debug_info['warnings'].append(f"Large batch size ({batch_size}) with large crop size ({crop_size}) may cause OOM")
+    
+    # Check device configuration
+    device = config.get('device', 'auto')
+    num_workers = config.get('num_workers', 2)
+    if device == 'cpu' and num_workers > 0:
+        debug_info['suggestions'].append("Consider setting num_workers=0 for CPU training to avoid deadlocks")
+    
+    # Check learning rate
+    lr = config.get('learning_rate', 0.001)
+    if lr > 0.01:
+        debug_info['warnings'].append(f"High learning rate ({lr}) may cause training instability")
+    elif lr < 1e-6:
+        debug_info['warnings'].append(f"Very low learning rate ({lr}) may slow convergence")
+    
+    # Check output directory
+    output_dir = Path('data/models') / str(model_id)
+    if not output_dir.parent.exists():
+        debug_info['warnings'].append(f"Output directory parent does not exist: {output_dir.parent}")
+    
+    # Set overall status
+    if debug_info['errors']:
+        debug_info['status'] = 'error'
+    elif debug_info['warnings']:
+        debug_info['status'] = 'warning'
+    
+    return debug_info
