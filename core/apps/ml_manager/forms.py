@@ -185,19 +185,21 @@ class TrainingForm(forms.Form):
         help_text="Path to dataset directory. Use '/app/data/datasets/' for ARCADE or '/app/data/datasets/basic' for basic"
     )
     
-    # Dataset type selection
+    # Dataset type selection - ARCADE support with all 6 task types
     dataset_type = forms.ChoiceField(
         choices=[
             ('auto', 'Auto-detect dataset type'),
             ('coronary', 'Standard Coronary Dataset'),
-            ('arcade_binary', 'ARCADE Binary Segmentation'),
-            ('arcade_semantic', 'ARCADE Semantic Segmentation'),
-            ('arcade_stenosis', 'ARCADE Stenosis Detection'),
-            ('arcade_classification', 'ARCADE Artery Classification')
+            ('arcade_binary', 'ARCADE: Binary Segmentation (image → binary mask)'),
+            ('arcade_semantic_segmentation', 'ARCADE: Semantic Segmentation (image → multi-class mask)'),
+            ('arcade_stenosis_detection', 'ARCADE: Stenosis Detection (image → bounding boxes)'),
+            ('arcade_artery_classification', 'ARCADE: Artery Classification (binary mask → left/right)'),
+            ('arcade_semantic_seg_binary', 'ARCADE: Semantic from Binary (binary mask → multi-class)'),
+            ('arcade_stenosis_segmentation', 'ARCADE: Stenosis Segmentation (image → stenosis mask)')
         ],
         initial='auto',
         required=True,
-        help_text="Type of dataset to use for training"
+        help_text="Type of dataset to use for training. ARCADE tasks support different input/output combinations."
     )
     
     batch_size = forms.IntegerField(

@@ -35,7 +35,8 @@ class DatasetProcessor:
     def __init__(self, dataset):
         self.dataset = dataset
         self.temp_dir = None
-        self.extracted_path = None
+        # Use existing extracted_path if available, otherwise will be set during extraction
+        self.extracted_path = dataset.extracted_path if dataset.extracted_path else None
     
     def start_processing(self):
         """Start async dataset processing"""
@@ -123,11 +124,15 @@ class DatasetProcessor:
         # Detect format based on structure
         detected_format = self._detect_format(structure)
         
+        # Detect task type based on format and structure
+        detected_task_type = self._detect_task_type(detected_format, structure)
+        
         # Count files and calculate statistics
         total_files = structure.get('file_count', 0)
         image_files = structure.get('image_count', 0)
         
         self.dataset.detected_structure = structure
+        self.dataset.detected_structure['task_type'] = detected_task_type  # Store task type in structure
         self.dataset.total_samples = image_files if image_files > 0 else total_files
         
         if detected_format:
@@ -226,6 +231,10 @@ class DatasetProcessor:
         if self._has_pascal_voc_structure(structure):
             return 'pascal_voc'
         
+        # Binary segmentation detection (images + masks)
+        if self._has_segmentation_structure(structure):
+            return 'segmentation'
+        
         # Simple folder structure (images in folders = classes)
         if self._has_classification_structure(structure):
             return 'folder'
@@ -271,6 +280,51 @@ class DatasetProcessor:
             if child['type'] == 'directory' and child['image_count'] > 0
         ]
         return len(class_folders) > 1
+    
+    def _has_segmentation_structure(self, structure: Dict[str, Any]) -> bool:
+        """Check if structure matches binary segmentation format"""
+        # Look for paired images and masks structures
+        
+        # Check for common segmentation folder names
+        segmentation_folders = []
+        image_folders = []
+        
+        for child in structure.get('children', []):
+            if child['type'] == 'directory':
+                name_lower = child['name'].lower()
+                if any(keyword in name_lower for keyword in ['mask', 'masks', 'annotations', 'labels', 'gt', 'groundtruth']):
+                    segmentation_folders.append(child)
+                elif any(keyword in name_lower for keyword in ['image', 'images', 'img', 'imgs', 'data']):
+                    image_folders.append(child)
+        
+        # Check if we have paired image and mask directories
+        if len(segmentation_folders) > 0 and len(image_folders) > 0:
+            # Verify they have similar file counts
+            for img_folder in image_folders:
+                for mask_folder in segmentation_folders:
+                    if abs(img_folder.get('image_count', 0) - mask_folder.get('image_count', 0)) <= 5:
+                        return True
+        
+        # Check for mixed structure (images and masks in same directory)
+        if structure.get('image_count', 0) > 0:
+            total_files = sum(1 for child in structure.get('children', []) if child['type'] == 'file')
+            image_count = structure.get('image_count', 0)
+            
+            # If we have roughly twice as many files as images, might be image+mask pairs
+            if total_files > image_count * 1.5:
+                # Look for mask-like files
+                mask_files = 0
+                for child in structure.get('children', []):
+                    if child['type'] == 'file':
+                        name_lower = child['name'].lower()
+                        if any(keyword in name_lower for keyword in ['mask', 'gt', 'label', '_m.', '_mask.']):
+                            mask_files += 1
+                
+                # If we have similar number of mask files as images, likely segmentation
+                if mask_files > image_count * 0.7:
+                    return True
+        
+        return False
     
     def _validate_data(self):
         """Validate dataset data quality"""
@@ -495,6 +549,78 @@ class DatasetProcessor:
                 
         except Exception as e:
             logger.warning(f"Could not generate thumbnail for {file_path}: {e}")
+
+    def _detect_task_type(self, format_type: str, structure: Dict[str, Any]) -> str:
+        """Detect the ML task type based on format and structure"""
+        
+        # Direct format to task mapping
+        format_to_task = {
+            'yolo': 'detection',
+            'pascal_voc': 'detection',
+            'segmentation': 'segmentation',
+        }
+        
+        # For COCO format, analyze the annotations to determine task type
+        if format_type == 'coco':
+            return self._analyze_coco_annotations(structure)
+        
+        if format_type in format_to_task:
+            return format_to_task[format_type]
+        
+        # For folder structure, analyze deeper
+        if format_type == 'folder':
+            # Check if it's actually segmentation with folder structure
+            if self._has_segmentation_structure(structure):
+                return 'segmentation'
+            else:
+                return 'classification'
+        
+        # For custom format, try to infer from structure
+        if self._has_segmentation_structure(structure):
+            return 'segmentation'
+        elif self._has_classification_structure(structure):
+            return 'classification'
+        
+        # Default fallback
+        return 'custom'
+
+    def _analyze_coco_annotations(self, structure: Dict[str, Any]) -> str:
+        """Analyze COCO annotations to determine if it's segmentation or detection"""
+        try:
+            # Find COCO annotation files
+            for child in structure.get('children', []):
+                if child['type'] == 'file' and child['extension'] == '.json':
+                    annotation_path = os.path.join(self.extracted_path, child['name'])
+                    if os.path.exists(annotation_path):
+                        try:
+                            import json
+                            with open(annotation_path, 'r') as f:
+                                coco_data = json.load(f)
+                            
+                            # Check if annotations have segmentation data
+                            annotations = coco_data.get('annotations', [])
+                            if annotations:
+                                # Check first few annotations for segmentation data
+                                for ann in annotations[:10]:  # Check first 10 annotations
+                                    if 'segmentation' in ann and ann['segmentation']:
+                                        # If segmentation data exists and is not empty
+                                        seg_data = ann['segmentation']
+                                        if seg_data and seg_data != []:
+                                            return 'segmentation'
+                                
+                                # If no segmentation data found, it's likely detection
+                                return 'detection'
+                            
+                        except (json.JSONDecodeError, KeyError) as e:
+                            logger.warning(f"Could not parse COCO annotation file {annotation_path}: {e}")
+                            continue
+            
+            # Default to detection if can't determine
+            return 'detection'
+            
+        except Exception as e:
+            logger.warning(f"Error analyzing COCO annotations: {e}")
+            return 'detection'
     
     def _cleanup(self):
         """Clean up temporary files"""

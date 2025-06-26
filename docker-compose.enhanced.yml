@@ -58,9 +58,6 @@ services:
       - model_storage:/app/data/models
       - training_logs:/app/logs
       - inference_temp:/app/data/temp
-      - ~/Desktop:/host/desktop
-      - ~/Downloads:/host/downloads
-      - ~/Documents:/host/documents
     ports:
       - "8000:8000"
     depends_on:

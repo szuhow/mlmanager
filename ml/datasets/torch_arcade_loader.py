@@ -237,8 +237,10 @@ class _ARCADEBase(VisionDataset):
         # Load COCO annotations
         task_config = self.DATASET_CONFIG[task][image_set]
         self.dataset_dir = os.path.join(self.root, self.FILENAME, task_config["path"])
+        # self.dataset_dir = self.root
+
         coco_path = os.path.join(self.dataset_dir, "annotations", task_config["coco"])
-        
+        logger.info(f"Loading ARCADE {task} dataset from {coco_path} and dataset directory {self.dataset_dir} from {self.root}")
         if not os.path.exists(coco_path):
             raise FileNotFoundError(f"COCO annotations not found at {coco_path}. Set download=True to download the dataset.")
         
@@ -875,24 +877,55 @@ def get_arcade_dataset_info(root: str, download: bool = False) -> dict:
     }
     
     # Check if dataset is available
-    dataset_path = os.path.join(root, ARCADEDataset.FILENAME)
+    dataset_path = os.path.join(root, _ARCADEBase.FILENAME)
+    logger.info(f"Checking ARCADE dataset at: {dataset_path}")
+    
     if os.path.exists(dataset_path):
         info["available"] = True
+        logger.info(f"ARCADE dataset found at: {dataset_path}")
         
-        # Count samples if available
+        # Count samples if available - check actual file structure
         try:
-            for task in ["segmentation", "stenosis"]:
-                for split in ["train", "val"]:
-                    try:
-                        if task == "segmentation":
-                            dataset = ARCADEBinarySegmentation(root, split, download=False)
-                        else:
-                            dataset = ARCADEStenosisDetection(root, split, download=False)
-                        info[f"{task}_{split}_samples"] = len(dataset)
-                    except:
-                        pass
-        except:
-            pass
+            # Check segmentation dataset
+            seg_train_path = os.path.join(dataset_path, "dataset_phase_1", "segmentation_dataset", "seg_train")
+            seg_val_path = os.path.join(dataset_path, "dataset_phase_1", "segmentation_dataset", "seg_val")
+            
+            if os.path.exists(seg_train_path):
+                train_images = os.path.join(seg_train_path, "images")
+                if os.path.exists(train_images):
+                    train_count = len([f for f in os.listdir(train_images) if f.endswith('.png')])
+                    info["segmentation_train_samples"] = train_count
+                    logger.info(f"Found {train_count} training images in segmentation dataset")
+            
+            if os.path.exists(seg_val_path):
+                val_images = os.path.join(seg_val_path, "images")
+                if os.path.exists(val_images):
+                    val_count = len([f for f in os.listdir(val_images) if f.endswith('.png')])
+                    info["segmentation_val_samples"] = val_count
+                    logger.info(f"Found {val_count} validation images in segmentation dataset")
+            
+            # Check stenosis dataset
+            sten_train_path = os.path.join(dataset_path, "dataset_phase_1", "stenosis_dataset", "sten_train")
+            sten_val_path = os.path.join(dataset_path, "dataset_phase_1", "stenosis_dataset", "sten_val")
+            
+            if os.path.exists(sten_train_path):
+                train_images = os.path.join(sten_train_path, "images")
+                if os.path.exists(train_images):
+                    train_count = len([f for f in os.listdir(train_images) if f.endswith('.png')])
+                    info["stenosis_train_samples"] = train_count
+                    logger.info(f"Found {train_count} training images in stenosis dataset")
+                    
+            if os.path.exists(sten_val_path):
+                val_images = os.path.join(sten_val_path, "images")
+                if os.path.exists(val_images):
+                    val_count = len([f for f in os.listdir(val_images) if f.endswith('.png')])
+                    info["stenosis_val_samples"] = val_count
+                    logger.info(f"Found {val_count} validation images in stenosis dataset")
+            
+        except Exception as e:
+            logger.error(f"Error counting ARCADE samples: {e}")
+    else:
+        logger.warning(f"ARCADE dataset not found at: {dataset_path}")
     
     return info
 

@@ -1320,11 +1320,10 @@ def stop_training(request, model_id):
             logger.warning(f"TrainingController not found for model {model_id}, falling back to process termination")
             
             # Try to stop the training process
-            # Note: This is a simplified implementation
-            # In a production environment, you might want to use process groups or other methods
+            # Use more aggressive process termination with SIGTERM
             try:
-                # Look for training processes and send signal to stop
                 import psutil
+                import signal
                 
                 # Find processes related to this model's training
                 stopped_processes = 0
@@ -1333,14 +1332,25 @@ def stop_training(request, model_id):
                         cmdline = proc.info['cmdline']
                         if cmdline and any(str(model_id) in str(arg) for arg in cmdline):
                             if 'python' in proc.info['name'] and 'train.py' in ' '.join(cmdline):
-                                proc.terminate()
+                                # First try SIGTERM for graceful shutdown
+                                proc.send_signal(signal.SIGTERM)
                                 stopped_processes += 1
-                                logger.info(f"Terminated training process {proc.info['pid']} for model {model_id}")
+                                logger.info(f"Sent SIGTERM to training process {proc.info['pid']} for model {model_id}")
+                                
+                                # Wait a bit for graceful shutdown
+                                import time
+                                time.sleep(2)
+                                
+                                # If process still running, send SIGKILL
+                                if proc.is_running():
+                                    proc.kill()
+                                    logger.info(f"Killed training process {proc.info['pid']} for model {model_id}")
+                                    
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
                 
                 if stopped_processes > 0:
-                    message = f"Stop signal sent to {stopped_processes} training process(es). Training will stop after current epoch."
+                    message = f"Forcefully stopped {stopped_processes} training process(es)."
                 else:
                     message = "Stop signal sent. Training will stop after current epoch."
                     
@@ -1767,43 +1777,49 @@ def get_training_log(request, model_id):
         log_lines = []
         log_sources = []
         
-        # 1. Model-specific log file
+        # 1. Model-specific log file (highest priority)
         if model.model_directory and os.path.exists(model.model_directory):
             model_log_path = os.path.join(model.model_directory, 'logs', 'training.log')
             if os.path.exists(model_log_path):
                 try:
                     with open(model_log_path, 'r', encoding='utf-8') as f:
                         model_log_lines = f.read().splitlines()
-                        log_lines.extend(model_log_lines)
-                        log_sources.append(f"Model log: {model_log_path}")
+                        log_lines = model_log_lines  # Use only model-specific logs
+                        log_sources.append(f"Model-specific log: {model_log_path}")
+                        logger.info(f"Found model-specific log with {len(log_lines)} lines")
                 except Exception as e:
                     logger.warning(f"Could not read model log {model_log_path}: {e}")
         
-        # 2. Global training log
-        global_log_path = os.path.join('data', 'logs', 'training.log')
-        if os.path.exists(global_log_path):
-            try:
-                with open(global_log_path, 'r', encoding='utf-8') as f:
-                    global_log_lines = f.read().splitlines()
-                    # Filter for this model's logs if model_id is mentioned
-                    model_specific_lines = [line for line in global_log_lines 
-                                          if f"model_{model_id}" in line or f"Model {model_id}" in line]
-                    if model_specific_lines:
-                        log_lines.extend(model_specific_lines)
-                        log_sources.append(f"Global log (filtered): {global_log_path}")
-                    elif not log_lines:  # Only use all global logs if no model-specific logs found
-                        if lines_limit is None:
-                            log_lines.extend(global_log_lines)  # Get all lines
+        # 2. If no model-specific logs, try global training log with filtering
+        if not log_lines:
+            global_log_path = os.path.join('data', 'logs', 'training.log')
+            if os.path.exists(global_log_path):
+                try:
+                    with open(global_log_path, 'r', encoding='utf-8') as f:
+                        global_log_lines = f.read().splitlines()
+                        # Filter for this model's logs
+                        model_specific_lines = [line for line in global_log_lines 
+                                              if f"model_{model_id}" in line or f"Model {model_id}" in line or f"model={model_id}" in line]
+                        if model_specific_lines:
+                            log_lines = model_specific_lines
+                            log_sources.append(f"Global log (model {model_id} filtered): {global_log_path}")
+                            logger.info(f"Found {len(log_lines)} model-specific lines in global log")
                         else:
-                            log_lines.extend(global_log_lines[-lines_limit:])  # Get recent lines
-                        log_sources.append(f"Global log (recent): {global_log_path}")
-            except Exception as e:
-                logger.warning(f"Could not read global log {global_log_path}: {e}")
+                            # If no model-specific lines found, show recent global logs as fallback
+                            if lines_limit is None:
+                                log_lines = global_log_lines[-1000:]  # Limit to last 1000 lines to avoid memory issues
+                            else:
+                                log_lines = global_log_lines[-lines_limit:]
+                            log_sources.append(f"Global log (fallback - no model-specific logs found): {global_log_path}")
+                            logger.warning(f"No model-specific logs found, showing {len(log_lines)} recent global lines")
+                except Exception as e:
+                    logger.warning(f"Could not read global log {global_log_path}: {e}")
         
-        # 3. Fallback to model's training_logs field
+        # 3. Final fallback to model's training_logs field
         if not log_lines and model.training_logs:
             log_lines = model.training_logs.splitlines()
             log_sources.append("Database field")
+            logger.info(f"Using database training_logs field with {len(log_lines)} lines")
         
         # Apply filtering
         if log_type != 'all':
@@ -2069,31 +2085,165 @@ def dataset_preview_view(request):
                     context['error_message'] = f"Dataset path does not exist: {data_path}"
                     return render(request, 'ml_manager/dataset_preview.html', context)
                 
-                # Detect dataset structure
-                detected_type = detect_dataset_type(data_path)
+                # Detect dataset structure using ARCADE loader if it's an ARCADE dataset
+                from ml.datasets.arcade_loader import (
+                    is_arcade_dataset, 
+                    detect_arcade_task_type, 
+                    get_arcade_dataset_root,
+                    get_arcade_task_paths
+                )
+                
+                detected_type = None
+                arcade_info = None
+                
+                # First check if user forced a specific dataset type
+                if dataset_type != 'auto':
+                    # Map GUI dataset types to internal types
+                    gui_type_mapping = {
+                        # Legacy names (for backwards compatibility)
+                        'arcade_semantic': 'semantic_segmentation',
+                        'arcade_binary': 'binary_segmentation', 
+                        'arcade_stenosis': 'stenosis_detection',
+                        'arcade_classification': 'artery_classification',
+                        
+                        # Full names from forms.py
+                        'arcade_binary_segmentation': 'binary_segmentation',
+                        'arcade_semantic_segmentation': 'semantic_segmentation',
+                        'arcade_stenosis_detection': 'stenosis_detection',
+                        'arcade_artery_classification': 'artery_classification',
+                        'arcade_semantic_seg_binary': 'semantic_segmentation_binary',
+                        'arcade_stenosis_segmentation': 'stenosis_segmentation',
+                        
+                        # Other types
+                        'coronary': 'segmentation',
+                        'classification': 'classification'
+                    }
+                    
+                    detected_type = gui_type_mapping.get(dataset_type, dataset_type)
+                    logger.info(f"User selected dataset type: {dataset_type} -> {detected_type}")
+                
+                if is_arcade_dataset(data_path):
+                    logger.info(f"Detected ARCADE dataset at {data_path}")
+                    # Use ARCADE-specific detection
+                    try:
+                        arcade_task = detect_arcade_task_type(data_path)
+                        arcade_root = get_arcade_dataset_root(data_path)
+                        arcade_paths = get_arcade_task_paths(arcade_root, arcade_task)
+                        
+                        logger.info(f"ARCADE detection results:")
+                        logger.info(f"  - Task: {arcade_task}")
+                        logger.info(f"  - Root: {arcade_root}")
+                        logger.info(f"  - Paths: {arcade_paths}")
+                        
+                        # Test torch-arcade loader directly
+                        try:
+                            from ml.datasets.torch_arcade_loader import get_arcade_dataset_info
+                            torch_arcade_info = get_arcade_dataset_info(arcade_root)
+                            logger.info(f"Torch-ARCADE info: {torch_arcade_info}")
+                        except Exception as torch_e:
+                            logger.error(f"Torch-ARCADE test failed: {torch_e}")
+                        
+                        arcade_info = {
+                            'task': arcade_task,
+                            'root': arcade_root,
+                            'paths': arcade_paths
+                        }
+                        
+                        # If user didn't force a type, use auto-detection
+                        if dataset_type == 'auto':
+                            # Map ARCADE tasks to our detection types according to task specification:
+                            # - semantic: multi-class segmentation
+                            # - binary: binary segmentation  
+                            # - stenosis detection: bounding box detection
+                            # - artery classification: classification
+                            task_mapping = {
+                                'binary_segmentation': 'binary_segmentation',
+                                'semantic_segmentation': 'semantic_segmentation',  # Multi-class
+                                'stenosis_detection': 'stenosis_detection',  # Keep as stenosis_detection
+                                'stenosis_segmentation': 'stenosis_segmentation',  # Binary stenosis masks
+                                'artery_classification': 'artery_classification'  # Keep as artery_classification
+                            }
+                            
+                            detected_type = task_mapping.get(arcade_task, 'semantic_segmentation')
+                            logger.info(f"ARCADE dataset detected: task={arcade_task}, type={detected_type}")
+                        else:
+                            logger.info(f"Using user-selected type {detected_type} for ARCADE dataset (task={arcade_task})")
+                        
+                    except Exception as e:
+                        logger.warning(f"Error using ARCADE detection: {e}")
+                        if dataset_type == 'auto':
+                            detected_type = detect_dataset_type(data_path)
+                else:
+                    # Use standard detection only if user didn't force a type
+                    if dataset_type == 'auto':
+                        detected_type = detect_dataset_type(data_path)
+                
                 context['detected_type'] = detected_type
+                context['arcade_info'] = arcade_info
                 
                 # Get sample images based on dataset type
                 samples = []
-                if detected_type == 'semantic_segmentation':
-                    # Look for images and masks
-                    image_patterns = [
-                        os.path.join(data_path, '**', '*.jpg'),
-                        os.path.join(data_path, '**', '*.jpeg'),
-                        os.path.join(data_path, '**', '*.png'),
-                        os.path.join(data_path, '**', '*.tif'),
-                        os.path.join(data_path, '**', '*.tiff')
-                    ]
+                total_image_count = 0
+                
+                logger.info(f"Processing dataset preview for detected_type: {detected_type}")
+                logger.info(f"Arcade info available: {arcade_info is not None}")
+                
+                if detected_type in ['semantic_segmentation', 'binary_segmentation']:
+                    logger.info(f"Processing segmentation dataset type: {detected_type}")
+                    # Use ARCADE paths if available
+                    if arcade_info and arcade_info.get('paths'):
+                        arcade_paths = arcade_info['paths']
+                        
+                        logger.info(f"ARCADE paths: {arcade_paths}")
+                        
+                        # Try to get images from ARCADE-specific paths
+                        image_dirs = []
+                        if arcade_paths.get('train_images') and arcade_paths['train_images'].exists():
+                            image_dirs.append(arcade_paths['train_images'])
+                            logger.info(f"Added train images path: {arcade_paths['train_images']}")
+                        if arcade_paths.get('val_images') and arcade_paths['val_images'].exists():
+                            image_dirs.append(arcade_paths['val_images'])
+                            logger.info(f"Added val images path: {arcade_paths['val_images']}")
+                            
+                        # Log what we found
+                        logger.info(f"Found {len(image_dirs)} ARCADE image directories")
+                            
+                        # Fallback to detected paths
+                        if not image_dirs:
+                            logger.warning("No ARCADE-specific image directories found, using fallback")
+                            if os.path.exists(os.path.join(data_path, 'images')):
+                                image_dirs.append(os.path.join(data_path, 'images'))
+                            else:
+                                image_dirs.append(data_path)
+                    else:
+                        # Standard path detection
+                        image_dirs = []
+                        if os.path.exists(os.path.join(data_path, 'images')):
+                            image_dirs.append(os.path.join(data_path, 'images'))
+                        else:
+                            image_dirs.append(data_path)
                     
                     all_images = []
-                    for pattern in image_patterns:
-                        all_images.extend(glob.glob(pattern, recursive=True))
+                    for img_dir in image_dirs:
+                        image_patterns = [
+                            os.path.join(str(img_dir), '*.jpg'),
+                            os.path.join(str(img_dir), '*.jpeg'),
+                            os.path.join(str(img_dir), '*.png'),
+                            os.path.join(str(img_dir), '*.tif'),
+                            os.path.join(str(img_dir), '*.tiff')
+                        ]
+                        
+                        for pattern in image_patterns:
+                            all_images.extend(glob.glob(pattern))
                     
                     # Filter out masks and keep only original images
                     images = [img for img in all_images if not any(mask_keyword in img.lower() 
                              for mask_keyword in ['mask', 'label', 'gt', 'target'])]
                     
-                    context['total_samples'] = len(images)
+                    total_image_count = len(images)
+                    context['total_samples'] = total_image_count
+                    
+                    logger.info(f"Final image count: {total_image_count}")
                     
                     # Take up to 6 random samples
                     sample_images = random.sample(images, min(6, len(images))) if images else []
@@ -2109,31 +2259,641 @@ def dataset_preview_view(request):
                                 'image_min': 0,
                                 'image_max': 255,
                                 'mask_shape': 'Unknown',
-                                'mask_classes': 0
+                                'mask_classes': 0,
+                                'mask_coverage': None,
+                                'analysis': None,
+                                'mask_min': 0,
+                                'mask_max': 0,
+                                'mask_generator': 'Unknown',
+                                'annotation_format': 'Unknown',
+                                'mask_generated': False
                             }
                             
-                            # Try to find corresponding mask
+                            # Try to find corresponding mask/annotation using ARCADE paths if available
                             img_dir = os.path.dirname(img_path)
                             img_name = os.path.splitext(os.path.basename(img_path))[0]
                             
-                            # Common mask patterns
-                            mask_patterns = [
-                                os.path.join(img_dir, f"{img_name}_mask.*"),
-                                os.path.join(img_dir, f"{img_name}_label.*"),
-                                os.path.join(img_dir, f"{img_name}_gt.*"),
-                                os.path.join(img_dir.replace('images', 'masks'), f"{img_name}.*"),
-                                os.path.join(img_dir.replace('images', 'labels'), f"{img_name}.*"),
-                            ]
-                            
                             mask_path = None
-                            for pattern in mask_patterns:
-                                matches = glob.glob(pattern)
-                                if matches:
-                                    mask_path = matches[0]
-                                    break
+                            
+                            # First try ARCADE-specific annotation paths
+                            if arcade_info and arcade_info.get('paths'):
+                                arcade_paths = arcade_info['paths']
+                                annotation_dirs = []
+                                
+                                if arcade_paths.get('train_annotations') and arcade_paths['train_annotations'].exists():
+                                    annotation_dirs.append(arcade_paths['train_annotations'])
+                                if arcade_paths.get('val_annotations') and arcade_paths['val_annotations'].exists():
+                                    annotation_dirs.append(arcade_paths['val_annotations'])
+                                
+                                for ann_dir in annotation_dirs:
+                                    potential_masks = [
+                                        ann_dir / f"{img_name}.png",
+                                        ann_dir / f"{img_name}.jpg",
+                                        ann_dir / f"{img_name}.tif"
+                                    ]
+                                    
+                                    for potential_mask in potential_masks:
+                                        if potential_mask.exists():
+                                            mask_path = str(potential_mask)
+                                            break
+                                    
+                                    if mask_path:
+                                        break
+                            
+                            # Fallback to standard mask detection patterns
+                            if not mask_path:
+                                mask_patterns = [
+                                    # Same directory patterns
+                                    os.path.join(img_dir, f"{img_name}_mask.*"),
+                                    os.path.join(img_dir, f"{img_name}_label.*"),
+                                    os.path.join(img_dir, f"{img_name}_gt.*"),
+                                    # Separate directory patterns
+                                    os.path.join(img_dir.replace('images', 'masks'), f"{img_name}.*"),
+                                    os.path.join(img_dir.replace('images', 'labels'), f"{img_name}.*"),
+                                    os.path.join(img_dir.replace('images', 'annotations'), f"{img_name}.*"),
+                                    # ARCADE specific patterns
+                                    os.path.join(data_path, 'annotations', f"{img_name}.png"),
+                                    os.path.join(data_path, 'annotations', f"{img_name}.jpg"),
+                                    os.path.join(data_path, 'annotations', f"{img_name}.tif"),
+                                    os.path.join(data_path, 'masks', f"{img_name}.png"),
+                                    os.path.join(data_path, 'masks', f"{img_name}.jpg"),
+                                    os.path.join(data_path, 'masks', f"{img_name}.tif"),
+                                ]
+                                
+                                for pattern in mask_patterns:
+                                    matches = glob.glob(pattern)
+                                    if matches:
+                                        mask_path = matches[0]
+                                        break
+                            
+                            # Check for COCO format annotations and generate mask preview
+                            logger.info(f"[DEBUG] Processing image {img_path}")
+                            logger.info(f"[DEBUG] mask_path found: {mask_path}")
+                            logger.info(f"[DEBUG] arcade_info available: {arcade_info is not None}")
+                            
+                            if not mask_path:
+                                # Check for COCO format annotations using ARCADE paths if available
+                                json_files = []
+                                annotations_dirs = []
+                                
+                                if arcade_info and arcade_info.get('paths'):
+                                    # Use ARCADE-specific annotation paths
+                                    arcade_paths = arcade_info['paths']
+                                    if arcade_paths.get('train_annotations') and arcade_paths['train_annotations'].exists():
+                                        annotations_dirs.append(str(arcade_paths['train_annotations']))
+                                    if arcade_paths.get('val_annotations') and arcade_paths['val_annotations'].exists():
+                                        annotations_dirs.append(str(arcade_paths['val_annotations']))
+                                    logger.info(f"[DEBUG] Using ARCADE annotation paths: {annotations_dirs}")
+                                else:
+                                    # Fallback to standard path
+                                    annotations_dir = os.path.join(data_path, 'annotations')
+                                    if os.path.exists(annotations_dir):
+                                        annotations_dirs.append(annotations_dir)
+                                    logger.info(f"[DEBUG] Using standard annotation path: {annotations_dirs}")
+                                
+                                # Search for JSON files in all annotation directories
+                                for annotations_dir in annotations_dirs:
+                                    logger.info(f"[DEBUG] Checking annotations dir: {annotations_dir}")
+                                    logger.info(f"[DEBUG] Annotations dir exists: {os.path.exists(annotations_dir)}")
+                                    
+                                    if os.path.exists(annotations_dir):
+                                        found_json = glob.glob(os.path.join(annotations_dir, '*.json'))
+                                        json_files.extend(found_json)
+                                        logger.info(f"[DEBUG] Found {len(found_json)} JSON files in {annotations_dir}")
+                                
+                                logger.info(f"[DEBUG] Total JSON files found: {len(json_files)}")
+                                
+                                if json_files:
+                                        sample_data['annotation_format'] = 'COCO JSON'
+                                        sample_data['mask_classes'] = 'COCO Format'
+                                        
+                                        # Try to generate mask using appropriate ARCADE loader for ARCADE datasets
+                                        if arcade_info:
+                                            logger.info(f"[ARCADE MASK GEN] Starting mask generation for {detected_type}")
+                                            logger.info(f"[ARCADE MASK GEN] ARCADE info: {arcade_info}")
+                                            logger.info(f"[ARCADE MASK GEN] Image path: {img_path}")
+                                            logger.info(f"[ARCADE MASK GEN] Image filename: {os.path.basename(img_path)}")
+                                            try:
+                                                import tempfile
+                                                
+                                                # Choose appropriate ARCADE dataset class based on dataset type
+                                                arcade_dataset = None
+                                                arcade_generator_name = None
+                                                expected_classes = 2  # default
+                                                
+                                                logger.info(f"[ARCADE MASK GEN] Checking detected_type: {detected_type}")
+                                                logger.info(f"[ARCADE MASK GEN] ARCADE task: {arcade_info.get('task')}")
+                                                
+                                                # Use ARCADE task as priority if available
+                                                arcade_task = arcade_info.get('task')
+                                                
+                                                if detected_type == 'semantic_segmentation' or arcade_task == 'semantic_segmentation':
+                                                    logger.info("[ARCADE MASK GEN] Creating ARCADESemanticSegmentation dataset")
+                                                    from ml.datasets.torch_arcade_loader import ARCADESemanticSegmentation
+                                                    arcade_root = arcade_info.get('root', data_path)
+                                                    logger.info(f"[ARCADE MASK GEN] Using root path: {arcade_root}")
+                                                    arcade_dataset = ARCADESemanticSegmentation(
+                                                        root=arcade_root,
+                                                        image_set='train',
+                                                        download=False,
+                                                        transforms=None
+                                                    )
+                                                    arcade_generator_name = 'ARCADE Semantic Segmentation'
+                                                    expected_classes = 27  # 26 coronary segments + background
+                                                    
+                                                elif detected_type == 'binary_segmentation' and arcade_task == 'stenosis_detection':
+                                                    logger.info("[ARCADE MASK GEN] User selected binary_segmentation for stenosis_detection task - using ARCADEStenosisDetection")
+                                                    from ml.datasets.torch_arcade_loader import ARCADEStenosisDetection
+                                                    arcade_root = arcade_info.get('root', data_path)
+                                                    arcade_dataset = ARCADEStenosisDetection(
+                                                        root=arcade_root,
+                                                        image_set='train',
+                                                        download=False,
+                                                        transforms=None
+                                                    )
+                                                    arcade_generator_name = 'ARCADE Stenosis Detection (as Binary)'
+                                                    expected_classes = 2  # detection: background + stenosis
+                                                    
+                                                elif detected_type == 'binary_segmentation' and arcade_task == 'binary_segmentation':
+                                                    logger.info("[ARCADE MASK GEN] Creating ARCADEBinarySegmentation dataset")
+                                                    from ml.datasets.torch_arcade_loader import ARCADEBinarySegmentation
+                                                    arcade_root = arcade_info.get('root', data_path)
+                                                    arcade_dataset = ARCADEBinarySegmentation(
+                                                        root=arcade_root,
+                                                        image_set='train',
+                                                        download=False,
+                                                        transforms=None
+                                                    )
+                                                    arcade_generator_name = 'ARCADE Binary Segmentation'
+                                                    expected_classes = 2  # background + foreground
+                                                    
+                                                elif arcade_task == 'stenosis_detection' or detected_type == 'stenosis_detection':
+                                                    logger.info("[ARCADE MASK GEN] Creating ARCADEStenosisDetection dataset")
+                                                    from ml.datasets.torch_arcade_loader import ARCADEStenosisDetection
+                                                    arcade_root = arcade_info.get('root', data_path)
+                                                    arcade_dataset = ARCADEStenosisDetection(
+                                                        root=arcade_root,
+                                                        image_set='train',
+                                                        download=False,
+                                                        transforms=None
+                                                    )
+                                                    arcade_generator_name = 'ARCADE Stenosis Detection'
+                                                    expected_classes = 2  # detection: background + stenosis
+                                                    
+                                                elif detected_type == 'stenosis_detection':
+                                                    from ml.datasets.torch_arcade_loader import ARCADEStenosisDetection
+                                                    arcade_root = arcade_info.get('root', data_path)
+                                                    arcade_dataset = ARCADEStenosisDetection(
+                                                        root=arcade_root,
+                                                        image_set='train',
+                                                        download=False,
+                                                        transforms=None
+                                                    )
+                                                    arcade_generator_name = 'ARCADE Stenosis Detection'
+                                                    expected_classes = 2  # detection: background + stenosis
+                                                    
+                                                elif detected_type == 'artery_classification':
+                                                    from ml.datasets.torch_arcade_loader import ARCADEArteryClassification
+                                                    arcade_root = arcade_info.get('root', data_path)
+                                                    arcade_dataset = ARCADEArteryClassification(
+                                                        root=arcade_root,
+                                                        image_set='train',
+                                                        download=False,
+                                                        transforms=None
+                                                    )
+                                                    arcade_generator_name = 'ARCADE Artery Classification'
+                                                    expected_classes = 2  # left/right artery classification
+                                                    
+                                                elif detected_type == 'stenosis_segmentation':
+                                                    from ml.datasets.torch_arcade_loader import ARCADEStenosisSegmentation
+                                                    arcade_root = arcade_info.get('root', data_path)
+                                                    arcade_dataset = ARCADEStenosisSegmentation(
+                                                        root=arcade_root,
+                                                        image_set='train',
+                                                        download=False,
+                                                        transforms=None
+                                                    )
+                                                    arcade_generator_name = 'ARCADE Stenosis Segmentation'
+                                                    expected_classes = 2  # background + stenosis
+                                                    
+                                                elif detected_type == 'semantic_segmentation_binary':
+                                                    from ml.datasets.torch_arcade_loader import ARCADESemanticSegmentationBinary
+                                                    arcade_root = arcade_info.get('root', data_path)
+                                                    arcade_dataset = ARCADESemanticSegmentationBinary(
+                                                        root=arcade_root,
+                                                        image_set='train',
+                                                        download=False,
+                                                        transforms=None
+                                                    )
+                                                    arcade_generator_name = 'ARCADE Semantic Segmentation Binary'
+                                                    expected_classes = 26  # 26 coronary segments (no background)
+                                                
+                                                if arcade_dataset:
+                                                    # Find the image in the dataset
+                                                    img_filename = os.path.basename(img_path)
+                                                    logger.info(f"[ARCADE MASK GEN] Looking for image: {img_filename}")
+                                                    logger.info(f"[ARCADE MASK GEN] Dataset has {len(arcade_dataset.file_to_id)} files")
+                                                    logger.info(f"[ARCADE MASK GEN] First 5 files in dataset: {list(os.path.basename(f) for f in list(arcade_dataset.file_to_id.keys())[:5])}")
+                                                    
+                                                    # Find matching file in dataset
+                                                    matching_file_path = None
+                                                    img_id = None
+                                                    
+                                                    # Search through dataset files for filename match
+                                                    for file_path, file_id in arcade_dataset.file_to_id.items():
+                                                        if os.path.basename(file_path) == img_filename:
+                                                            matching_file_path = file_path
+                                                            img_id = file_id
+                                                            logger.info(f"[ARCADE MASK GEN] Found match: {file_path} -> {file_id}")
+                                                            break
+                                                    
+                                                    if img_id is not None and matching_file_path is not None:
+                                                        logger.info(f"[ARCADE MASK GEN] Found image {img_filename} with ID {img_id}")
+                                                        
+                                                        # Generate mask using appropriate ARCADE loader
+                                                        if hasattr(arcade_dataset, '_get_cached_mask'):
+                                                            mask_data = arcade_dataset._get_cached_mask(matching_file_path, img_id)
+                                                        else:
+                                                            # For datasets that don't have _get_cached_mask, try to get sample by index
+                                                            try:
+                                                                # Find index of the image in the dataset
+                                                                img_index = None
+                                                                for idx, img_path_in_dataset in enumerate(arcade_dataset.images):
+                                                                    if os.path.basename(img_path_in_dataset) == img_filename:
+                                                                        img_index = idx
+                                                                        break
+                                                                
+                                                                if img_index is not None:
+                                                                    sample = arcade_dataset[img_index]
+                                                                    if isinstance(sample, tuple) and len(sample) >= 2:
+                                                                        mask_data = sample[1]  # Usually mask is second element
+                                                                    else:
+                                                                        mask_data = sample
+                                                                else:
+                                                                    mask_data = None
+                                                            except Exception as e:
+                                                                logger.warning(f"[ARCADE MASK GEN] Error getting sample: {e}")
+                                                                mask_data = None
+                                                        
+                                                        if mask_data is not None:
+                                                            logger.info(f"[ARCADE MASK GEN] Got mask data for {img_filename}")
+                                                            logger.info(f"[ARCADE MASK GEN] Mask data type: {type(mask_data)}")
+                                                            logger.info(f"[ARCADE MASK GEN] Mask data shape: {getattr(mask_data, 'shape', 'No shape attr')}")
+                                                            
+                                                            # Check if mask_data is a tensor and convert to numpy
+                                                            if hasattr(mask_data, 'numpy'):
+                                                                logger.info("[ARCADE MASK GEN] Converting tensor to numpy")
+                                                                mask_array = mask_data.numpy()
+                                                            elif hasattr(mask_data, 'detach'):
+                                                                logger.info("[ARCADE MASK GEN] Detaching tensor and converting to numpy")
+                                                                mask_array = mask_data.detach().numpy()
+                                                            else:
+                                                                logger.info("[ARCADE MASK GEN] Converting directly to numpy array")
+                                                                mask_array = np.array(mask_data)
+                                                            
+                                                            logger.info(f"[ARCADE MASK GEN] Converted mask_array shape: {mask_array.shape}")
+                                                            logger.info(f"[ARCADE MASK GEN] Mask array dtype: {mask_array.dtype}")
+                                                            logger.info(f"[ARCADE MASK GEN] Mask array min/max: {mask_array.min()}/{mask_array.max()}")
+                                                            logger.info(f"[ARCADE MASK GEN] Mask array unique values: {np.unique(mask_array)}")
+                                                            
+                                                            # Save the generated mask to a temporary file
+                                                            temp_mask_dir = '/tmp/preview_masks'
+                                                            os.makedirs(temp_mask_dir, exist_ok=True)
+                                                            temp_mask_path = os.path.join(temp_mask_dir, f"{os.path.splitext(img_filename)[0]}_mask.png")
+                                                            
+                                                            # Handle different mask formats
+                                                            if len(mask_array.shape) == 3:
+                                                                logger.info(f"[ARCADE MASK GEN] 3D mask detected: {mask_array.shape}")
+                                                                # Multi-channel mask (e.g., semantic segmentation)
+                                                                if mask_array.shape[2] > 1:  # Height x Width x Channels format
+                                                                    logger.info(f"[ARCADE MASK GEN] Multi-channel mask with {mask_array.shape[2]} channels")
+                                                                    if detected_type == 'semantic_segmentation':
+                                                                        # Convert one-hot to class indices
+                                                                        logger.info(f"[ARCADE MASK GEN] Converting semantic one-hot to class indices")
+                                                                        mask_array = np.argmax(mask_array, axis=2)
+                                                                        logger.info(f"[ARCADE MASK GEN] After argmax: shape={mask_array.shape}, unique_values={np.unique(mask_array)}")
+                                                                    else:
+                                                                        # For other multi-channel, take first channel
+                                                                        logger.info("[ARCADE MASK GEN] Taking first channel of multi-channel mask")
+                                                                        mask_array = mask_array[:, :, 0]
+                                                                elif mask_array.shape[0] > 1:  # Channel x Height x Width format
+                                                                    logger.info(f"[ARCADE MASK GEN] Multi-channel mask (CHW format) with {mask_array.shape[0]} channels")
+                                                                    if detected_type == 'semantic_segmentation':
+                                                                        # Convert one-hot to class indices
+                                                                        logger.info(f"[ARCADE MASK GEN] Converting semantic one-hot to class indices")
+                                                                        mask_array = np.argmax(mask_array, axis=0)
+                                                                        logger.info(f"[ARCADE MASK GEN] After argmax: shape={mask_array.shape}, unique_values={np.unique(mask_array)}")
+                                                                    else:
+                                                                        logger.info("[ARCADE MASK GEN] Taking first channel")
+                                                                        mask_array = mask_array[0]  # Single channel
+                                                                else:
+                                                                    logger.info("[ARCADE MASK GEN] Single channel 3D mask, taking first channel")
+                                                                    mask_array = mask_array[0] if mask_array.shape[0] == 1 else mask_array[:, :, 0]
+                                                            else:
+                                                                logger.info(f"[ARCADE MASK GEN] 2D mask: {mask_array.shape}")
+                                                            
+                                                            # Normalize for visualization
+                                                            logger.info(f"[ARCADE MASK GEN] Before normalization - shape: {mask_array.shape}, min/max: {mask_array.min()}/{mask_array.max()}")
+                                                            
+                                                            # Store original mask for class counting
+                                                            original_unique_vals = np.unique(mask_array)
+                                                            original_num_classes = len(original_unique_vals)
+                                                            logger.info(f"[ARCADE MASK GEN] Original unique classes: {original_unique_vals} (total: {original_num_classes})")
+                                                            
+                                                            if detected_type == 'semantic_segmentation':
+                                                                logger.info(f"[ARCADE MASK GEN] Creating colored semantic segmentation visualization")
+                                                                
+                                                                # Create a colored visualization for semantic segmentation
+                                                                # Use a color map to assign different colors to different classes
+                                                                colored_mask = np.zeros((mask_array.shape[0], mask_array.shape[1], 3), dtype=np.uint8)
+                                                                
+                                                                # Create a colormap for classes (up to 27 classes for ARCADE)
+                                                                colors = [
+                                                                    [0, 0, 0],       # 0: background (black)
+                                                                    [255, 0, 0],     # 1: red
+                                                                    [0, 255, 0],     # 2: green  
+                                                                    [0, 0, 255],     # 3: blue
+                                                                    [255, 255, 0],   # 4: yellow
+                                                                    [255, 0, 255],   # 5: magenta
+                                                                    [0, 255, 255],   # 6: cyan
+                                                                    [128, 0, 0],     # 7: dark red
+                                                                    [0, 128, 0],     # 8: dark green
+                                                                    [0, 0, 128],     # 9: dark blue
+                                                                    [128, 128, 0],   # 10: olive
+                                                                    [128, 0, 128],   # 11: purple
+                                                                    [0, 128, 128],   # 12: teal
+                                                                    [192, 192, 192], # 13: light gray
+                                                                    [128, 128, 128], # 14: gray
+                                                                    [255, 128, 0],   # 15: orange
+                                                                    [255, 0, 128],   # 16: pink
+                                                                    [128, 255, 0],   # 17: lime
+                                                                    [0, 255, 128],   # 18: spring green
+                                                                    [128, 0, 255],   # 19: violet
+                                                                    [0, 128, 255],   # 20: light blue
+                                                                    [255, 255, 128], # 21: light yellow
+                                                                    [255, 128, 255], # 22: light pink
+                                                                    [128, 255, 255], # 23: light cyan
+                                                                    [64, 0, 0],      # 24: dark red 2
+                                                                    [0, 64, 0],      # 25: dark green 2
+                                                                    [0, 0, 64],      # 26: dark blue 2
+                                                                ]
+                                                                
+                                                                # Apply colors to mask
+                                                                for class_idx in original_unique_vals:
+                                                                    if class_idx < len(colors):
+                                                                        colored_mask[mask_array == class_idx] = colors[int(class_idx)]
+                                                                    else:
+                                                                        # Fallback color for classes beyond our palette
+                                                                        colored_mask[mask_array == class_idx] = [255, 255, 255]  # white
+                                                                
+                                                                mask_array = colored_mask
+                                                                logger.info(f"[ARCADE MASK GEN] Created colored mask with shape: {mask_array.shape}")
+                                                                
+                                                            else:
+                                                                # For binary or other types, ensure proper scaling
+                                                                if mask_array.max() <= 1.0:
+                                                                    mask_array = (mask_array * 255).astype(np.uint8)
+                                                                else:
+                                                                    mask_array = mask_array.astype(np.uint8)
+                                                            
+                                                            logger.info(f"[ARCADE MASK GEN] After processing - shape: {mask_array.shape}, min/max: {mask_array.min()}/{mask_array.max()}")
+                                                            if detected_type != 'semantic_segmentation':
+                                                                logger.info(f"[ARCADE MASK GEN] Final mask unique values: {np.unique(mask_array)}")
+                                                            else:
+                                                                logger.info(f"[ARCADE MASK GEN] Colored semantic mask created with {original_num_classes} classes")
+                                                            
+                                                            # Save mask as PNG
+                                                            if detected_type == 'semantic_segmentation' and len(mask_array.shape) == 3:
+                                                                # Save as RGB image for colored semantic segmentation
+                                                                mask_img = Image.fromarray(mask_array, mode='RGB')
+                                                            else:
+                                                                # Save as grayscale for binary/other types
+                                                                mask_img = Image.fromarray(mask_array)
+                                                            mask_img.save(temp_mask_path)
+                                                            
+                                                            sample_data['mask_url'] = f'/ml/serve-preview-image/?path={temp_mask_path}'
+                                                            sample_data['mask_generated'] = True
+                                                            sample_data['mask_generator'] = arcade_generator_name
+                                                            
+                                                            # Get mask info with proper class detection
+                                                            if len(mask_array.shape) == 2:
+                                                                sample_data['mask_shape'] = f"{mask_array.shape[1]}x{mask_array.shape[0]}"
+                                                                sample_data['mask_min'] = int(np.min(mask_array))
+                                                                sample_data['mask_max'] = int(np.max(mask_array))
+                                                            elif len(mask_array.shape) == 3:
+                                                                sample_data['mask_shape'] = f"{mask_array.shape[1]}x{mask_array.shape[0]}x{mask_array.shape[2]}"
+                                                                sample_data['mask_min'] = int(np.min(mask_array))
+                                                                sample_data['mask_max'] = int(np.max(mask_array))
+                                                            else:
+                                                                sample_data['mask_shape'] = f"{mask_array.shape}"
+                                                                sample_data['mask_min'] = 0
+                                                                sample_data['mask_max'] = 0
+                                                            
+                                                            # Set proper class count based on dataset type
+                                                            if detected_type == 'semantic_segmentation':
+                                                                sample_data['mask_classes'] = f"{original_num_classes} classes (semantic, expected ~27)"
+                                                                sample_data['analysis'] = f"Semantic segmentation with {original_num_classes} detected classes"
+                                                                sample_data['mask_coverage'] = f"{np.sum(mask_array > 0) / (mask_array.shape[0] * mask_array.shape[1]) * 100:.1f}%"
+                                                            elif detected_type == 'artery_classification':
+                                                                sample_data['mask_classes'] = f"2 classes (artery classification: left/right)"
+                                                                sample_data['analysis'] = "Artery classification task - binary mask indicates left/right artery"
+                                                                sample_data['mask_coverage'] = f"{np.sum(mask_array > 0) / mask_array.size * 100:.1f}%"
+                                                            elif detected_type == 'stenosis_detection':
+                                                                sample_data['mask_classes'] = f"2 classes (stenosis detection: background/stenosis)"
+                                                                sample_data['analysis'] = "Stenosis detection - binary mask indicates stenosis regions"
+                                                                sample_data['mask_coverage'] = f"{np.sum(mask_array > 0) / mask_array.size * 100:.1f}%"
+                                                            elif detected_type == 'stenosis_segmentation':
+                                                                sample_data['mask_classes'] = f"2 classes (stenosis segmentation: background/stenosis)"
+                                                                sample_data['analysis'] = "Stenosis segmentation - binary mask of stenosis regions"
+                                                                sample_data['mask_coverage'] = f"{np.sum(mask_array > 0) / mask_array.size * 100:.1f}%"
+                                                            elif detected_type == 'semantic_segmentation_binary':
+                                                                sample_data['mask_classes'] = f"{original_num_classes} classes (26 coronary segments)"
+                                                                sample_data['analysis'] = f"Semantic segmentation from binary input - {original_num_classes} coronary segments"
+                                                                sample_data['mask_coverage'] = f"{np.sum(mask_array > 0) / (mask_array.shape[0] * mask_array.shape[1]) * 100:.1f}%"
+                                                            else:
+                                                                sample_data['mask_classes'] = f"{original_num_classes} classes ({detected_type})"
+                                                                sample_data['analysis'] = f"ARCADE {detected_type} with {original_num_classes} classes"
+                                                                sample_data['mask_coverage'] = f"{np.sum(mask_array > 0) / (mask_array.shape[0] * mask_array.shape[1]) * 100:.1f}%"
+                                                            
+                                                            logger.info(f"Generated {detected_type} mask for {img_filename} using {arcade_generator_name}")
+                                                        else:
+                                                            logger.warning(f"Could not get mask data for {img_filename}")
+                                                    else:
+                                                        logger.warning(f"Image {img_filename} not found in ARCADE dataset")
+                                                        logger.info(f"[ARCADE MASK GEN] Available files in dataset: {list(os.path.basename(f) for f in arcade_dataset.file_to_id.keys())[:10]}...")  # Show first 10 files
+                                                else:
+                                                    logger.warning(f"Unknown ARCADE dataset type: {detected_type}")
+                                                    
+                                            except Exception as e:
+                                                logger.warning(f"[ARCADE MASK GEN] Could not generate mask using ARCADE loader for {img_path}: {e}")
+                                                logger.warning(f"[ARCADE MASK GEN] Exception details: {type(e).__name__}: {str(e)}")
+                                                import traceback
+                                                logger.warning(f"[ARCADE MASK GEN] Traceback: {traceback.format_exc()}")
+                                                import traceback
+                                                logger.warning(f"[ARCADE MASK GEN] Traceback: {traceback.format_exc()}")
+                                                # Fall back to generic COCO generation
+                                                logger.info("[FALLBACK] Using COCO utils as fallback")
+                                                try:
+                                                    from ml.datasets.coco_utils import generate_mask_from_coco_file
+                                                    
+                                                    # Create temp directory for generated masks
+                                                    temp_mask_dir = '/tmp/preview_masks'
+                                                    os.makedirs(temp_mask_dir, exist_ok=True)
+                                                    
+                                                    generated_mask_path = generate_mask_from_coco_file(
+                                                        json_files[0],
+                                                        os.path.basename(img_path),
+                                                        temp_mask_dir
+                                                    )
+                                                    
+                                                    if generated_mask_path and os.path.exists(generated_mask_path):
+                                                        sample_data['mask_url'] = f'/ml/serve-preview-image/?path={generated_mask_path}'
+                                                        sample_data['mask_generated'] = True
+                                                        sample_data['mask_generator'] = 'COCO Utils'
+                                                        
+                                                        # Get mask info
+                                                        try:
+                                                            with Image.open(generated_mask_path) as mask_img:
+                                                                mask_array = np.array(mask_img)
+                                                                sample_data['mask_shape'] = f"{mask_img.size[0]}x{mask_img.size[1]}"
+                                                                sample_data['mask_min'] = int(np.min(mask_array))
+                                                                sample_data['mask_max'] = int(np.max(mask_array))
+                                                                unique_vals = np.unique(mask_array)
+                                                                sample_data['mask_classes'] = f"{len(unique_vals)} classes"
+                                                        except Exception:
+                                                            pass
+                                                            
+                                                except Exception as e2:
+                                                    logger.warning(f"Could not generate mask from COCO for {img_path}: {e2}")
+                                                    # Keep COCO format info even if mask generation fails
+                                        else:
+                                            # Non-ARCADE dataset, use generic COCO generation
+                                            try:
+                                                from ml.datasets.coco_utils import generate_mask_from_coco_file
+                                                
+                                                # Create temp directory for generated masks
+                                                temp_mask_dir = '/tmp/preview_masks'
+                                                os.makedirs(temp_mask_dir, exist_ok=True)
+                                                
+                                                generated_mask_path = generate_mask_from_coco_file(
+                                                    json_files[0],
+                                                    os.path.basename(img_path),
+                                                    temp_mask_dir
+                                                )
+                                                
+                                                if generated_mask_path and os.path.exists(generated_mask_path):
+                                                    sample_data['mask_url'] = f'/ml/serve-preview-image/?path={generated_mask_path}'
+                                                    sample_data['mask_generated'] = True
+                                                    sample_data['mask_generator'] = 'COCO Utils'
+                                                    
+                                                    # Get mask info
+                                                    try:
+                                                        with Image.open(generated_mask_path) as mask_img:
+                                                            mask_array = np.array(mask_img)
+                                                            sample_data['mask_shape'] = f"{mask_img.size[0]}x{mask_img.size[1]}"
+                                                            sample_data['mask_min'] = int(np.min(mask_array))
+                                                            sample_data['mask_max'] = int(np.max(mask_array))
+                                                            unique_vals = np.unique(mask_array)
+                                                            sample_data['mask_classes'] = f"{len(unique_vals)} classes"
+                                                    except Exception:
+                                                        pass
+                                                        
+                                            except Exception as e:
+                                                logger.warning(f"Could not generate mask from COCO for {img_path}: {e}")
+                                                # Keep COCO format info even if mask generation fails
                             
                             if mask_path and os.path.exists(mask_path):
                                 sample_data['mask_url'] = f'/ml/serve-preview-image/?path={mask_path}'
+                                sample_data['annotation_format'] = 'Direct Image'
+                                sample_data['mask_generator'] = 'Direct File'
+                                sample_data['mask_generated'] = False
+                                
+                                # Get mask info
+                                try:
+                                    with Image.open(mask_path) as mask_img:
+                                        mask_array = np.array(mask_img)
+                                        sample_data['mask_shape'] = f"{mask_img.size[0]}x{mask_img.size[1]}"
+                                        sample_data['mask_min'] = int(np.min(mask_array))
+                                        sample_data['mask_max'] = int(np.max(mask_array))
+                                        unique_vals = np.unique(mask_array)
+                                        sample_data['mask_classes'] = f"{len(unique_vals)} classes"
+                                        sample_data['mask_coverage'] = f"{np.sum(mask_array > 0) / mask_array.size * 100:.1f}%"
+                                        sample_data['analysis'] = f"Direct mask file with {len(unique_vals)} unique values"
+                                except Exception as e:
+                                    logger.warning(f"Error analyzing mask {mask_path}: {e}")
+                                    sample_data['analysis'] = "⚠️ Error analyzing mask file"
+                            
+                            # Fallback for when no mask is found
+                            if not sample_data.get('mask_url') and sample_data['annotation_format'] == 'Unknown':
+                                sample_data['annotation_format'] = 'No Annotations'
+                                sample_data['mask_generator'] = 'None'
+                                sample_data['analysis'] = "⚠️ No mask or annotations found"
+                            
+                            # Try to get image info
+                            try:
+                                with Image.open(img_path) as img:
+                                    sample_data['image_shape'] = f"{img.size[0]}x{img.size[1]}"
+                            except Exception:
+                                pass
+                            
+                            samples.append(sample_data)
+                            
+                        except Exception as e:
+                            logger.warning(f"Error processing sample {img_path}: {e}")
+                            continue
+                            
+                elif detected_type == 'classification':
+                    # For classification datasets, get samples from each class
+                    subdirs = [d for d in os.listdir(data_path) 
+                               if os.path.isdir(os.path.join(data_path, d))]
+                    
+                    # Exclude common non-class directories
+                    non_class_dirs = {'images', 'masks', 'labels', 'annotations', 'train', 'val', 'test', 'validation'}
+                    class_dirs = [d for d in subdirs if d.lower() not in non_class_dirs]
+                    
+                    all_images = []
+                    for class_dir in class_dirs:
+                        class_path = os.path.join(data_path, class_dir)
+                        image_patterns = [
+                            os.path.join(class_path, '*.jpg'),
+                            os.path.join(class_path, '*.jpeg'),
+                            os.path.join(class_path, '*.png'),
+                            os.path.join(class_path, '*.tif'),
+                            os.path.join(class_path, '*.tiff')
+                        ]
+                        
+                        for pattern in image_patterns:
+                            class_images = glob.glob(pattern)
+                            for img in class_images:
+                                all_images.append((img, class_dir))
+                    
+                    total_image_count = len(all_images)
+                    context['total_samples'] = total_image_count
+                    
+                    # Take up to 6 random samples
+                    sample_images = random.sample(all_images, min(6, len(all_images))) if all_images else []
+                    
+                    for idx, (img_path, class_name) in enumerate(sample_images):
+                        try:
+                            sample_data = {
+                                'index': idx,
+                                'filename': os.path.basename(img_path),
+                                'image_url': f'/ml/serve-preview-image/?path={img_path}',
+                                'class_name': class_name,
+                                'image_shape': 'Unknown',
+                                'image_min': 0,
+                                'image_max': 255,
+                                'mask_coverage': None,
+                                'analysis': f'Classification: {class_name}',
+                                'mask_min': 0,
+                                'mask_max': 0,
+                                'mask_url': None,
+                                'mask_shape': 'Unknown',
+                                'mask_classes': 0,
+                                'mask_generator': 'N/A (Classification)',
+                                'annotation_format': 'Directory Structure',
+                                'mask_generated': False
+                            }
                             
                             # Try to get image info
                             try:
@@ -2148,12 +2908,340 @@ def dataset_preview_view(request):
                             logger.warning(f"Error processing sample {img_path}: {e}")
                             continue
                 
+                elif detected_type == 'stenosis_detection':
+                    # For stenosis detection (bounding boxes)
+                    logger.info(f"Processing stenosis detection dataset type: {detected_type}")
+                    
+                    # Use ARCADE paths if available
+                    if arcade_info and arcade_info.get('paths'):
+                        arcade_paths = arcade_info['paths']
+                        
+                        # Try to get images from ARCADE stenosis dataset
+                        image_dirs = []
+                        if arcade_paths.get('train_images') and arcade_paths['train_images'].exists():
+                            image_dirs.append(arcade_paths['train_images'])
+                            logger.info(f"Added stenosis train images path: {arcade_paths['train_images']}")
+                        if arcade_paths.get('val_images') and arcade_paths['val_images'].exists():
+                            image_dirs.append(arcade_paths['val_images'])
+                            logger.info(f"Added stenosis val images path: {arcade_paths['val_images']}")
+                    else:
+                        # Standard path detection for stenosis
+                        image_dirs = []
+                        if os.path.exists(os.path.join(data_path, 'images')):
+                            image_dirs.append(os.path.join(data_path, 'images'))
+                        else:
+                            image_dirs.append(data_path)
+                    
+                    all_images = []
+                    for img_dir in image_dirs:
+                        image_patterns = [
+                            os.path.join(str(img_dir), '*.jpg'),
+                            os.path.join(str(img_dir), '*.jpeg'),
+                            os.path.join(str(img_dir), '*.png'),
+                            os.path.join(str(img_dir), '*.tif'),
+                            os.path.join(str(img_dir), '*.tiff')
+                        ]
+                        
+                        for pattern in image_patterns:
+                            all_images.extend(glob.glob(pattern))
+                    
+                    # Filter out masks
+                    images = [img for img in all_images if not any(mask_keyword in img.lower() 
+                             for mask_keyword in ['mask', 'label', 'gt', 'target'])]
+                    
+                    total_image_count = len(images)
+                    context['total_samples'] = total_image_count
+                    
+                    logger.info(f"Final stenosis detection image count: {total_image_count}")
+                    
+                    # Take up to 6 random samples
+                    sample_images = random.sample(images, min(6, len(images))) if images else []
+                    
+                    for idx, img_path in enumerate(sample_images):
+                        try:
+                            sample_data = {
+                                'index': idx,
+                                'filename': os.path.basename(img_path),
+                                'image_url': f'/ml/serve-preview-image/?path={img_path}',
+                                'mask_url': None,
+                                'image_shape': 'Unknown',
+                                'image_min': 0,
+                                'image_max': 255,
+                                'mask_coverage': None,
+                                'analysis': 'Bounding Box Detection',
+                                'mask_min': 0,
+                                'mask_max': 0,
+                                'mask_shape': 'Bounding Boxes',
+                                'mask_classes': 'Stenosis Detection',
+                                'mask_generator': 'ARCADE Stenosis Detection',
+                                'annotation_format': 'COCO Bounding Boxes',
+                                'mask_generated': False,
+                                'bounding_boxes': []
+                            }
+                            
+                            # Try to get bounding boxes from ARCADE
+                            if arcade_info:
+                                try:
+                                    logger.info(f"[ARCADE BBOX] Starting bounding box detection for stenosis")
+                                    from ml.datasets.torch_arcade_loader import ARCADEStenosisDetection
+                                    
+                                    # Create stenosis detection dataset
+                                    arcade_root = arcade_info['root']
+                                    # Try both train and val sets to find the image
+                                    for split in ['train', 'val']:
+                                        try:
+                                            stenosis_dataset = ARCADEStenosisDetection(
+                                                root=arcade_root,
+                                                image_set=split,
+                                                download=False
+                                            )
+                                            
+                                            # Find the image in dataset
+                                            image_filename = os.path.basename(img_path)
+                                            logger.info(f"[ARCADE BBOX] Looking for {image_filename} in {split} set")
+                                            
+                                            # Look for the image in the dataset
+                                            found = False
+                                            for dataset_img_path in stenosis_dataset.images:
+                                                if os.path.basename(dataset_img_path) == image_filename:
+                                                    img_id = stenosis_dataset.file_to_id[dataset_img_path]
+                                                    logger.info(f"[ARCADE BBOX] Found image {image_filename} with ID {img_id}")
+                                                    
+                                                    # Get annotations (bounding boxes)
+                                                    ann_ids = stenosis_dataset.coco.getAnnIds(imgIds=img_id)
+                                                    anns = stenosis_dataset.coco.loadAnns(ann_ids)
+                                                    
+                                                    bboxes = []
+                                                    for ann in anns:
+                                                        if 'bbox' in ann:
+                                                            bbox = ann['bbox']  # [x, y, width, height]
+                                                            category_id = ann.get('category_id', 1)
+                                                            category_name = stenosis_dataset.coco.cats.get(category_id, {}).get('name', 'stenosis')
+                                                            
+                                                            bboxes.append({
+                                                                'x': int(bbox[0]),
+                                                                'y': int(bbox[1]),
+                                                                'width': int(bbox[2]),
+                                                                'height': int(bbox[3]),
+                                                                'category': category_name,
+                                                                'confidence': ann.get('score', 1.0)
+                                                            })
+                                                    
+                                                    sample_data['bounding_boxes'] = bboxes
+                                                    sample_data['mask_classes'] = f"{len(bboxes)} stenosis regions"
+                                                    sample_data['analysis'] = f"Found {len(bboxes)} stenosis bounding boxes"
+                                                    sample_data['mask_generated'] = True
+                                                    
+                                                    # Convert bboxes to JSON string for template
+                                                    import json
+                                                    sample_data['bounding_boxes_json'] = json.dumps(bboxes)
+                                                    
+                                                    logger.info(f"[ARCADE BBOX] Found {len(bboxes)} bounding boxes for {image_filename}")
+                                                    found = True
+                                                    break
+                                            
+                                            if found:
+                                                break
+                                                
+                                        except Exception as e:
+                                            logger.warning(f"[ARCADE BBOX] Error with {split} set: {e}")
+                                            continue
+                                    
+                                    if not found:
+                                        logger.warning(f"[ARCADE BBOX] Image {image_filename} not found in any dataset split")
+                                        sample_data['analysis'] = "⚠️ No bounding boxes found for this image"
+                                        
+                                except Exception as e:
+                                    logger.error(f"[ARCADE BBOX] Error loading stenosis detection: {e}")
+                                    sample_data['analysis'] = f"⚠️ Error loading bounding boxes: {e}"
+                            
+                            # Try to get image info
+                            try:
+                                with Image.open(img_path) as img:
+                                    sample_data['image_shape'] = f"{img.size[0]}x{img.size[1]}"
+                            except Exception:
+                                pass
+                            
+                            samples.append(sample_data)
+                            
+                        except Exception as e:
+                            logger.warning(f"Error processing stenosis sample {img_path}: {e}")
+                            continue
+                
+                elif detected_type == 'artery_classification':
+                    # For artery classification (left/right artery)
+                    logger.info(f"Processing artery classification dataset type: {detected_type}")
+                    
+                    # Use ARCADE paths if available
+                    if arcade_info and arcade_info.get('paths'):
+                        arcade_paths = arcade_info['paths']
+                        
+                        # For artery classification, we use segmentation dataset but classify by artery side
+                        image_dirs = []
+                        if arcade_paths.get('train_images') and arcade_paths['train_images'].exists():
+                            image_dirs.append(arcade_paths['train_images'])
+                            logger.info(f"Added artery classification train images path: {arcade_paths['train_images']}")
+                        if arcade_paths.get('val_images') and arcade_paths['val_images'].exists():
+                            image_dirs.append(arcade_paths['val_images'])
+                            logger.info(f"Added artery classification val images path: {arcade_paths['val_images']}")
+                    else:
+                        # Standard path detection
+                        image_dirs = []
+                        if os.path.exists(os.path.join(data_path, 'images')):
+                            image_dirs.append(os.path.join(data_path, 'images'))
+                        else:
+                            image_dirs.append(data_path)
+                    
+                    all_images = []
+                    for img_dir in image_dirs:
+                        image_patterns = [
+                            os.path.join(str(img_dir), '*.jpg'),
+                            os.path.join(str(img_dir), '*.jpeg'),
+                            os.path.join(str(img_dir), '*.png'),
+                            os.path.join(str(img_dir), '*.tif'),
+                            os.path.join(str(img_dir), '*.tiff')
+                        ]
+                        
+                        for pattern in image_patterns:
+                            all_images.extend(glob.glob(pattern))
+                    
+                    # Filter out masks
+                    images = [img for img in all_images if not any(mask_keyword in img.lower() 
+                             for mask_keyword in ['mask', 'label', 'gt', 'target'])]
+                    
+                    total_image_count = len(images)
+                    context['total_samples'] = total_image_count
+                    
+                    logger.info(f"Final artery classification image count: {total_image_count}")
+                    
+                    # Take up to 6 random samples
+                    sample_images = random.sample(images, min(6, len(images))) if images else []
+                    
+                    for idx, img_path in enumerate(sample_images):
+                        try:
+                            sample_data = {
+                                'index': idx,
+                                'filename': os.path.basename(img_path),
+                                'image_url': f'/ml/serve-preview-image/?path={img_path}',
+                                'mask_url': None,
+                                'image_shape': 'Unknown',
+                                'image_min': 0,
+                                'image_max': 255,
+                                'mask_coverage': None,
+                                'analysis': 'Artery Classification',
+                                'mask_min': 0,
+                                'mask_max': 0,
+                                'mask_shape': 'Classification',
+                                'mask_classes': 'Left/Right Artery',
+                                'mask_generator': 'ARCADE Artery Classification',
+                                'annotation_format': 'COCO Segmentation',
+                                'mask_generated': False,
+                                'artery_side': 'Unknown',
+                                'confidence': 0.0
+                            }
+                            
+                            # Try to classify artery side using ARCADE
+                            if arcade_info:
+                                try:
+                                    logger.info(f"[ARCADE CLASSIFY] Starting artery classification")
+                                    from ml.datasets.torch_arcade_loader import ARCADEArteryClassification
+                                    
+                                    # Create artery classification dataset
+                                    arcade_root = arcade_info['root']
+                                    # Try both train and val sets to find the image
+                                    for split in ['train', 'val']:
+                                        try:
+                                            classification_dataset = ARCADEArteryClassification(
+                                                root=arcade_root,
+                                                image_set=split,
+                                                download=False
+                                            )
+                                            
+                                            # Find the image in dataset
+                                            image_filename = os.path.basename(img_path)
+                                            logger.info(f"[ARCADE CLASSIFY] Looking for {image_filename} in {split} set")
+                                            
+                                            # Look for the image in the dataset
+                                            found = False
+                                            for dataset_img_path in classification_dataset.images:
+                                                if os.path.basename(dataset_img_path) == image_filename:
+                                                    img_id = classification_dataset.file_to_id[dataset_img_path]
+                                                    logger.info(f"[ARCADE CLASSIFY] Found image {image_filename} with ID {img_id}")
+                                                    
+                                                    # Get annotations and determine artery side
+                                                    ann_ids = classification_dataset.coco.getAnnIds(imgIds=img_id)
+                                                    anns = classification_dataset.coco.loadAnns(ann_ids)
+                                                    
+                                                    # Extract segment names to determine side
+                                                    segments = set()
+                                                    for ann in anns:
+                                                        category_id = ann.get('category_id', 1)
+                                                        category_name = classification_dataset.coco.cats.get(category_id, {}).get('name', '')
+                                                        if category_name:
+                                                            segments.add(category_name)
+                                                    
+                                                    # Use the distinguish_side function from torch_arcade_loader
+                                                    from ml.datasets.torch_arcade_loader import distinguish_side
+                                                    artery_side = distinguish_side(segments)
+                                                    
+                                                    sample_data['artery_side'] = artery_side.title()  # Left or Right
+                                                    sample_data['mask_classes'] = f"{artery_side.title()} Artery"
+                                                    sample_data['analysis'] = f"Classified as {artery_side.title()} Artery"
+                                                    sample_data['mask_generated'] = True
+                                                    sample_data['confidence'] = 1.0  # High confidence for ARCADE annotations
+                                                    
+                                                    # Add segment information
+                                                    sample_data['segments'] = list(segments)
+                                                    
+                                                    logger.info(f"[ARCADE CLASSIFY] Classified {image_filename} as {artery_side} artery with segments: {segments}")
+                                                    found = True
+                                                    break
+                                            
+                                            if found:
+                                                break
+                                                
+                                        except Exception as e:
+                                            logger.warning(f"[ARCADE CLASSIFY] Error with {split} set: {e}")
+                                            continue
+                                    
+                                    if not found:
+                                        logger.warning(f"[ARCADE CLASSIFY] Image {image_filename} not found in any dataset split")
+                                        sample_data['analysis'] = "⚠️ No classification data found for this image"
+                                        
+                                except Exception as e:
+                                    logger.error(f"[ARCADE CLASSIFY] Error loading artery classification: {e}")
+                                    sample_data['analysis'] = f"⚠️ Error loading classification: {e}"
+                            
+                            # Try to get image info
+                            try:
+                                with Image.open(img_path) as img:
+                                    sample_data['image_shape'] = f"{img.size[0]}x{img.size[1]}"
+                            except Exception:
+                                pass
+                            
+                            samples.append(sample_data)
+                            
+                        except Exception as e:
+                            logger.warning(f"Error processing artery classification sample {img_path}: {e}")
+                            continue
+                
                 context['samples'] = samples
-                context['dataset_info'] = {
+                
+                # Build dataset info with ARCADE details
+                dataset_info = {
                     'structure': detected_type,
-                    'image_count': len(images) if 'images' in locals() else 0,
+                    'image_count': total_image_count,
                     'sample_count': len(samples)
                 }
+                
+                if arcade_info:
+                    dataset_info.update({
+                        'arcade_task': arcade_info.get('task'),
+                        'arcade_root': arcade_info.get('root'),
+                        'is_arcade_dataset': True
+                    })
+                
+                context['dataset_info'] = dataset_info
                 
             except Exception as e:
                 logger.error(f"Error previewing dataset {data_path}: {e}")
@@ -2165,20 +3253,159 @@ def dataset_preview_view(request):
 def detect_dataset_type(data_path):
     """Detect the type of dataset based on directory structure"""
     import os
+    import json
     
-    # Check for common semantic segmentation patterns
-    if any(os.path.exists(os.path.join(data_path, folder)) 
-           for folder in ['images', 'masks', 'labels']):
-        return 'semantic_segmentation'
-    
-    # Check for classification structure (folders for each class)
-    subdirs = [d for d in os.listdir(data_path) 
-               if os.path.isdir(os.path.join(data_path, d))]
-    if len(subdirs) > 1 and not any(name in ['images', 'masks', 'labels'] for name in subdirs):
-        return 'classification'
-    
-    # Default to semantic segmentation
-    return 'semantic_segmentation'
+    try:
+        # First check if this is an ARCADE dataset by checking the structure
+        logger.info(f"Detecting dataset type for: {data_path}")
+        
+        # Check if we're in an ARCADE dataset structure
+        is_arcade = False
+        arcade_task = None
+        
+        # Check if path contains ARCADE indicators
+        if 'arcade' in data_path.lower() or 'challenge' in data_path.lower():
+            is_arcade = True
+            
+            # Try to determine ARCADE task from path structure or annotations
+            path_parts = data_path.lower().split(os.sep)
+            
+            # Check for explicit task names in path
+            if any('stenosis' in part for part in path_parts):
+                arcade_task = 'stenosis_detection'
+            elif any('classification' in part for part in path_parts):
+                arcade_task = 'artery_classification'
+            elif any('segmentation' in part for part in path_parts):
+                # Need to distinguish between binary and semantic
+                arcade_task = 'segmentation'  # Will be refined below
+        
+        # Check for ARCADE-specific annotation structure
+        annotations_dir = os.path.join(data_path, 'annotations')
+        if os.path.exists(annotations_dir):
+            json_files = [f for f in os.listdir(annotations_dir) if f.endswith('.json')]
+            
+            if json_files:
+                # Analyze COCO annotations to determine task type
+                for json_file in json_files:
+                    try:
+                        with open(os.path.join(annotations_dir, json_file), 'r') as f:
+                            coco_data = json.load(f)
+                        
+                        if 'annotations' in coco_data and 'categories' in coco_data:
+                            categories = coco_data['categories']
+                            category_names = [cat.get('name', '').lower() for cat in categories]
+                            
+                            # Check annotation types
+                            has_bbox = False
+                            has_segmentation = False
+                            
+                            for ann in coco_data['annotations'][:10]:  # Check first 10 annotations
+                                if 'bbox' in ann and ann['bbox']:
+                                    has_bbox = True
+                                if 'segmentation' in ann and ann['segmentation']:
+                                    has_segmentation = True
+                            
+                            # Determine task based on annotation content
+                            if has_bbox and not has_segmentation:
+                                # Pure bounding box detection - likely stenosis detection
+                                logger.info(f"Detected stenosis detection (bounding boxes only)")
+                                return 'stenosis_detection'
+                            
+                            elif has_segmentation:
+                                # Segmentation task - check categories to determine type
+                                if len(categories) <= 2:
+                                    # Binary segmentation
+                                    logger.info(f"Detected binary segmentation ({len(categories)} categories)")
+                                    return 'binary_segmentation'
+                                elif any('lad' in name or 'lcx' in name or 'rca' in name or 'left' in name or 'right' in name 
+                                        for name in category_names):
+                                    # Artery-specific categories - likely classification task
+                                    logger.info(f"Detected artery classification (artery-specific categories: {category_names})")
+                                    return 'artery_classification'
+                                else:
+                                    # Multi-class semantic segmentation
+                                    logger.info(f"Detected semantic segmentation ({len(categories)} categories)")
+                                    return 'semantic_segmentation'
+                            
+                            elif has_bbox and has_segmentation:
+                                # Mixed annotations - could be artery classification with both bbox and segmentation
+                                if any('lad' in name or 'lcx' in name or 'rca' in name or 'left' in name or 'right' in name 
+                                      for name in category_names):
+                                    logger.info(f"Detected artery classification (mixed annotations)")
+                                    return 'artery_classification'
+                                else:
+                                    logger.info(f"Detected semantic segmentation (mixed annotations)")
+                                    return 'semantic_segmentation'
+                    
+                    except Exception as e:
+                        logger.warning(f"Error analyzing JSON file {json_file}: {e}")
+                        continue
+        
+        # If no clear ARCADE indicators from JSON, check directory structure
+        segmentation_folders = ['images', 'masks', 'labels', 'annotations']
+        if any(os.path.exists(os.path.join(data_path, folder)) 
+               for folder in segmentation_folders):
+            
+            # Check for simple mask structure (binary vs semantic)
+            mask_dir = None
+            for folder in ['masks', 'labels']:
+                potential_dir = os.path.join(data_path, folder)
+                if os.path.exists(potential_dir):
+                    mask_dir = potential_dir
+                    break
+            
+            if mask_dir:
+                # Sample a few mask files to determine if binary or semantic
+                mask_files = [f for f in os.listdir(mask_dir) 
+                             if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff'))]
+                
+                if mask_files:
+                    try:
+                        from PIL import Image
+                        import numpy as np
+                        
+                        # Check first few masks
+                        for mask_file in mask_files[:3]:
+                            mask_path = os.path.join(mask_dir, mask_file)
+                            with Image.open(mask_path) as img:
+                                mask_array = np.array(img)
+                                unique_values = np.unique(mask_array)
+                                
+                                # If only 2 unique values (e.g., 0 and 255), it's binary
+                                if len(unique_values) <= 2:
+                                    return 'binary_segmentation'
+                                # If more values, it's semantic
+                                elif len(unique_values) > 2:
+                                    return 'semantic_segmentation'
+                    except Exception:
+                        pass
+            
+            return 'binary_segmentation'  # Default for segmentation structure
+        
+        # Check for classification structure (folders for each class)
+        subdirs = [d for d in os.listdir(data_path) 
+                   if os.path.isdir(os.path.join(data_path, d))]
+        
+        # Exclude common non-class directories
+        non_class_dirs = {'images', 'masks', 'labels', 'annotations', 'train', 'val', 'test', 'validation'}
+        class_dirs = [d for d in subdirs if d.lower() not in non_class_dirs]
+        
+        if len(class_dirs) > 1:
+            # Check if these directories contain images directly
+            for class_dir in class_dirs[:3]:  # Check first 3 directories
+                class_path = os.path.join(data_path, class_dir)
+                files = os.listdir(class_path)
+                image_files = [f for f in files if f.lower().endswith(('.jpg', '.jpeg', '.png', '.tiff', '.tif'))]
+                if image_files:
+                    return 'classification'
+        
+        # Default to binary segmentation if structure is unclear
+        logger.info(f"No clear dataset type detected, defaulting to binary_segmentation")
+        return 'binary_segmentation'
+        
+    except Exception as e:
+        logger.warning(f"Error detecting dataset type for {data_path}: {e}")
+        return 'binary_segmentation'
 
 
 @login_required

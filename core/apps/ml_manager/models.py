@@ -52,7 +52,9 @@ class MLModel(models.Model):
             ('pending', 'Pending'),
             ('loading', 'Loading Dataset'),
             ('training', 'Training'),
+            ('stopping', 'Stopping'),
             ('completed', 'Completed'),
+            ('stopped', 'Stopped'),
             ('failed', 'Failed'),
             ('archived', 'Archived'),
             ('deployed', 'Deployed')

@@ -178,7 +178,7 @@ class TrainingController:
         # Early stopping parameters
         if 'early_stopping_patience' in config:
             cmd.extend(['--early-stopping-patience', str(config['early_stopping_patience'])])
-        if 'early_stopping_metric' in config:
+        if 'early_stopping_metric' in config and config['early_stopping_metric']:
             cmd.extend(['--early-stopping-metric', config['early_stopping_metric']])
             
         # Output directories

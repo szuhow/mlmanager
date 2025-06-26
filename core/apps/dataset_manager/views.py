@@ -264,6 +264,7 @@ def dataset_preview(request, dataset_id):
         'file_types': dict(file_types),
         'preview_samples': preview_samples,
         'detected_structure': dataset.detected_structure,
+        'detected_task_type': dataset.detected_structure.get('task_type', 'unknown') if dataset.detected_structure else 'unknown',
     }
     
     return render(request, 'dataset_manager/dataset_preview.html', context)

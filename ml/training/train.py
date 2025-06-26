@@ -1,15 +1,35 @@
 import os
 import logging
-# --- Robust logging setup at the very top ---
+import signal
+import sys
+import threading
+
+# Global flag for graceful shutdown
+STOP_TRAINING = threading.Event()
+
+def signal_handler(signum, frame):
+    """Handle termination signals gracefully"""
+    global STOP_TRAINING
+    startup_logger.info(f"[SIGNAL] Received signal {signum}, initiating graceful shutdown...")
+    STOP_TRAINING.set()
+
+# Setup signal handlers for graceful shutdown
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
+# --- Minimal initial logging setup for startup messages only ---
 os.makedirs('data/logs', exist_ok=True)
-logging.basicConfig(
-    filename='data/logs/training.log',
-    level=logging.DEBUG,
-    format='%(asctime)s %(levelname)s %(message)s',
-    force=True
-)
-logger = logging.getLogger(__name__)
-logger.info('--- Training script started ---')
+
+# Create a startup logger that will be replaced with model-specific logging later
+startup_logger = logging.getLogger('startup')
+startup_logger.setLevel(logging.INFO)
+if not startup_logger.handlers:
+    startup_handler = logging.FileHandler('data/logs/training.log', mode='a')
+    startup_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s [STARTUP] %(message)s'))
+    startup_logger.addHandler(startup_handler)
+    startup_logger.propagate = False
+
+startup_logger.info('--- Training script started ---')
 
 import sys
 import time
@@ -46,31 +66,31 @@ try:
     # Set the Django settings module - use container settings in Docker environment
     if os.environ.get('DJANGO_SETTINGS_MODULE'):
         # Use existing environment setting (likely from container)
-        logger.info(f"[DJANGO] Using existing settings module: {os.environ.get('DJANGO_SETTINGS_MODULE')}")
+        startup_logger.info(f"[DJANGO] Using existing settings module: {os.environ.get('DJANGO_SETTINGS_MODULE')}")
     else:
         # Default to development settings
         os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.config.settings.development')
-        logger.info("[DJANGO] Using default development settings")
+        startup_logger.info("[DJANGO] Using default development settings")
     
     # Setup Django
     try:
         django.setup()
         DJANGO_AVAILABLE = True
-        logger.info("[DJANGO] Django setup completed successfully")
+        startup_logger.info("[DJANGO] Django setup completed successfully")
     except RuntimeError as e:
         if "populated" in str(e):
             DJANGO_AVAILABLE = True
-            logger.info("[DJANGO] Django already configured")
+            startup_logger.info("[DJANGO] Django already configured")
         else:
-            logger.error(f"[DJANGO] Django setup failed: {e}")
+            startup_logger.error(f"[DJANGO] Django setup failed: {e}")
             # Don't raise, just continue without Django
         
 except ImportError:
-    logger.warning("[DJANGO] Django not available in current environment")
-    logger.warning("[DJANGO] Training callback will not be available")
+    startup_logger.warning("[DJANGO] Django not available in current environment")
+    startup_logger.warning("[DJANGO] Training callback will not be available")
 except Exception as e:
-    logger.warning(f"[DJANGO] Django setup failed: {e}")
-    logger.warning("[DJANGO] Training callback will not be available")
+    startup_logger.warning(f"[DJANGO] Django setup failed: {e}")
+    startup_logger.warning("[DJANGO] Training callback will not be available")
 from monai.networks.nets import UNet as MonaiUNet
 from monai.data import CacheDataset, DataLoader as MonaiDataLoader
 from monai.data import Dataset, DataLoader
@@ -92,17 +112,13 @@ from ml.utils.early_stopping import EarlyStopping
 try:
     from ml.datasets.torch_arcade_loader import (
         create_arcade_dataloader, 
-        get_arcade_dataset_info,
-        ARCADEBinarySegmentation,
-        ARCADESemanticSegmentation,
-        ARCADEStenosisDetection,
-        ARCADEArteryClassification
+        get_arcade_dataset_info
     )
     ARCADE_AVAILABLE = True
-    logger.info("[ARCADE] ARCADE dataset integration available")
+    startup_logger.info("[ARCADE] ARCADE dataset integration available")
 except ImportError as e:
     ARCADE_AVAILABLE = False
-    logger.warning(f"[ARCADE] ARCADE dataset not available: {e}")
+    startup_logger.warning(f"[ARCADE] ARCADE dataset not available: {e}")
 
 try:
     from monai.transforms import AddChanneld, EnsureChannelFirstd
@@ -123,11 +139,11 @@ try:
         MixedLoss, EnhancedModelCheckpoint, create_loss_function, TrainingHelper
     )
     ENHANCED_UTILS_AVAILABLE = True
-    logger.info("[ENHANCED] Enhanced training utilities available")
+    startup_logger.info("[ENHANCED] Enhanced training utilities available")
 except ImportError as e:
     ENHANCED_UTILS_AVAILABLE = False
-    logger.warning(f"[ENHANCED] Enhanced training utilities not available: {e}")
-    logger.warning("[ENHANCED] Will use standard loss functions and checkpointing")
+    startup_logger.warning(f"[ENHANCED] Enhanced training utilities not available: {e}")
+    startup_logger.warning("[ENHANCED] Will use standard loss functions and checkpointing")
 
 # Import advanced loss functions and medical preprocessing
 try:
@@ -137,10 +153,10 @@ try:
         create_advanced_loss, get_recommended_loss
     )
     ADVANCED_LOSSES_AVAILABLE = True
-    logger.info("[ADVANCED_LOSSES] Advanced loss functions available")
+    startup_logger.info("[ADVANCED_LOSSES] Advanced loss functions available")
 except ImportError as e:
     ADVANCED_LOSSES_AVAILABLE = False
-    logger.warning(f"[ADVANCED_LOSSES] Advanced loss functions not available: {e}")
+    startup_logger.warning(f"[ADVANCED_LOSSES] Advanced loss functions not available: {e}")
 
 try:
     from ml.utils.medical_preprocessing import (
@@ -148,18 +164,18 @@ try:
         preprocess_ct_coronary, preprocess_oct_coronary
     )
     MEDICAL_PREPROCESSING_AVAILABLE = True
-    logger.info("[MEDICAL_PREPROCESSING] Medical preprocessing available")
+    startup_logger.info("[MEDICAL_PREPROCESSING] Medical preprocessing available")
 except ImportError as e:
     MEDICAL_PREPROCESSING_AVAILABLE = False
-    logger.warning(f"[MEDICAL_PREPROCESSING] Medical preprocessing not available: {e}")
+    startup_logger.warning(f"[MEDICAL_PREPROCESSING] Medical preprocessing not available: {e}")
 
 try:
     from ml.utils.loss_manager import LossManager
     LOSS_MANAGER_AVAILABLE = True
-    logger.info("[LOSS_MANAGER] Loss manager available")
+    startup_logger.info("[LOSS_MANAGER] Loss manager available")
 except ImportError as e:
     LOSS_MANAGER_AVAILABLE = False
-    logger.warning(f"[LOSS_MANAGER] Loss manager not available: {e}")
+    startup_logger.warning(f"[LOSS_MANAGER] Loss manager not available: {e}")
 
 # Global logger for architecture functions
 logger = logging.getLogger(__name__)
@@ -1501,14 +1517,14 @@ def get_datasets_with_auto_detection(data_path, validation_split, transform_para
 
 def get_arcade_datasets(data_path, validation_split, transform_params, args, forced_type=None):
     """
-    Create ARCADE datasets for training
+    Create ARCADE datasets for training using torch_arcade_loader
     """
     # Ensure ARCADE support
     if not ARCADE_AVAILABLE:
         raise ImportError("ARCADE dataset support not available. Install pycocotools: pip install pycocotools")
     
     # Log detailed information about dataset path and args
-    logger.info(f"[ARCADE] Creating datasets with:")
+    logger.info(f"[ARCADE] Creating datasets with torch_arcade_loader:")
     logger.info(f"[ARCADE]   data_path: {data_path}")
     logger.info(f"[ARCADE]   forced_type: {forced_type}")
     logger.info(f"[ARCADE]   args.dataset_type: {getattr(args, 'dataset_type', 'NOT_SET')}")
@@ -1520,8 +1536,9 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
         if os.path.exists(arcade_path):
             logger.info(f"[ARCADE]   ARCADE contents: {os.listdir(arcade_path)}")
     
-    # Determine task type
+    # Determine task type based on forced_type or model_type
     if forced_type:
+        # Map GUI dataset types to torch_arcade_loader task types
         mapping = {
             'arcade_binary': 'binary_segmentation',
             'arcade_binary_segmentation': 'binary_segmentation',
@@ -1530,10 +1547,13 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
             'arcade_stenosis': 'stenosis_detection',
             'arcade_stenosis_detection': 'stenosis_detection',
             'arcade_classification': 'artery_classification',
-            'arcade_artery_classification': 'artery_classification'
+            'arcade_artery_classification': 'artery_classification',
+            'arcade_semantic_seg_binary': 'semantic_segmentation_binary',
+            'arcade_stenosis_segmentation': 'stenosis_segmentation'
         }
         task = mapping.get(forced_type, 'binary_segmentation')
     else:
+        # Infer task from model type
         mt = getattr(args, 'model_type', '').lower()
         if 'semantic' in mt:
             task = 'semantic_segmentation'
@@ -1543,234 +1563,89 @@ def get_arcade_datasets(data_path, validation_split, transform_params, args, for
             task = 'artery_classification'
         else:
             task = 'binary_segmentation'
-    logger.info(f"[ARCADE] Using task: {task}")
     
-    # Common transforms - use crop_size for consistent spatial resolution
+    logger.info(f"[ARCADE] Using torch_arcade_loader task: {task}")
+    
+    # Get image size from transform params
     crop_size = transform_params.get('crop_size', 128)
+    image_size = crop_size
+    logger.info(f"[ARCADE] Using image size: {image_size}x{image_size}")
     
-    # Use crop_size as the target resolution for both training and validation consistency
-    # This ensures spatial consistency between training (where model sees crop_size x crop_size) and validation
-    size = crop_size
-    logger.info(f"[ARCADE] Using target size {size}x{size} for spatial consistency")
+    # Use conservative num_workers for Docker environment
+    num_workers = min(getattr(args, 'num_workers', 1), 1)
+    batch_size = args.batch_size
     
-    if task in ['binary_segmentation','semantic_segmentation']:
-        img_tr = tv_transforms.Compose([tv_transforms.Resize((size,size)), tv_transforms.ToTensor(), tv_transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])])
-        if task=='binary_segmentation':
-            mask_tr = tv_transforms.Compose([tv_transforms.Resize((size,size)), tv_transforms.ToTensor()])
-        else:
-            # For semantic segmentation, add proper resizing to ensure spatial consistency
-            def resize_semantic_mask(x):
-                """Resize semantic mask tensor to match image dimensions"""
-                # x is numpy array of shape (H, W, C)
-                import torch.nn.functional as F
-                import torch
-                
-                # Convert to tensor and permute to (C, H, W)
-                tensor = torch.from_numpy(x).permute(2, 0, 1).float()
-                
-                # Resize to target size using nearest neighbor to preserve class labels
-                resized = F.interpolate(tensor.unsqueeze(0), size=(size, size), mode='nearest')
-                
-                # Remove batch dimension and return
-                return resized.squeeze(0)
-            
-            mask_tr = tv_transforms.Compose([tv_transforms.Lambda(resize_semantic_mask)])
-    elif task == 'artery_classification':
-        # For artery classification: input is binary mask, output is 0/1 label
-        mask_tr = tv_transforms.Compose([tv_transforms.Resize((size,size)), tv_transforms.ToTensor()])
-        img_tr = None  # No image transforms needed for mask input
-    else:
-        img_tr = tv_transforms.Compose([tv_transforms.Resize((size,size)), tv_transforms.ToTensor(), tv_transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])])
-        mask_tr = None
-    
-    # Log what we're about to create
-    logger.info(f"[ARCADE] Creating {task} datasets...")
-    
-    # Instantiate datasets
     try:
-        if task=='binary_segmentation':
-            logger.info("[ARCADE] Instantiating ARCADEBinarySegmentation for train...")
-            train_ds = ARCADEBinarySegmentation(
-                root=data_path,
-                image_set='train',
-                side=getattr(args,'artery_side',None),
-                download=False,
-                transform=img_tr,
-                target_transform=mask_tr
-            )
-            logger.info(f"[ARCADE] Train dataset created, length: {len(train_ds)}")
-            
-            # Enhanced ARCADE dataset logging
-            logger.info(f"[ARCADE] BINARY SEGMENTATION Dataset Information:")
-            logger.info(f"[ARCADE]   Root path: {data_path}")
-            logger.info(f"[ARCADE]   Train samples: {len(train_ds)}")
-            
-            # Log sample paths and file info
-            if len(train_ds) > 0:
-                try:
-                    sample = train_ds[0]
-                    logger.info(f"[ARCADE]   Sample train data shape: {sample[0].shape if hasattr(sample[0], 'shape') else 'N/A'}")
-                    logger.info(f"[ARCADE]   Sample train mask shape: {sample[1].shape if hasattr(sample[1], 'shape') else 'N/A'}")
-                except Exception as e:
-                    logger.warning(f"[ARCADE]   Could not get sample info: {e}")
-            
-            logger.info("[ARCADE] Instantiating ARCADEBinarySegmentation for val...")
-            val_ds = ARCADEBinarySegmentation(
-                root=data_path,
-                image_set='val',
-                side=getattr(args,'artery_side',None),
-                download=False,
-                transform=img_tr,
-                target_transform=mask_tr
-            )
-            logger.info(f"[ARCADE] Val dataset created, length: {len(val_ds)}")
-            logger.info(f"[ARCADE]   Val samples: {len(val_ds)}")
-            
-            # Log sample validation paths and file info
-            if len(val_ds) > 0:
-                try:
-                    sample = val_ds[0]
-                    logger.info(f"[ARCADE]   Sample val data shape: {sample[0].shape if hasattr(sample[0], 'shape') else 'N/A'}")
-                    logger.info(f"[ARCADE]   Sample val mask shape: {sample[1].shape if hasattr(sample[1], 'shape') else 'N/A'}")
-                except Exception as e:
-                    logger.warning(f"[ARCADE]   Could not get val sample info: {e}")
-            
-            # Log total dataset info
-            total_samples = len(train_ds) + len(val_ds)
-            logger.info(f"[ARCADE] Total dataset size: {total_samples} ({len(train_ds)} train + {len(val_ds)} val)")
-            logger.info(f"[ARCADE] Image resolution: {size}x{size}")
-            logger.info(f"[ARCADE] Transforms applied: Resize, ToTensor, Normalize")
-            
-        elif task=='semantic_segmentation':
-            logger.info("[ARCADE] Instantiating ARCADESemanticSegmentation for train...")
-            train_ds = ARCADESemanticSegmentation(
-                root=data_path,
-                image_set='train',
-                side=getattr(args,'artery_side',None),
-                download=False,
-                transform=img_tr,
-                target_transform=mask_tr
-            )
-            logger.info(f"[ARCADE] SEMANTIC SEGMENTATION Train dataset created, length: {len(train_ds)}")
-            
-            logger.info("[ARCADE] Instantiating ARCADESemanticSegmentation for val...")
-            val_ds = ARCADESemanticSegmentation(
-                root=data_path,
-                image_set='val',
-                side=getattr(args,'artery_side',None),
-                download=False,
-                transform=img_tr,
-                target_transform=mask_tr
-            )
-            logger.info(f"[ARCADE] SEMANTIC SEGMENTATION Val dataset created, length: {len(val_ds)}")
-            
-            # Enhanced logging for semantic segmentation
-            logger.info(f"[ARCADE] SEMANTIC SEGMENTATION Dataset Information:")
-            logger.info(f"[ARCADE]   Root path: {data_path}")
-            logger.info(f"[ARCADE]   Train samples: {len(train_ds)}, Val samples: {len(val_ds)}")
-            logger.info(f"[ARCADE]   Total samples: {len(train_ds) + len(val_ds)}")
-            logger.info(f"[ARCADE]   Image resolution: {size}x{size}")
+        # Create train dataloader using torch_arcade_loader
+        logger.info(f"[ARCADE] Creating train dataloader for task: {task}")
+        train_loader = create_arcade_dataloader(
+            root=data_path,
+            task=task,
+            image_set='train',
+            batch_size=batch_size,
+            num_workers=num_workers,
+            shuffle=True,
+            download=False,
+            image_size=image_size,
+            side=getattr(args, 'artery_side', None)
+        )
+        
+        # Create validation dataloader using torch_arcade_loader
+        logger.info(f"[ARCADE] Creating val dataloader for task: {task}")
+        val_loader = create_arcade_dataloader(
+            root=data_path,
+            task=task,
+            image_set='val',
+            batch_size=batch_size,
+            num_workers=num_workers,
+            shuffle=False,
+            download=False,
+            image_size=image_size,
+            side=getattr(args, 'artery_side', None)
+        )
+        
+        # Log dataset information
+        train_dataset_size = len(train_loader.dataset) if hasattr(train_loader, 'dataset') else len(train_loader) * batch_size
+        val_dataset_size = len(val_loader.dataset) if hasattr(val_loader, 'dataset') else len(val_loader) * batch_size
+        
+        logger.info(f"[ARCADE] Dataset created successfully using torch_arcade_loader:")
+        logger.info(f"[ARCADE]   Task: {task}")
+        logger.info(f"[ARCADE]   Train samples: {train_dataset_size}")
+        logger.info(f"[ARCADE]   Val samples: {val_dataset_size}")
+        logger.info(f"[ARCADE]   Total samples: {train_dataset_size + val_dataset_size}")
+        logger.info(f"[ARCADE]   Image size: {image_size}x{image_size}")
+        logger.info(f"[ARCADE]   Batch size: {batch_size}")
+        logger.info(f"[ARCADE]   Num workers: {num_workers}")
+        
+        # Task-specific logging
+        if task == 'semantic_segmentation':
             logger.info(f"[ARCADE]   Task type: Semantic Segmentation (multi-class)")
-            
-            # Log sample info
-            if len(train_ds) > 0:
-                try:
-                    sample = train_ds[0]
-                    logger.info(f"[ARCADE]   Sample train data shape: {sample[0].shape if hasattr(sample[0], 'shape') else 'N/A'}")
-                    logger.info(f"[ARCADE]   Sample train mask shape: {sample[1].shape if hasattr(sample[1], 'shape') else 'N/A'}")
-                except Exception as e:
-                    logger.warning(f"[ARCADE]   Could not get semantic sample info: {e}")
-                    
+            logger.info(f"[ARCADE]   Expected classes: Multiple coronary artery segments")
+        elif task == 'binary_segmentation':
+            logger.info(f"[ARCADE]   Task type: Binary Segmentation")
+            logger.info(f"[ARCADE]   Expected classes: Background + Artery")
         elif task == 'artery_classification':
-            logger.info("[ARCADE] Instantiating ARCADEArteryClassification for train...")
-            train_ds = ARCADEArteryClassification(
-                root=data_path,
-                image_set='train',
-                side=getattr(args,'artery_side',None),
-                download=False,
-                transform=mask_tr  # Binary mask transform
-            )
-            logger.info(f"[ARCADE] ARTERY CLASSIFICATION Train dataset created, length: {len(train_ds)}")
-            
-            logger.info("[ARCADE] Instantiating ARCADEArteryClassification for val...")
-            val_ds = ARCADEArteryClassification(
-                root=data_path,
-                image_set='val',
-                side=getattr(args,'artery_side',None),
-                download=False,
-                transform=mask_tr  # Binary mask transform
-            )
-            logger.info(f"[ARCADE] ARTERY CLASSIFICATION Val dataset created, length: {len(val_ds)}")
-            
-            # Enhanced logging for artery classification
-            logger.info(f"[ARCADE] ARTERY CLASSIFICATION Dataset Information:")
-            logger.info(f"[ARCADE]   Root path: {data_path}")
-            logger.info(f"[ARCADE]   Train samples: {len(train_ds)}, Val samples: {len(val_ds)}")
-            logger.info(f"[ARCADE]   Total samples: {len(train_ds) + len(val_ds)}")
-            logger.info(f"[ARCADE]   Image resolution: {size}x{size}")
-            logger.info(f"[ARCADE]   Task type: Artery Classification (binary mask → left/right)")
-            logger.info(f"[ARCADE]   Input: Binary mask (0/255)")
-            logger.info(f"[ARCADE]   Output: 0=right artery, 1=left artery")
-            
-            # Log sample info
-            if len(train_ds) > 0:
-                try:
-                    sample = train_ds[0]
-                    logger.info(f"[ARCADE]   Sample train mask shape: {sample[0].shape if hasattr(sample[0], 'shape') else 'N/A'}")
-                    logger.info(f"[ARCADE]   Sample train label: {sample[1]} ({'right' if sample[1] == 0 else 'left'})")
-                except Exception as e:
-                    logger.warning(f"[ARCADE]   Could not get artery classification sample info: {e}")
-                    
-        else:  # stenosis_detection
-            logger.info("[ARCADE] Instantiating ARCADEStenosisDetection for train...")
-            train_ds = ARCADEStenosisDetection(
-                root=data_path,
-                image_set='train',
-                side=getattr(args,'artery_side',None),
-                download=False,
-                transform=img_tr
-            )
-            logger.info(f"[ARCADE] STENOSIS DETECTION Train dataset created, length: {len(train_ds)}")
-            
-            logger.info("[ARCADE] Instantiating ARCADEStenosisDetection for val...")
-            val_ds = ARCADEStenosisDetection(
-                root=data_path,
-                image_set='val',
-                side=getattr(args,'artery_side',None),
-                download=False,
-                transform=img_tr
-            )
-            logger.info(f"[ARCADE] STENOSIS DETECTION Val dataset created, length: {len(val_ds)}")
-            
-            # Enhanced logging for stenosis detection
-            logger.info(f"[ARCADE] STENOSIS DETECTION Dataset Information:")
-            logger.info(f"[ARCADE]   Root path: {data_path}")
-            logger.info(f"[ARCADE]   Train samples: {len(train_ds)}, Val samples: {len(val_ds)}")
-            logger.info(f"[ARCADE]   Total samples: {len(train_ds) + len(val_ds)}")
-            logger.info(f"[ARCADE]   Image resolution: {size}x{size}")
-            logger.info(f"[ARCADE]   Task type: Stenosis Detection (classification)")
-            
-            # Log sample info for stenosis detection
-            if len(train_ds) > 0:
-                try:
-                    sample = train_ds[0]
-                    logger.info(f"[ARCADE]   Sample train data shape: {sample[0].shape if hasattr(sample[0], 'shape') else 'N/A'}")
-                    logger.info(f"[ARCADE]   Sample train label type: {type(sample[1])}")
-                except Exception as e:
-                    logger.warning(f"[ARCADE]   Could not get stenosis sample info: {e}")
+            logger.info(f"[ARCADE]   Task type: Artery Classification")
+            logger.info(f"[ARCADE]   Input: Binary mask, Output: 0=right, 1=left")
+        elif task == 'stenosis_detection':
+            logger.info(f"[ARCADE]   Task type: Stenosis Detection (bounding box)")
+            logger.info(f"[ARCADE]   Expected output: COCO format bounding boxes")
+        elif task == 'stenosis_segmentation':
+            logger.info(f"[ARCADE]   Task type: Stenosis Segmentation")
+            logger.info(f"[ARCADE]   Expected classes: Background + Stenosis")
+        elif task == 'semantic_segmentation_binary':
+            logger.info(f"[ARCADE]   Task type: Semantic Segmentation from Binary")
+            logger.info(f"[ARCADE]   Input: Binary mask, Output: Multi-class mask")
+        
+        logger.info(f"[ARCADE] torch_arcade_loader setup completed successfully")
+        
     except Exception as e:
-        logger.error(f"[ARCADE] Failed to create dataset: {e}")
+        logger.error(f"[ARCADE] Failed to create dataloaders with torch_arcade_loader: {e}")
         logger.error(f"[ARCADE] Exception type: {type(e)}")
         import traceback
         logger.error(f"[ARCADE] Traceback: {traceback.format_exc()}")
         raise
     
-    # Wrap in DataLoaders
-    # Use conservative num_workers for Docker environment to avoid shared memory issues
-    num_workers = min(getattr(args,'num_workers',1), 1)  # Conservative: max 1 worker
-    train_loader = TorchDataLoader(train_ds, batch_size=args.batch_size, shuffle=True,  num_workers=num_workers)
-    val_loader   = TorchDataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
-    logger.info(f"[ARCADE] Loaders: {task} train={len(train_ds)}, val={len(val_ds)}")
     return train_loader, val_loader
 
 def create_optimizer(model, args):
@@ -2038,8 +1913,10 @@ def detect_num_classes_from_masks(dataset_loaders, dataset_type="auto", max_samp
             # Dataset objects (MONAI)
             train_dataset, val_dataset = dataset_loaders
         
-        # Special handling for ARCADE Artery Classification
-        if hasattr(train_dataset, '__class__') and 'ARCADEArteryClassification' in str(train_dataset.__class__):
+        # Special handling for ARCADE dataset types
+        dataset_class_name = str(train_dataset.__class__.__name__) if hasattr(train_dataset, '__class__') else ""
+        
+        if 'ARCADEArteryClassification' in dataset_class_name:
             logger.info(f"[CLASS DETECTION] ARCADEArteryClassification dataset detected")
             logger.info(f"[CLASS DETECTION] This is a classification task: binary mask → left/right artery")
             logger.info(f"[CLASS DETECTION] Output should be 2 classes (0=right, 1=left)")
@@ -2049,6 +1926,66 @@ def detect_num_classes_from_masks(dataset_loaders, dataset_type="auto", max_samp
                 'unique_values': [0, 1],
                 'max_channels': 1,
                 'task_type': 'artery_classification'
+            }
+        
+        elif 'ARCADESemanticSegmentation' in dataset_class_name and 'Binary' not in dataset_class_name:
+            logger.info(f"[CLASS DETECTION] ARCADESemanticSegmentation dataset detected")
+            logger.info(f"[CLASS DETECTION] This is multi-class semantic segmentation")
+            logger.info(f"[CLASS DETECTION] Expected: 27 classes (background + 26 coronary segments)")
+            return {
+                'num_classes': 27,  # Semantic segmentation: 27 classes
+                'class_type': 'semantic_onehot',
+                'unique_values': [0, 1],
+                'max_channels': 27,
+                'task_type': 'semantic_segmentation'
+            }
+        
+        elif 'ARCADEBinarySegmentation' in dataset_class_name:
+            logger.info(f"[CLASS DETECTION] ARCADEBinarySegmentation dataset detected")
+            logger.info(f"[CLASS DETECTION] This is binary segmentation: image → binary mask")
+            logger.info(f"[CLASS DETECTION] Output should be 1 class (foreground vs background)")
+            return {
+                'num_classes': 1,  # Binary segmentation: 1 output channel
+                'class_type': 'binary',
+                'unique_values': [0, 1],
+                'max_channels': 1,
+                'task_type': 'binary_segmentation'
+            }
+        
+        elif 'ARCADEStenosisDetection' in dataset_class_name:
+            logger.info(f"[CLASS DETECTION] ARCADEStenosisDetection dataset detected")
+            logger.info(f"[CLASS DETECTION] This is object detection: image → bounding boxes")
+            logger.info(f"[CLASS DETECTION] Output should be 1 class (stenosis detection)")
+            return {
+                'num_classes': 1,  # Object detection: 1 class (stenosis)
+                'class_type': 'detection',
+                'unique_values': [0, 1],
+                'max_channels': 1,
+                'task_type': 'stenosis_detection'
+            }
+        
+        elif 'ARCADEStenosisSegmentation' in dataset_class_name:
+            logger.info(f"[CLASS DETECTION] ARCADEStenosisSegmentation dataset detected")
+            logger.info(f"[CLASS DETECTION] This is stenosis binary segmentation")
+            logger.info(f"[CLASS DETECTION] Output should be 1 class (stenosis vs background)")
+            return {
+                'num_classes': 1,  # Binary stenosis segmentation
+                'class_type': 'binary',
+                'unique_values': [0, 1],
+                'max_channels': 1,
+                'task_type': 'stenosis_segmentation'
+            }
+        
+        elif 'ARCADESemanticSegmentationBinary' in dataset_class_name:
+            logger.info(f"[CLASS DETECTION] ARCADESemanticSegmentationBinary dataset detected")
+            logger.info(f"[CLASS DETECTION] This is binary mask → semantic segmentation")
+            logger.info(f"[CLASS DETECTION] Expected: 26 classes (coronary segments without background)")
+            return {
+                'num_classes': 26,  # Semantic from binary: 26 segments
+                'class_type': 'semantic_onehot',
+                'unique_values': [0, 1],
+                'max_channels': 26,
+                'task_type': 'semantic_segmentation_binary'
             }
         
         # Collect unique values and shapes from masks
@@ -2893,6 +2830,7 @@ def train_model(args):
             logger.info("[EARLY_STOPPING] Early stopping disabled")
         
         epoch_history = []  # Track metrics for each epoch
+        training_stopped_early = False  # Track if training was stopped by user
         
         # Set total number of batches per epoch for progress tracking
         if callback:
@@ -2920,9 +2858,14 @@ def train_model(args):
                     logger.info("[CONFIG] Dataset: Could not determine sample counts.")
                 logger.info(f"[CONFIG] Optimizer: {type(optimizer).__name__}, Loss: DiceLoss, Device: {device}")
             
-            # Check for stop_requested flag using callback system
-            if callback and not callback.on_epoch_start(epoch, args.epochs):
+            # Check for stop_requested flag using callback system or global signal
+            if STOP_TRAINING.is_set():
+                logger.info("Global stop signal received. Exiting training loop.")
+                training_stopped_early = True
+                break
+            elif callback and not callback.on_epoch_start(epoch, args.epochs):
                 logger.info("Stop requested via callback. Exiting training loop.")
+                training_stopped_early = True
                 break
             elif hasattr(args, 'model_id') and args.model_id is not None and callback is None and DJANGO_AVAILABLE:
                 # Fallback for stop checking if callback is not available and Django is available
@@ -2931,6 +2874,7 @@ def train_model(args):
                     model_obj = MLModel.objects.get(pk=args.model_id)
                     if getattr(model_obj, 'stop_requested', False):
                         logger.info("Stop requested. Exiting training loop.")
+                        training_stopped_early = True
                         break
                 except Exception as e:
                     logger.warning(f"Could not check stop_requested flag: {e}")
@@ -2938,10 +2882,20 @@ def train_model(args):
             epoch_loss = 0
             train_dice = 0
             
+            batch_stopped_early = False
             for batch_idx, batch_data in enumerate(train_loader):
+                # Check for global stop signal
+                if STOP_TRAINING.is_set():
+                    logger.info("Global stop signal received during batch. Exiting training loop.")
+                    training_stopped_early = True
+                    batch_stopped_early = True
+                    break
+                    
                 # Call batch start callback
                 if callback and not callback.on_batch_start(batch_idx, len(train_loader)):
                     logger.info("Stop requested during batch. Exiting training loop.")
+                    training_stopped_early = True
+                    batch_stopped_early = True
                     break
                     
                 if isinstance(batch_data, dict):
@@ -3210,8 +3164,13 @@ def train_model(args):
                               f"Loss: {loss.item():.4f}, {metric_display}: {batch_dice:.4f}")
                               
             # Check if training was stopped during batch processing
+            if batch_stopped_early:
+                logger.info("Training stopped during batch processing.")
+                break
+            
             if callback and callback.model.stop_requested:
                 logger.info("Training stopped during batch processing.")
+                training_stopped_early = True
                 break
             
             epoch_loss /= len(train_loader)
@@ -4269,9 +4228,51 @@ def train_model(args):
             except Exception as e:
                 logger.warning(f"[MONITORING] Failed to stop system monitoring: {e}")
         
-        # Only call mlflow.end_run() at the very end, after all logging is complete
+        # Handle MLflow run completion with proper status
         if mlflow.active_run():
-            mlflow.end_run()
+            try:
+                # Log training completion status
+                if 'training_stopped_early' in locals() and training_stopped_early:
+                    logger.info("[MLFLOW] Training was stopped early by user request")
+                    mlflow.set_tag("training_status", "stopped_by_user")
+                    mlflow.set_tag("completion_reason", "user_requested_stop")
+                    
+                    # Log partial training metrics if available
+                    if 'epoch_history' in locals() and epoch_history:
+                        mlflow.log_metric("final_epoch_completed", len(epoch_history))
+                        mlflow.log_metric("epochs_trained", len(epoch_history))
+                        mlflow.log_metric("training_completion_percentage", (len(epoch_history) / args.epochs) * 100)
+                        
+                        # Log best metrics achieved before stopping
+                        if epoch_history:
+                            best_val_dice = max([epoch.get('val_dice', 0) for epoch in epoch_history])
+                            best_epoch = [i for i, epoch in enumerate(epoch_history) if epoch.get('val_dice', 0) == best_val_dice][0]
+                            mlflow.log_metric("best_val_dice_before_stop", best_val_dice)
+                            mlflow.log_metric("best_epoch_before_stop", best_epoch + 1)
+                    
+                    # Call callback to update model status
+                    if callback:
+                        callback.on_training_stopped()
+                        
+                else:
+                    logger.info("[MLFLOW] Training completed normally")
+                    mlflow.set_tag("training_status", "completed")
+                    mlflow.set_tag("completion_reason", "normal_completion")
+                
+                # Log final training duration
+                if 'start_time' in locals():
+                    total_duration = time.time() - start_time
+                    mlflow.log_metric("total_training_duration_seconds", total_duration)
+                    mlflow.log_metric("total_training_duration_minutes", total_duration / 60)
+                    
+                logger.info("[MLFLOW] Ending MLflow run with proper status")
+                
+            except Exception as e:
+                logger.warning(f"[MLFLOW] Error updating MLflow run status: {e}")
+            
+            finally:
+                mlflow.end_run()
+                logger.info("[MLFLOW] MLflow run ended")
 
 # Placeholder for save_interactive_training_plot
 def save_interactive_training_plot(epoch_history, model_dir):

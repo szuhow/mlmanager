@@ -821,7 +821,7 @@ class ModelDetailManager {
         logsContent.innerHTML = '<div class="text-center py-5"><i class="fas fa-spinner fa-spin fa-2x text-primary"></i><p class="mt-2">Loading logs...</p></div>';
         
         try {
-            const response = await fetch(`/ml/model/${this.modelId}/logs/`, {
+            const response = await fetch(`/ml/model/${this.modelId}/logs/?lines=all`, {
                 method: 'GET',
                 headers: {
                     'X-Requested-With': 'XMLHttpRequest',

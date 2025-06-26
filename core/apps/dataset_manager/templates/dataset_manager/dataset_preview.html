@@ -38,6 +38,21 @@
                                         <dt class="col-sm-3">Format:</dt>
                                         <dd class="col-sm-9">{{ dataset.get_format_type_display }}</dd>
                                         
+                                        <dt class="col-sm-3">Task Type:</dt>
+                                        <dd class="col-sm-9">
+                                            <span class="badge badge-info">
+                                                {% if detected_task_type == 'segmentation' %}
+                                                    <i class="fas fa-draw-polygon"></i> Segmentation
+                                                {% elif detected_task_type == 'classification' %}
+                                                    <i class="fas fa-tags"></i> Classification
+                                                {% elif detected_task_type == 'detection' %}
+                                                    <i class="fas fa-search"></i> Object Detection
+                                                {% else %}
+                                                    <i class="fas fa-question"></i> {{ detected_task_type|title }}
+                                                {% endif %}
+                                            </span>
+                                        </dd>
+                                        
                                         <dt class="col-sm-3">Total Samples:</dt>
                                         <dd class="col-sm-9">{{ dataset.total_samples|default:"0" }}</dd>
                                         

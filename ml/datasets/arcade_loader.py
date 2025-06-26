@@ -16,7 +16,7 @@ import logging
 
 # Add torch-arcade to path if installed
 try:
-    from torch_arcade import (
+    from .torch_arcade_loader import (
         ARCADEBinarySegmentation,
         ARCADESemanticSegmentation, 
         ARCADEStenosisSegmentation,
@@ -76,6 +76,7 @@ class ARCADEDatasetAdapter(Dataset):
         
         # Auto-detect proper root path and task type for ARCADE structure
         self.root = get_arcade_dataset_root(str(root))
+
         if task == "auto" or not task:
             self.task = detect_arcade_task_type(str(root))
         else:
@@ -415,7 +416,30 @@ def detect_arcade_task_type(data_path: str) -> str:
     
     # Check for segmentation dataset
     if (path / "segmentation_dataset").exists() or "segmentation" in str(path):
-        return "binary_segmentation"
+        # Check if semantic masks are available
+        seg_train_semantic = path / "seg_train" / "masks_semantic_cache"
+        seg_val_semantic = path / "seg_val" / "masks_semantic_cache"
+        
+        # Also check in subdirectories
+        if not seg_train_semantic.exists():
+            for subdir in ["seg_train", "segmentation_dataset/seg_train"]:
+                potential_path = path / subdir / "masks_semantic_cache"
+                if potential_path.exists():
+                    seg_train_semantic = potential_path
+                    break
+        
+        if not seg_val_semantic.exists():
+            for subdir in ["seg_val", "segmentation_dataset/seg_val"]:
+                potential_path = path / subdir / "masks_semantic_cache"
+                if potential_path.exists():
+                    seg_val_semantic = potential_path
+                    break
+        
+        # If semantic masks exist, return semantic segmentation
+        if seg_train_semantic.exists() or seg_val_semantic.exists():
+            return "semantic_segmentation"
+        else:
+            return "binary_segmentation"
     
     # Check for stenosis dataset
     if (path / "stenosis_dataset").exists() or "stenosis" in str(path):
@@ -423,7 +447,14 @@ def detect_arcade_task_type(data_path: str) -> str:
     
     # Check for specific subdirectories
     if (path / "seg_train").exists() or (path / "seg_val").exists():
-        return "binary_segmentation"
+        # Check if semantic masks are available in these directories
+        seg_train_semantic = path / "seg_train" / "masks_semantic_cache"
+        seg_val_semantic = path / "seg_val" / "masks_semantic_cache"
+        
+        if seg_train_semantic.exists() or seg_val_semantic.exists():
+            return "semantic_segmentation"
+        else:
+            return "binary_segmentation"
     
     if (path / "sten_train").exists() or (path / "sten_val").exists():
         return "stenosis_detection"
@@ -431,31 +462,56 @@ def detect_arcade_task_type(data_path: str) -> str:
     # Default fallback
     return "binary_segmentation"
 
+# def get_arcade_dataset_root(data_path: str) -> str:
+#     path = Path(data_path)
+#     if "arcade_challenge_datasets" in str(path):
+#         parts = path.parts
+#         try:
+#             arcade_idx = parts.index("arcade_challenge_datasets")
+#             # Zwróć katalog nadrzędny nad arcade_challenge_datasets
+#             root_path = Path(*parts[:arcade_idx])
+#             return str(root_path)
+#         except (ValueError, IndexError):
+#             pass
+#     if path.name == "arcade_challenge_datasets":
+#         return str(path.parent)
+#     return str(path)
+
 def get_arcade_dataset_root(data_path: str) -> str:
-    """Get the correct root path for ARCADE dataset"""
+    """Get the correct root path for ARCADE dataset
+    
+    torch-arcade expects root to be the parent directory that contains arcade_challenge_datasets/
+    For example, if the full path is /app/data/datasets/arcade_challenge_datasets/dataset_phase_1,
+    then root should be /app/data/datasets/ so that torch-arcade can find arcade_challenge_datasets/
+    """
     path = Path(data_path)
     
-    # If path points to arcade_challenge_datasets, navigate to phase 1
+    # If path points to arcade_challenge_datasets, return its parent
     if path.name == "arcade_challenge_datasets":
-        phase1_path = path / "dataset_phase_1"
-        if phase1_path.exists():
-            return str(phase1_path)
+        return str(path.parent)
     
-    # If path points to dataset_phase_1, return as is
-    if path.name == "dataset_phase_1":
-        return str(path)
-    
-    # If path contains arcade_challenge_datasets, try to find the right level
+    # If path contains arcade_challenge_datasets anywhere, find it and return its parent
     if "arcade_challenge_datasets" in str(path):
         parts = path.parts
         try:
             arcade_idx = parts.index("arcade_challenge_datasets")
-            # Return path up to dataset_phase_1
-            phase1_path = Path(*parts[:arcade_idx+1]) / "arcade_challenge_datasets" / "dataset_phase_1"
-            if phase1_path.exists():
-                return str(phase1_path)
+            # Return path up to (but not including) arcade_challenge_datasets
+            parent_path = Path(*parts[:arcade_idx])
+            return str(parent_path)
         except (ValueError, IndexError):
             pass
+    
+    # Check if the path contains arcade_challenge_datasets as a subdirectory
+    arcade_subdir = path / "arcade_challenge_datasets"
+    if arcade_subdir.exists():
+        return str(path)
+    
+    # Look for arcade_challenge_datasets in parent directories
+    current = path
+    while current.parent != current:  # Stop at root
+        if (current / "arcade_challenge_datasets").exists():
+            return str(current)
+        current = current.parent
     
     # Return original path if no special handling needed
     return str(path)
@@ -464,7 +520,46 @@ def get_arcade_task_paths(root_path: str, task_type: str) -> dict:
     """Get specific paths for ARCADE tasks"""
     root = Path(root_path)
     
-    # Check if root is already pointing to a specific dataset (segmentation_dataset or stenosis_dataset)
+    # First, find the actual ARCADE dataset structure
+    arcade_base = None
+    
+    # Check if root contains arcade_challenge_datasets
+    if (root / "arcade_challenge_datasets").exists():
+        arcade_base = root / "arcade_challenge_datasets" / "dataset_phase_1"
+    elif "arcade_challenge_datasets" in str(root):
+        # We're somewhere inside the arcade structure - find the base
+        parts = root.parts
+        try:
+            arcade_idx = parts.index("arcade_challenge_datasets")
+            arcade_base = Path(*parts[:arcade_idx+1]) / "arcade_challenge_datasets" / "dataset_phase_1"
+        except (ValueError, IndexError):
+            pass
+    
+    # If we found the ARCADE base, use it
+    if arcade_base and arcade_base.exists():
+        if task_type in ["binary_segmentation", "semantic_segmentation"]:
+            seg_dataset = arcade_base / "segmentation_dataset"
+            if seg_dataset.exists():
+                return {
+                    "train_images": seg_dataset / "seg_train" / "images",
+                    "train_annotations": seg_dataset / "seg_train" / "annotations",
+                    "val_images": seg_dataset / "seg_val" / "images", 
+                    "val_annotations": seg_dataset / "seg_val" / "annotations",
+                    "dataset_root": seg_dataset
+                }
+        
+        elif task_type in ["stenosis_detection", "stenosis_segmentation"]:
+            sten_dataset = arcade_base / "stenosis_dataset"
+            if sten_dataset.exists():
+                return {
+                    "train_images": sten_dataset / "sten_train" / "images",
+                    "train_annotations": sten_dataset / "sten_train" / "annotations",
+                    "val_images": sten_dataset / "sten_val" / "images",
+                    "val_annotations": sten_dataset / "sten_val" / "annotations", 
+                    "dataset_root": sten_dataset
+                }
+    
+    # Fallback: check if root is already pointing to a specific dataset
     if root.name == "segmentation_dataset":
         return {
             "train_images": root / "seg_train" / "images",
@@ -483,30 +578,7 @@ def get_arcade_task_paths(root_path: str, task_type: str) -> dict:
             "dataset_root": root
         }
     
-    # Check for task-specific subdirectories
-    if task_type in ["binary_segmentation", "semantic_segmentation"]:
-        seg_dataset = root / "segmentation_dataset"
-        if seg_dataset.exists():
-            return {
-                "train_images": seg_dataset / "seg_train" / "images",
-                "train_annotations": seg_dataset / "seg_train" / "annotations",
-                "val_images": seg_dataset / "seg_val" / "images", 
-                "val_annotations": seg_dataset / "seg_val" / "annotations",
-                "dataset_root": seg_dataset
-            }
-    
-    elif task_type in ["stenosis_detection", "stenosis_segmentation"]:
-        sten_dataset = root / "stenosis_dataset"
-        if sten_dataset.exists():
-            return {
-                "train_images": sten_dataset / "sten_train" / "images",
-                "train_annotations": sten_dataset / "sten_train" / "annotations",
-                "val_images": sten_dataset / "sten_val" / "images",
-                "val_annotations": sten_dataset / "sten_val" / "annotations", 
-                "dataset_root": sten_dataset
-            }
-    
-    # Fallback to original path structure
+    # Final fallback to original path structure
     return {
         "train_images": root / "images",
         "train_annotations": root / "annotations",
