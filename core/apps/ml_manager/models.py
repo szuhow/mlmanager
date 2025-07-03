@@ -70,6 +70,9 @@ class MLModel(models.Model):
     train_dice = models.FloatField(default=0.0)
     val_dice = models.FloatField(default=0.0)
     best_val_dice = models.FloatField(default=0.0)
+    train_iou = models.FloatField(default=0.0)
+    val_iou = models.FloatField(default=0.0)
+    best_val_iou = models.FloatField(default=0.0)
     stop_requested = models.BooleanField(default=False)
     process_id = models.IntegerField(null=True, blank=True, help_text="Process ID of the training process")
     
@@ -164,6 +167,9 @@ class MLModel(models.Model):
             'train_dice': self.train_dice,
             'val_dice': self.val_dice,
             'best_val_dice': self.best_val_dice,
+            'train_iou': self.train_iou,
+            'val_iou': self.val_iou,
+            'best_val_iou': self.best_val_iou,
             'status': self.status
         }
 
@@ -172,57 +178,69 @@ class MLModel(models.Model):
         import os
         import shutil
         from django.conf import settings
+        from django.db import transaction
+        import logging
         
+        logger = logging.getLogger(__name__)
         cleanup_paths = []
+        model_name = self.name
+        model_id = self.id
         
-        # 1. Clean up MLflow run and artifacts
-        if self.mlflow_run_id:
-            try:
-                import mlflow
-                # Try to delete MLflow run
-                mlflow.delete_run(self.mlflow_run_id)
-                print(f"🗑️ Deleted MLflow run: {self.mlflow_run_id}")
-            except Exception as e:
-                print(f"⚠️  Could not delete MLflow run {self.mlflow_run_id}: {e}")
+        try:
+            with transaction.atomic():
+                # 1. Clean up MLflow run and artifacts
+                if self.mlflow_run_id:
+                    try:
+                        import mlflow
+                        # Try to delete MLflow run
+                        mlflow.delete_run(self.mlflow_run_id)
+                        logger.info(f"Deleted MLflow run: {self.mlflow_run_id}")
+                    except Exception as e:
+                        logger.warning(f"Could not delete MLflow run {self.mlflow_run_id}: {e}")
+                    
+                    # Add MLflow artifacts directory to cleanup
+                    mlflow_artifacts_path = os.path.join(settings.BASE_DIR, 'data', 'mlflow', self.mlflow_run_id)
+                    if os.path.exists(mlflow_artifacts_path):
+                        cleanup_paths.append(mlflow_artifacts_path)
+                
+                # 2. Clean up model directory
+                if self.model_directory and os.path.exists(self.model_directory):
+                    cleanup_paths.append(self.model_directory)
+                
+                # 3. Clean up individual files
+                file_fields = ['model_weights_path', 'model_config_path']
+                for field_name in file_fields:
+                    file_path = getattr(self, field_name, None)
+                    if file_path and os.path.exists(file_path):
+                        cleanup_paths.append(file_path)
+                
+                # 4. Clean up organized models directory
+                if hasattr(settings, 'ORGANIZED_MODELS_DIR'):
+                    organized_path = os.path.join(settings.ORGANIZED_MODELS_DIR, f"model_{self.id}")
+                    if os.path.exists(organized_path):
+                        cleanup_paths.append(organized_path)
+                
+                # Perform the actual deletion from database
+                super().delete(*args, **kwargs)
+                logger.info(f"Successfully deleted model {model_name} (ID: {model_id}) from database")
             
-            # Add MLflow artifacts directory to cleanup
-            mlflow_artifacts_path = os.path.join(settings.BASE_DIR, 'data', 'mlflow', self.mlflow_run_id)
-            if os.path.exists(mlflow_artifacts_path):
-                cleanup_paths.append(mlflow_artifacts_path)
-        
-        # 2. Clean up model directory
-        if self.model_directory and os.path.exists(self.model_directory):
-            cleanup_paths.append(self.model_directory)
-        
-        # 3. Clean up individual files
-        file_fields = ['model_weights_path', 'model_config_path']
-        for field_name in file_fields:
-            file_path = getattr(self, field_name, None)
-            if file_path and os.path.exists(file_path):
-                cleanup_paths.append(file_path)
-        
-        # 4. Clean up organized models directory
-        if hasattr(settings, 'ORGANIZED_MODELS_DIR'):
-            organized_path = os.path.join(settings.ORGANIZED_MODELS_DIR, f"model_{self.id}")
-            if os.path.exists(organized_path):
-                cleanup_paths.append(organized_path)
-        
-        # Perform the actual deletion from database first
-        super().delete(*args, **kwargs)
-        
-        # Then clean up files
-        for path in cleanup_paths:
-            try:
-                if os.path.isfile(path):
-                    os.remove(path)
-                    print(f"🗑️ Deleted file: {path}")
-                elif os.path.isdir(path):
-                    shutil.rmtree(path)
-                    print(f"🗑️ Deleted directory: {path}")
-            except Exception as e:
-                print(f"⚠️  Could not delete {path}: {e}")
-        
-        print(f"✅ Model {self.name} (ID: {self.id}) and associated files deleted")
+            # Clean up files after successful database deletion
+            for path in cleanup_paths:
+                try:
+                    if os.path.isfile(path):
+                        os.remove(path)
+                        logger.info(f"Deleted file: {path}")
+                    elif os.path.isdir(path):
+                        shutil.rmtree(path)
+                        logger.info(f"Deleted directory: {path}")
+                except Exception as e:
+                    logger.warning(f"Could not delete {path}: {e}")
+            
+            logger.info(f"Model {model_name} (ID: {model_id}) and associated files deleted successfully")
+            
+        except Exception as e:
+            logger.error(f"Error deleting model {model_name} (ID: {model_id}): {e}")
+            raise  # Re-raise to ensure the error is propagated
 
 class Prediction(models.Model):
     model = models.ForeignKey(MLModel, on_delete=models.CASCADE)
@@ -343,8 +361,22 @@ class TrainingTemplate(models.Model):
     early_stopping_patience = models.IntegerField(default=10, help_text="Epochs to wait for improvement before stopping")
     early_stopping_min_epochs = models.IntegerField(default=20, help_text="Minimum epochs before early stopping can occur")
     early_stopping_min_delta = models.FloatField(default=1e-4, help_text="Minimum improvement required to reset patience")
+    
+    # Primary segmentation metric selection
+    SEGMENTATION_METRIC_CHOICES = [
+        ('dice', 'Dice Score'),
+        ('iou', 'IoU Score'),
+    ]
+    segmentation_metric = models.CharField(
+        max_length=10,
+        choices=SEGMENTATION_METRIC_CHOICES,
+        default='dice',
+        help_text="Primary segmentation metric to track and display"
+    )
+    
     EARLY_STOPPING_METRIC_CHOICES = [
         ('val_dice', 'Validation Dice Score'),
+        ('val_iou', 'Validation IoU Score'),
         ('val_loss', 'Validation Loss'),
         ('val_accuracy', 'Validation Accuracy'),
     ]

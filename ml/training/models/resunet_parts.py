@@ -130,27 +130,62 @@ class OutConv(nn.Module):
         return self.conv(x)
 
 
-class AttentionGate(nn.Module):
-    """Attention gate for better feature selection"""
+# class AttentionGate(nn.Module):
+#     """Attention gate for better feature selection"""
     
+#     def __init__(self, in_channels_g, in_channels_x, int_channels):
+#         super().__init__()
+        
+#         self.theta_x = nn.Conv2d(in_channels_x, int_channels, kernel_size=2, stride=2, padding=0, bias=False)
+#         self.phi_g = nn.Conv2d(in_channels_g, int_channels, kernel_size=1, stride=1, padding=0, bias=True)
+#         self.f = nn.Conv2d(int_channels, 1, kernel_size=1, stride=1, padding=0, bias=True)
+#         self.sigm = nn.Sigmoid()
+#         self.relu = nn.ReLU(inplace=True)
+        
+#     def forward(self, x, g):
+#         theta_x = self.theta_x(x)
+#         phi_g = self.phi_g(g)
+
+#         if theta_x.shape[2:] != phi_g.shape[2:]:
+#             phi_g = F.interpolate(phi_g, size=theta_x.shape[2:], mode='bilinear', align_corners=True)
+
+#         concat = self.relu(theta_x + phi_g)
+#         f = self.f(concat)
+#         f = self.sigm(f)
+        
+#         # Upsample attention map to match x dimensions
+#         f = F.interpolate(f, size=x.shape[2:], mode='bilinear', align_corners=True)
+        
+#         return x * f
+    
+
+class AttentionGate(nn.Module):
     def __init__(self, in_channels_g, in_channels_x, int_channels):
-        super().__init__()
-        
-        self.theta_x = nn.Conv2d(in_channels_x, int_channels, kernel_size=2, stride=2, padding=0, bias=False)
+        super(AttentionGate, self).__init__()
+
+        # Zmniejszanie kanałów g i x do wspólnej liczby
         self.phi_g = nn.Conv2d(in_channels_g, int_channels, kernel_size=1, stride=1, padding=0, bias=True)
-        self.f = nn.Conv2d(int_channels, 1, kernel_size=1, stride=1, padding=0, bias=True)
-        self.sigm = nn.Sigmoid()
+        self.theta_x = nn.Conv2d(in_channels_x, int_channels, kernel_size=1, stride=1, padding=0, bias=True)
+        
+        self.psi = nn.Conv2d(int_channels, 1, kernel_size=1, stride=1, padding=0, bias=True)
         self.relu = nn.ReLU(inplace=True)
-        
-    def forward(self, x, g):
-        theta_x = self.theta_x(x)
-        phi_g = self.phi_g(g)
-        
-        concat = self.relu(theta_x + phi_g)
-        f = self.f(concat)
-        f = self.sigm(f)
-        
-        # Upsample attention map to match x dimensions
-        f = F.interpolate(f, size=x.shape[2:], mode='bilinear', align_corners=True)
-        
-        return x * f
+        self.sigmoid = nn.Sigmoid()
+
+        # Dla sytuacji, gdy x ma wyższą rozdzielczość niż g
+        self.upsample_mode = 'bilinear'
+
+    def forward(self, g, x):
+        # Upewnij się, że g i x mają ten sam rozmiar przestrzenny
+        g1 = self.phi_g(g)
+        x1 = self.theta_x(x)
+
+        # Jeśli ich rozdzielczości się różnią – dopasuj
+        if g1.shape[2:] != x1.shape[2:]:
+            g1 = F.interpolate(g1, size=x1.shape[2:], mode=self.upsample_mode, align_corners=True)
+
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)
+        psi = self.sigmoid(psi)
+
+        # Rozszerz maskę atencji, aby dopasować ją do x
+        return x * psi

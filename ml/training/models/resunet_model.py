@@ -1,10 +1,45 @@
 """ Full assembly of the parts to form the complete Residual U-Net network """
 
+# Handle both package and direct imports
 try:
+    # When imported as a package
     from .resunet_parts import *
 except ImportError:
-    # Fallback for when imported dynamically without package context
-    from resunet_parts import *
+    # When imported directly
+    import sys
+    import os
+    # Get the directory containing this file
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
+    try:
+        from resunet_parts import *
+    except ImportError:
+        # Last resort - create empty fallback classes
+        import torch.nn as nn
+        
+        class ResidualBlock(nn.Module):
+            def __init__(self, in_channels, out_channels):
+                super().__init__()
+                self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+                self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+                self.shortcut = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+                
+            def forward(self, x):
+                residual = self.shortcut(x)
+                out = torch.relu(self.conv1(x))
+                out = self.conv2(out)
+                return torch.relu(out + residual)
+        
+        class AttentionBlock(nn.Module):
+            def __init__(self, in_channels):
+                super().__init__()
+                self.conv = nn.Conv2d(in_channels, 1, 1)
+                
+            def forward(self, x):
+                attention = torch.sigmoid(self.conv(x))
+                return x * attention
+
 import torch.utils.checkpoint as cp
 
 
@@ -103,13 +138,21 @@ class DeepResUNet(nn.Module):
         self.up4 = ResUp(128, 64 // factor, bilinear)
         self.up5 = ResUp(64, 32, bilinear)
         
-        # Attention gates (optional)
+        # Attention gates (optional) - FIXED for deep architecture
         if use_attention:
-            self.att1 = AttentionGate(in_channels_g=512 // factor, in_channels_x=512, int_channels=256)
-            self.att2 = AttentionGate(in_channels_g=256 // factor, in_channels_x=256, int_channels=128)
-            self.att3 = AttentionGate(in_channels_g=128 // factor, in_channels_x=128, int_channels=64)
-            self.att4 = AttentionGate(in_channels_g=64 // factor, in_channels_x=64, int_channels=32)
-            self.att5 = AttentionGate(in_channels_g=32, in_channels_x=32, int_channels=16)
+            # NOTE: Deep network has one extra layer, so channel counts are different
+            # Format: AttentionGate(in_channels_g, in_channels_x, int_channels)
+            # Convention: g=gating signal (deeper layer), x=skip connection (encoder)
+            # att1: g=x6 (1024), x=x5 (512) 
+            self.att1 = AttentionGate(in_channels_g=1024 // factor, in_channels_x=512, int_channels=256)
+            # att2: g=up1_output (512//factor), x=x4 (256)
+            self.att2 = AttentionGate(in_channels_g=512 // factor, in_channels_x=256, int_channels=128)
+            # att3: g=up2_output (256//factor), x=x3 (128)
+            self.att3 = AttentionGate(in_channels_g=256 // factor, in_channels_x=128, int_channels=64)
+            # att4: g=up3_output (128//factor), x=x2 (64)
+            self.att4 = AttentionGate(in_channels_g=128 // factor, in_channels_x=64, int_channels=32)
+            # att5: g=up4_output (64//factor), x=x1 (32)
+            self.att5 = AttentionGate(in_channels_g=64 // factor, in_channels_x=32, int_channels=16)
         
         # Output convolution
         self.outc = OutConv(32, n_classes)
@@ -125,19 +168,25 @@ class DeepResUNet(nn.Module):
         
         # Decoder path with skip connections
         if self.use_attention:
-            x5_att = self.att1(x5, x6)
+            # Convention: att(gating_signal, skip_connection)
+            # att1: g=x6 (1024), x=x5 (512)
+            x5_att = self.att1(x6, x5)
             x = self.up1(x6, x5_att)
             
-            x4_att = self.att2(x4, x)
+            # att2: g=x (512//factor), x=x4 (256)
+            x4_att = self.att2(x, x4)
             x = self.up2(x, x4_att)
             
-            x3_att = self.att3(x3, x)
+            # att3: g=x (256//factor), x=x3 (128)
+            x3_att = self.att3(x, x3)
             x = self.up3(x, x3_att)
             
-            x2_att = self.att4(x2, x)
+            # att4: g=x (128//factor), x=x2 (64)
+            x2_att = self.att4(x, x2)
             x = self.up4(x, x2_att)
             
-            x1_att = self.att5(x1, x)
+            # att5: g=x (64), x=x1 (32)
+            x1_att = self.att5(x, x1)
             x = self.up5(x, x1_att)
         else:
             x = self.up1(x6, x5)

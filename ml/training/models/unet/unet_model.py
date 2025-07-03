@@ -1,6 +1,19 @@
 """ Full assembly of the parts to form the complete network """
 
-from .unet_parts import *
+# Handle both package and direct imports
+try:
+    # When imported as a package
+    from .unet_parts import *
+except ImportError:
+    # When imported directly
+    import sys
+    import os
+    # Get the directory containing this file
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
+    from unet_parts import *
+
 import torch.utils.checkpoint as cp
 
 

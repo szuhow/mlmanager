@@ -33,15 +33,138 @@
     font-weight: normal !important;
     padding: 2px 0;
 }
+
+/* Enhanced image viewing styles */
+.training-sample-image, .preprocessing-image {
+    cursor: pointer;
+    transition: all 0.3s ease;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.training-sample-image:hover, .preprocessing-image:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+}
+
+/* Card styling improvements */
+.card {
+    transition: all 0.2s ease;
+    border: 1px solid rgba(0,0,0,0.1);
+}
+
+.card:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+/* Training samples cards */
+.training-samples-container .card {
+    height: 100%;
+}
+
+.training-samples-container .card-body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.75rem;
+}
+
+/* Zoom modal enhancements */
+.modal-xl {
+    max-width: 95vw;
+}
+
+#imageModalBody {
+    position: relative;
+    background-color: #f8f9fa;
+    overflow: auto;
+}
+
+#modalImage {
+    max-width: 90vw;
+    max-height: 70vh;
+    width: auto;
+    height: auto;
+    cursor: zoom-in;
+    transition: transform 0.3s ease;
+    object-fit: contain;
+}
+
+#modalImage.zoomed {
+    cursor: zoom-out;
+    transform: scale(1.5);
+    max-width: none;
+    max-height: none;
+}
+
+/* Auto-refresh status styles */
+#update-status {
+    font-size: 0.8rem;
+    padding: 2px 6px;
+    border-radius: 12px;
+    background-color: rgba(0,0,0,0.05);
+}
+
+.metric-item {
+    margin-bottom: 0.5rem;
+}
+
+.metric-label {
+    font-weight: 500;
+    color: #6c757d;
+}
+
+.metric-value {
+    font-weight: 600;
+    color: #212529;
+}
+
+/* Progress bar enhancements */
+.progress-enhanced {
+    height: 25px;
+    background-color: #e9ecef;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.progress-enhanced .progress-bar {
+    background: linear-gradient(90deg, #007bff 0%, #0056b3 100%);
+    font-size: 0.875rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+}
 </style>
 {% endblock %}
 
 {% block content %}
 {% csrf_token %}
 <div class="container-fluid" data-model-id="{{ model.pk }}" data-model-status="{{ model.status }}" data-model-created-at="{{ model.created_at|date:'c' }}">
+    <div class="container-xl">
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h1>{{ model.name }}</h1>
+        <div class="d-flex align-items-center">
+            <h1 class="me-3">{{ model.name }}</h1>
+            <!-- Auto-refresh status indicator -->
+            <small id="update-status" class="text-muted" style="display: none;">
+                <i class="fas fa-circle text-success" style="font-size: 0.5rem;"></i> Live
+            </small>
+            <small id="last-update-time" class="text-muted ms-2" style="display: none;"></small>
+        </div>
         <div class="d-flex gap-2">
+            <!-- Manual refresh button -->
+            <button class="btn btn-outline-info btn-sm" id="manualRefreshBtn" title="Refresh Progress">
+                <i class="fas fa-sync-alt"></i>
+            </button>
+            
+            <!-- Stop training button (only show if training) -->
+            {% if model.status == 'training' %}
+            <button class="btn btn-outline-danger btn-sm" id="stopTrainingBtn" title="Stop Training">
+                <i class="fas fa-stop"></i> Stop
+            </button>
+            {% endif %}
+            
             <button class="btn btn-outline-secondary" onclick="openLogsModal()">
                 <i class="fas fa-file-alt me-1"></i>
                 Training Logs
@@ -66,14 +189,16 @@
     </div>
     {% endif %}
 
-    <div class="row">
-        <!-- Left Column -->
-        <div class="col-md-6">
-            <!-- Model Information Card -->
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h5 class="card-title mb-0">Model Information</h5>
-                </div>
+    <div class="row justify-content-center">
+        <!-- Model and Dataset Information -->
+        <div class="col-lg-10 col-xl-9">
+            <div class="row">
+                <div class="col-md-6">
+                    <!-- Model Information Card -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="card-title mb-0">Model Information</h5>
+                        </div>
                 <div class="card-body">
                     <dl class="row">
                         <dt class="col-sm-4">Status</dt>
@@ -233,7 +358,6 @@
             </div>
         </div>
 
-        <!-- Right Column -->
         <div class="col-md-6">
             <!-- Dataset Information Card -->
             <div class="card mb-4">
@@ -248,7 +372,11 @@
                         <dt class="col-sm-4">Dataset Type</dt>
                         <dd class="col-sm-8">
                             <span class="badge bg-info">
-                                {{ model.training_data_info.dataset_type|default:"auto"|title }}
+                                {% if model.training_data_info.dataset_type %}
+                                    {{ model.training_data_info.dataset_type|title }}
+                                {% else %}
+                                    Auto
+                                {% endif %}
                             </span>
                         </dd>
                         
@@ -338,12 +466,13 @@
                 </div>
             </div>
         </div>
+            </div>
     </div>
 
-    <!-- Training Configuration Section (Full Width) -->
+    <!-- Training Configuration Section -->
     {% if training_details %}
-    <div class="row">
-        <div class="col-12">
+    <div class="row justify-content-center">
+        <div class="col-lg-10 col-xl-9">
             <div class="card mb-4">
                 <div class="card-header">
                     <h5 class="card-title mb-0">
@@ -357,37 +486,42 @@
                             {{ training_details.error }}
                         </div>
                     {% else %}
-                        <div class="row">
-                            <!-- Basic Configuration -->
-                            <div class="col-md-6">
-                                <h6 class="text-primary mb-3"><i class="fas fa-sliders-h me-1"></i>Training Parameters</h6>
+                        <!-- Basic Configuration -->
+                        <div class="mb-4">
+                            <h6 class="text-primary mb-3"><i class="fas fa-sliders-h me-1"></i>Training Parameters</h6>
+                            <div class="row">
+                                <div class="col-12">
                                 <dl class="row">
-                                    <dt class="col-sm-5">Batch Size:</dt>
-                                    <dd class="col-sm-7">{{ training_details.config.batch_size|default:"N/A" }}</dd>
+                                    <dt class="col-sm-3">Batch Size:</dt>
+                                    <dd class="col-sm-3">{{ training_details.config.batch_size|default:"N/A" }}</dd>
                                     
-                                    <dt class="col-sm-5">Epochs:</dt>
-                                    <dd class="col-sm-7">{{ training_details.config.epochs|default:"N/A" }}</dd>
+                                    <dt class="col-sm-3">Epochs:</dt>
+                                    <dd class="col-sm-3">{{ training_details.config.epochs|default:"N/A" }}</dd>
                                     
                                     <dt class="col-sm-5">Learning Rate:</dt>
                                     <dd class="col-sm-7">{{ training_details.config.learning_rate|default:"N/A" }}</dd>
                                     
-                                    <dt class="col-sm-5">Validation Split:</dt>
-                                    <dd class="col-sm-7">{{ training_details.config.validation_split|default:"N/A" }}</dd>
+                                    <dt class="col-sm-3">Validation Split:</dt>
+                                    <dd class="col-sm-3">{{ training_details.config.validation_split|default:"N/A" }}</dd>
                                     
-                                    <dt class="col-sm-5">Crop Size:</dt>
-                                    <dd class="col-sm-7">{{ training_details.config.crop_size|default:"N/A" }}px</dd>
+                                    <dt class="col-sm-3">Crop Size:</dt>
+                                    <dd class="col-sm-3">{{ training_details.config.crop_size|default:"N/A" }}px</dd>
                                     
-                                    <dt class="col-sm-5">Workers:</dt>
-                                    <dd class="col-sm-7">{{ training_details.config.num_workers|default:"N/A" }}</dd>
+                                    <dt class="col-sm-3">Workers:</dt>
+                                    <dd class="col-sm-3">{{ training_details.config.num_workers|default:"N/A" }}</dd>
                                 </dl>
+                                </div>
                             </div>
+                        </div>
 
-                            <!-- Hardware & Environment -->
-                            <div class="col-md-6">
-                                <h6 class="text-success mb-3"><i class="fas fa-microchip me-1"></i>Hardware & Environment</h6>
+                        <!-- Hardware & Environment -->
+                        <div class="mb-4">
+                            <h6 class="text-success mb-3"><i class="fas fa-microchip me-1"></i>Hardware & Environment</h6>
+                            <div class="row">
+                                <div class="col-12">
                                 <dl class="row">
-                                    <dt class="col-sm-5">Device:</dt>
-                                    <dd class="col-sm-7">
+                                    <dt class="col-sm-3">Device:</dt>
+                                    <dd class="col-sm-3">
                                         <span class="badge {% if training_details.hardware.device == 'cuda' %}bg-success{% else %}bg-secondary{% endif %}">
                                             {{ training_details.hardware.device|default:"N/A"|upper }}
                                         </span>
@@ -396,11 +530,11 @@
                                         {% endif %}
                                     </dd>
                                     
-                                    <dt class="col-sm-5">PyTorch Version:</dt>
-                                    <dd class="col-sm-7">{{ training_details.hardware.pytorch_version|default:"N/A" }}</dd>
+                                    <dt class="col-sm-3">PyTorch Version:</dt>
+                                    <dd class="col-sm-3">{{ training_details.hardware.pytorch_version|default:"N/A" }}</dd>
                                     
-                                    <dt class="col-sm-5">CUDA Available:</dt>
-                                    <dd class="col-sm-7">
+                                    <dt class="col-sm-3">CUDA Available:</dt>
+                                    <dd class="col-sm-3">
                                         {% if training_details.hardware.cuda_available %}
                                             <i class="fas fa-check-circle text-success"></i> Yes
                                         {% else %}
@@ -408,9 +542,10 @@
                                         {% endif %}
                                     </dd>
                                     
-                                    <dt class="col-sm-5">Model Type:</dt>
-                                    <dd class="col-sm-7">{{ training_details.config.model_type|default:"N/A"|upper }}</dd>
+                                    <dt class="col-sm-3">Model Type:</dt>
+                                    <dd class="col-sm-3">{{ training_details.config.model_type|default:"N/A"|upper }}</dd>
                                 </dl>
+                                </div>
                             </div>
                         </div>
 
@@ -461,9 +596,9 @@
                                         <div class="d-flex align-items-center">
                                             <div class="me-2">
                                                 {% if training_details.augmentation.random_scale %}
-                                                    <i class="fas fa-expand-arrows-alt text-success"></i>
+                                                    <i class="fas fa-expand text-success"></i>
                                                 {% else %}
-                                                    <i class="fas fa-expand-arrows-alt text-muted"></i>
+                                                    <i class="fas fa-expand text-muted"></i>
                                                 {% endif %}
                                             </div>
                                             <div>
@@ -496,6 +631,365 @@
                             </div>
                         </div>
                         {% endif %}
+                        
+                        <!-- Medical Preprocessing Section -->
+                        {% if training_details.preprocessing %}
+                        <hr class="my-4">
+                        <div class="row">
+                            <div class="col-12">
+                                <h6 class="text-warning mb-3"><i class="fas fa-filter me-1"></i>Medical Preprocessing</h6>
+                                <div class="row row-cols-2 row-cols-md-3 g-3">
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.preprocessing.use_medical_preprocessing %}
+                                                    <i class="fas fa-microscope text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-microscope text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Medical Preprocessing</small><br>
+                                                <span class="badge {% if training_details.preprocessing.use_medical_preprocessing %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.preprocessing.use_medical_preprocessing %}Enabled{% else %}Disabled{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.preprocessing.use_clahe %}
+                                                    <i class="fas fa-eye text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-eye text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">CLAHE</small><br>
+                                                <span class="badge {% if training_details.preprocessing.use_clahe %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.preprocessing.use_clahe %}Enabled{% else %}Disabled{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.preprocessing.use_frangi_filter %}
+                                                    <i class="fas fa-water text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-water text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Frangi Filter</small><br>
+                                                <span class="badge {% if training_details.preprocessing.use_frangi_filter %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.preprocessing.use_frangi_filter %}Enabled{% else %}Disabled{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                        
+                        <!-- Optimizer & Early Stopping Section -->
+                        {% if training_details.optimizer %}
+                        <hr class="my-4">
+                        <div class="row">
+                            <div class="col-12">
+                                <h6 class="text-primary mb-3"><i class="fas fa-cogs me-1"></i>Optimizer & Early Stopping</h6>
+                                <div class="row row-cols-2 row-cols-md-3 g-3">
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                <i class="fas fa-rocket text-primary"></i>
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Optimizer</small><br>
+                                                <span class="badge bg-primary">
+                                                    {{ training_details.optimizer.type|default:"Adam" }}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                <i class="fas fa-tachometer-alt text-info"></i>
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Learning Rate</small><br>
+                                                <span class="badge bg-info">
+                                                    {{ training_details.optimizer.learning_rate|default:"0.001" }}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.optimizer.lr_scheduler %}
+                                                    <i class="fas fa-chart-line text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-chart-line text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">LR Scheduler</small><br>
+                                                <span class="badge {% if training_details.optimizer.lr_scheduler %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.optimizer.lr_scheduler %}{{ training_details.optimizer.lr_scheduler }}{% else %}None{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                <i class="fas fa-weight-hanging text-warning"></i>
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Weight Decay</small><br>
+                                                <span class="badge bg-warning text-dark">
+                                                    {{ training_details.optimizer.weight_decay|default:"0.0" }}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                {% if training_details.optimizer.early_stopping %}
+                                                    <i class="fas fa-stop-circle text-success"></i>
+                                                {% else %}
+                                                    <i class="fas fa-stop-circle text-muted"></i>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Early Stopping</small><br>
+                                                <span class="badge {% if training_details.optimizer.early_stopping %}bg-success{% else %}bg-secondary{% endif %}">
+                                                    {% if training_details.optimizer.early_stopping %}Enabled{% else %}Disabled{% endif %}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    {% if training_details.optimizer.early_stopping %}
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                <i class="fas fa-hourglass-half text-warning"></i>
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">Patience</small><br>
+                                                <span class="badge bg-warning text-dark">
+                                                    {{ training_details.optimizer.early_stopping_patience|default:"10" }} epochs
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% endif %}
+                                    
+                                    {% if training_details.optimizer.lr_scheduler %}
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                <i class="fas fa-clock text-info"></i>
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">LR Patience</small><br>
+                                                <span class="badge bg-info">
+                                                    {{ training_details.optimizer.lr_patience|default:"5" }} epochs
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2">
+                                                <i class="fas fa-percentage text-info"></i>
+                                            </div>
+                                            <div>
+                                                <small class="fw-bold">LR Factor</small><br>
+                                                <span class="badge bg-info">
+                                                    {{ training_details.optimizer.lr_factor|default:"0.5" }}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Model Architecture Summary Section -->
+    {% if architecture_details %}
+    <div class="row justify-content-center">
+        <div class="col-lg-10 col-xl-9">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-sitemap me-2"></i>Model Architecture Summary
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if architecture_details.error %}
+                        <div class="alert alert-warning">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            {{ architecture_details.error }}
+                        </div>
+                    {% elif 'model_summary_error' in architecture_details %}
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle me-2"></i>
+                            Model architecture detected but summary generation failed: {{ architecture_details.model_summary_error }}
+                        </div>
+                    {% elif architecture_details.model_summary %}
+                        <!-- Model Summary Statistics -->
+                        <div class="row mb-4">
+                            <div class="col-md-3">
+                                <div class="d-flex align-items-center">
+                                    <div class="me-2">
+                                        <i class="fas fa-layer-group text-primary"></i>
+                                    </div>
+                                    <div>
+                                        <small class="fw-bold">Total Parameters</small><br>
+                                        <span class="badge bg-primary">
+                                            {{ architecture_details.model_summary.total_params|floatformat:0 }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-3">
+                                <div class="d-flex align-items-center">
+                                    <div class="me-2">
+                                        <i class="fas fa-cogs text-success"></i>
+                                    </div>
+                                    <div>
+                                        <small class="fw-bold">Trainable Parameters</small><br>
+                                        <span class="badge bg-success">
+                                            {{ architecture_details.model_summary.trainable_params|floatformat:0 }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-3">
+                                <div class="d-flex align-items-center">
+                                    <div class="me-2">
+                                        <i class="fas fa-memory text-info"></i>
+                                    </div>
+                                    <div>
+                                        <small class="fw-bold">Model Size</small><br>
+                                        <span class="badge bg-info">
+                                            {{ architecture_details.model_summary.model_size_mb }} MB
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-3">
+                                <div class="d-flex align-items-center">
+                                    <div class="me-2">
+                                        <i class="fas fa-cube text-warning"></i>
+                                    </div>
+                                    <div>
+                                        <small class="fw-bold">Input Shape</small><br>
+                                        <span class="badge bg-warning text-dark">
+                                            {% if architecture_details.model_summary.input_shape %}
+                                                {{ architecture_details.model_summary.input_shape|join:"×" }}
+                                            {% else %}
+                                                256×256
+                                            {% endif %}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Detailed Model Summary - Collapsible -->
+                        {% if architecture_details.model_summary_text|default:'' %}
+                        <div class="mb-3">
+                            <h6 class="text-primary mb-2">
+                                <a class="text-decoration-none text-primary" data-bs-toggle="collapse" href="#detailedArchitectureCollapse" role="button" aria-expanded="false" aria-controls="detailedArchitectureCollapse">
+                                    <i class="fas fa-chevron-right me-1" id="architectureCollapseIcon"></i>
+                                    <i class="fas fa-list me-1"></i>Detailed Architecture
+                                    <small class="text-muted">(click to expand)</small>
+                                </a>
+                            </h6>
+                            <div class="collapse" id="detailedArchitectureCollapse">
+                                <div class="border rounded p-3" style="background-color: #f8f9fa;">
+                                    <pre class="mb-0" style="font-family: 'Courier New', monospace; font-size: 0.8rem; line-height: 1.2; white-space: pre-wrap; margin: 0;">{{ architecture_details.model_summary_text }}</pre>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                        
+                        <!-- Architecture Type Info -->
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="d-flex align-items-center">
+                                    <div class="me-2">
+                                        <i class="fas fa-tag text-secondary"></i>
+                                    </div>
+                                    <div>
+                                        <small class="fw-bold">Architecture Type</small><br>
+                                        <span class="badge bg-secondary">
+                                            {{ architecture_details.type|default:"Unknown" }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-4">
+                                <div class="d-flex align-items-center">
+                                    <div class="me-2">
+                                        <i class="fas fa-code text-dark"></i>
+                                    </div>
+                                    <div>
+                                        <small class="fw-bold">Framework</small><br>
+                                        <span class="badge bg-dark">
+                                            {{ architecture_details.framework|default:"Unknown" }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-4">
+                                <div class="d-flex align-items-center">
+                                    <div class="me-2">
+                                        <i class="fas fa-project-diagram text-info"></i>
+                                    </div>
+                                    <div>
+                                        <small class="fw-bold">Architecture Family</small><br>
+                                        <span class="badge bg-info">
+                                            {{ architecture_details.details.architecture_family|default:"Unknown" }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                    {% else %}
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle me-2"></i>
+                            Model architecture information not available. This feature requires the model to be created with architecture details.
+                        </div>
                     {% endif %}
                 </div>
             </div>
@@ -503,10 +997,10 @@
     </div>
     {% endif %}
 
-    <!-- Training Samples Section (Full Width) -->
+    <!-- Training Samples Section -->
     {% if training_preview %}
-    <div class="row">
-        <div class="col-12">
+    <div class="row justify-content-center">
+        <div class="col-lg-10 col-xl-9">
             <div class="card mb-4">
                 <div class="card-header">
                     <h5 class="card-title mb-0">
@@ -528,18 +1022,18 @@
                             Prediction samples generated during training. Shows model performance evolution across epochs.
                         </p>
                         <div class="training-samples-container">
-                            <div class="row">
+                            <div class="row justify-content-center">
                                 {% for image in training_preview.images %}
-                                <div class="col-md-6 col-lg-4 mb-3" data-epoch="{{ image.epoch }}">
-                                    <div class="card">
-                                        <div class="card-header py-2">
-                                            <small class="text-muted">Epoch {{ image.epoch }}</small>
+                                <div class="col-sm-6 col-md-4 col-lg-3 mb-3" data-epoch="{{ image.epoch }}">
+                                    <div class="card h-100">
+                                        <div class="card-header py-1 text-center">
+                                            <small class="text-muted fw-bold">Epoch {{ image.epoch }}</small>
                                         </div>
                                         <div class="card-body p-2">
                                             <img src="{% url 'ml_manager:training-preview-image' model.id image.filename %}" 
                                                  class="img-fluid training-sample-image" 
                                                  alt="Epoch {{ image.epoch }} predictions"
-                                                 style="max-height: 300px; width: 100%; object-fit: contain; cursor: pointer;"
+                                                 style="max-height: 200px; width: 100%; object-fit: contain; cursor: pointer; border-radius: 4px;"
                                                  data-epoch="{{ image.epoch }}"
                                                  data-image-url="{% url 'ml_manager:training-preview-image' model.id image.filename %}"
                                                  onclick="openTrainingImageModal({{ image.epoch }})">
@@ -663,6 +1157,7 @@
           <img id="modalImage" src="" alt="" 
                style="max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain;"
                ondragstart="return false;"
+               onclick="toggleImageZoom()"
                onload="console.log('Image loaded successfully')"
                onerror="console.error('Failed to load image:', this.src)">
         </div>
@@ -761,6 +1256,8 @@ function syncRegistryInfo(modelId) {
 function openLogsModal() {
     if (window.modelDetailManager) {
         window.modelDetailManager.openLogsModal();
+        // Always refresh logs when opening modal (same as refresh button)
+        window.modelDetailManager.loadModalLogs();
     }
 }
 
@@ -772,6 +1269,7 @@ function loadModalLogs() {
 
 // Initialize refresh button functionality
 document.addEventListener('DOMContentLoaded', function() {
+    // Refresh logs button
     const refreshBtn = document.getElementById('modal-refresh-logs');
     if (refreshBtn) {
         refreshBtn.addEventListener('click', function() {
@@ -792,11 +1290,66 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 1000);
         });
     }
+    
+    // Load all logs button
+    const loadAllBtn = document.getElementById('modal-load-all-logs');
+    if (loadAllBtn) {
+        loadAllBtn.addEventListener('click', function() {
+            const btn = this;
+            const originalHTML = btn.innerHTML;
+            
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+            btn.disabled = true;
+            
+            // Delegate to unified manager with showAll=true
+            if (window.modelDetailManager) {
+                window.modelDetailManager.loadModalLogs(true);
+            }
+            
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+                btn.disabled = false;
+            }, 2000); // Longer timeout for loading all logs
+        });
+    }
 });
 
-// Training image navigation for modal
+// Training images data and navigation variables
 let trainingImages = [];
 let currentImageIndex = 0;
+
+// Image zoom functionality
+function toggleImageZoom() {
+    const modalImage = document.getElementById('modalImage');
+    const imageContainer = document.getElementById('imageContainer');
+    
+    if (modalImage.classList.contains('zoomed')) {
+        // Zoom out
+        modalImage.classList.remove('zoomed');
+        modalImage.style.transform = 'scale(1)';
+        imageContainer.style.overflow = 'hidden';
+        modalImage.style.cursor = 'zoom-in';
+    } else {
+        // Zoom in
+        modalImage.classList.add('zoomed');
+        modalImage.style.transform = 'scale(2)';
+        imageContainer.style.overflow = 'auto';
+        modalImage.style.cursor = 'zoom-out';
+    }
+}
+
+// Download image function
+function downloadImage() {
+    const modalImage = document.getElementById('modalImage');
+    if (modalImage && modalImage.src) {
+        const link = document.createElement('a');
+        link.href = modalImage.src;
+        link.download = modalImage.alt || 'training_image.png';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+}
 
 // Initialize training images data
 function initializeTrainingImages() {
@@ -857,6 +1410,11 @@ function showImageInModal() {
     const prevBtn = document.getElementById('prevImageBtn');
     const nextBtn = document.getElementById('nextImageBtn');
     
+    // Reset zoom state
+    modalImage.classList.remove('zoomed');
+    modalImage.style.transform = 'scale(1)';
+    modalImage.style.cursor = 'zoom-in';
+    
     // Update image and title
     modalImage.src = currentImage.url;
     modalImage.alt = currentImage.title;
@@ -875,18 +1433,54 @@ function showImageInModal() {
 // Keyboard navigation support
 document.addEventListener('keydown', function(e) {
     const modal = document.getElementById('imageModal');
-    if (modal.classList.contains('show')) {
+    if (modal && modal.classList.contains('show')) {
         if (e.key === 'ArrowLeft') {
             e.preventDefault();
             navigateTrainingImage(-1);
         } else if (e.key === 'ArrowRight') {
             e.preventDefault();
             navigateTrainingImage(1);
+        } else if (e.key === 'Escape') {
+            // Let Bootstrap handle modal close
+        } else if (e.key === ' ' || e.key === 'Enter') {
+            e.preventDefault();
+            toggleImageZoom();
         }
+    }
+});
+
+// MLflow registry functions
+function syncRegistryInfo(modelId) {
+    console.log('Syncing registry info for model:', modelId);
+    // Implementation would go here
+}
+
+function registerModel(modelId) {
+    console.log('Registering model:', modelId);
+}
+
+// Handle detailed architecture collapse icon rotation
+document.addEventListener('DOMContentLoaded', function() {
+    const detailedArchitectureCollapse = document.getElementById('detailedArchitectureCollapse');
+    const architectureCollapseIcon = document.getElementById('architectureCollapseIcon');
+    
+    if (detailedArchitectureCollapse && architectureCollapseIcon) {
+        detailedArchitectureCollapse.addEventListener('show.bs.collapse', function () {
+            architectureCollapseIcon.classList.remove('fa-chevron-right');
+            architectureCollapseIcon.classList.add('fa-chevron-down');
+        });
+        
+        detailedArchitectureCollapse.addEventListener('hide.bs.collapse', function () {
+            architectureCollapseIcon.classList.remove('fa-chevron-down');
+            architectureCollapseIcon.classList.add('fa-chevron-right');
+        });
     }
 });
 </script>
 
+    </div> <!-- Close container -->
+    {% endif %} <!-- training_preview -->
+</div> <!-- Close container-fluid -->
 
 {% if messages %}
   <div class="container mt-3">

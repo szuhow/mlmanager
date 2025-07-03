@@ -58,6 +58,7 @@ class TrainingTemplateForm(forms.ModelForm):
             'name', 'description', 'model_type', 'batch_size', 'epochs', 
             'learning_rate', 'validation_split', 'resolution', 'device',
             'optimizer', 'lr_scheduler', 'lr_patience', 'lr_factor', 'lr_step_size', 'lr_gamma', 'min_lr',
+            'segmentation_metric',
             'use_early_stopping', 'early_stopping_patience', 'early_stopping_min_epochs', 
             'early_stopping_min_delta', 'early_stopping_metric',
             'use_random_flip', 'flip_probability', 'use_random_rotate', 'rotation_range',
@@ -324,8 +325,22 @@ class TrainingForm(forms.Form):
         help_text="Minimum improvement required to reset patience counter"
     )
     
+    # Primary segmentation metric selection
+    SEGMENTATION_METRIC_CHOICES = [
+        ('dice', 'Dice Score'),
+        ('iou', 'IoU Score'),
+    ]
+    
+    segmentation_metric = forms.ChoiceField(
+        choices=SEGMENTATION_METRIC_CHOICES,
+        initial='dice',
+        required=False,
+        help_text="Primary segmentation metric to track and display"
+    )
+    
     EARLY_STOPPING_METRIC_CHOICES = [
         ('val_dice', 'Validation Dice Score'),
+        ('val_iou', 'Validation IoU Score'),
         ('val_loss', 'Validation Loss'),
         ('val_accuracy', 'Validation Accuracy'),
     ]

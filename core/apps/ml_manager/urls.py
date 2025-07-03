@@ -39,6 +39,22 @@ urlpatterns = [
     # Training progress URL
     path('model/<int:model_id>/progress/', views.get_training_progress, name='model-progress'),
     
+    # API endpoints for training monitoring
+    path('api/training-progress/<int:model_id>/', views.get_training_progress, name='api-training-progress'),
+    path('api/latest-training-model/', views.get_latest_training_model, name='api-latest-training-model'),
+    path('api/stop-training/<int:model_id>/', views.stop_training_api, name='api-stop-training'),
+    
+    # MLflow synchronization endpoints
+    path('api/sync-mlflow-status/', views.sync_mlflow_status, name='api-sync-mlflow-status'),
+    path('api/cleanup-orphaned-runs/', views.cleanup_orphaned_runs, name='api-cleanup-orphaned-runs'),
+    path('api/sync-all-mlflow-data/', views.sync_all_mlflow_data, name='api-sync-all-mlflow-data'),
+    path('api/force-end-run/<str:run_id>/', views.force_end_mlflow_run, name='api-force-end-run'),
+    path('api/force-end-all-runs/', views.force_end_all_mlflow_runs, name='api-force-end-all-runs'),
+    path('api/test-mlflow/', views.test_mlflow_connection, name='api-test-mlflow'),
+    
+    # Model preview endpoint
+    path('api/model-summary/', views.generate_model_summary_api, name='api-model-summary'),
+    
     # Training preview image URL  
     path('model/<int:model_id>/training-preview/<str:filename>', views.serve_training_preview_image, name='training-preview-image'),
     

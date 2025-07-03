@@ -131,7 +131,7 @@ except ImportError:
     EnsureChannelTransform = EnsureChannelFirstd
 from monai.transforms import Compose, LoadImaged, ScaleIntensityd, ToTensord, RandCropByPosNegLabeld, RandFlipd, RandRotate90d, RandScaleIntensityd, Lambdad, Resized, RandSpatialCropd
 from monai.losses import DiceLoss as MonaiDiceLoss
-from monai.metrics import DiceMetric
+from monai.metrics import DiceMetric, MeanIoU
 
 # Import enhanced training utilities
 try:
@@ -435,7 +435,7 @@ def create_model_from_registry(model_type, device, task_type=None, **model_kwarg
             logger.info(f"[ARCH] Successfully loaded classification model: {arch_info.display_name}")
             
         # Handle special case for MONAI UNet (legacy compatibility) for segmentation
-        elif model_type in ['unet', 'monai_unet'] or 'unet' in model_type.lower():
+        elif model_type in ['unet', 'monai_unet']:
             logger.info("[ARCH] Using MONAI UNet with default configuration (special case)")
             model = MonaiUNet(
                 spatial_dims=model_kwargs.get('spatial_dims', 2),
@@ -469,6 +469,24 @@ def create_model_from_registry(model_type, device, task_type=None, **model_kwarg
                 current_model_kwargs.update(model_kwargs) # User-provided kwargs override defaults
             else:
                 current_model_kwargs = model_kwargs
+            
+            # Handle parameter mapping for different model types AFTER merging configs
+            # Map MONAI-style parameters to local model parameters
+            if 'in_channels' in current_model_kwargs and 'n_channels' not in current_model_kwargs:
+                current_model_kwargs['n_channels'] = current_model_kwargs.pop('in_channels')
+                logger.info(f"[ARCH] Mapped in_channels -> n_channels: {current_model_kwargs['n_channels']}")
+            elif 'in_channels' in current_model_kwargs and 'n_channels' in current_model_kwargs:
+                # If both exist, use in_channels value for n_channels and remove in_channels
+                current_model_kwargs['n_channels'] = current_model_kwargs.pop('in_channels')
+                logger.info(f"[ARCH] Overrode n_channels with in_channels: {current_model_kwargs['n_channels']}")
+            
+            if 'out_channels' in current_model_kwargs and 'n_classes' not in current_model_kwargs:
+                current_model_kwargs['n_classes'] = current_model_kwargs.pop('out_channels')
+                logger.info(f"[ARCH] Mapped out_channels -> n_classes: {current_model_kwargs['n_classes']}")
+            elif 'out_channels' in current_model_kwargs and 'n_classes' in current_model_kwargs:
+                # If both exist, use out_channels value for n_classes and remove out_channels
+                current_model_kwargs['n_classes'] = current_model_kwargs.pop('out_channels')
+                logger.info(f"[ARCH] Overrode n_classes with out_channels: {current_model_kwargs['n_classes']}")
             
             # Create model instance
             logger.info(f"[ARCH] Instantiating {arch_info.display_name} with effective kwargs: {current_model_kwargs}")
@@ -2163,13 +2181,29 @@ def train_model(args):
     # Set up logging first thing
     import sys
     
-    # Create model directory for this run first to get proper paths
-    model_family = getattr(args, 'model_family', 'UNet-Coronary')
-    model_dir, unique_id = create_organized_model_directory(
-        model_id=args.model_id, 
-        model_family=model_family, 
-        version="1.0.0"
-    )
+    # Get model directory from Django model if available, otherwise create one
+    model_dir = None
+    if hasattr(args, 'model_id') and args.model_id is not None and DJANGO_AVAILABLE:
+        try:
+            from ml_manager.models import MLModel
+            model_obj = MLModel.objects.get(pk=args.model_id)
+            if model_obj.model_directory:
+                model_dir = model_obj.model_directory
+                startup_logger.info(f"[SETUP] Using model directory from database: {model_dir}")
+            else:
+                startup_logger.warning(f"[SETUP] Model {args.model_id} has no model_directory set")
+        except Exception as e:
+            startup_logger.warning(f"[SETUP] Could not get model directory from database: {e}")
+    
+    # Fallback to creating model directory if not set
+    if not model_dir:
+        model_family = getattr(args, 'model_family', 'UNet-Coronary')
+        model_dir, unique_id = create_organized_model_directory(
+            model_id=args.model_id, 
+            model_family=model_family, 
+            version="1.0.0"
+        )
+        startup_logger.info(f"[SETUP] Created new model directory: {model_dir}")
     
     # Set up logging to both model-specific and global locations
     model_log_path = os.path.join(model_dir, 'logs', 'training.log')
@@ -2806,9 +2840,11 @@ def train_model(args):
         logger.info(f"[LR_SCHEDULER] Dynamic learning rate scheduler initialized with LR: {args.learning_rate}")
         
         dice_metric = DiceMetric(include_background=True, reduction="mean")
+        iou_metric = MeanIoU(include_background=True, reduction="mean")
         scaler = torch.cuda.amp.GradScaler()
         
         best_val_dice = -1
+        best_val_iou = -1
         best_model_path = None
         
         # Initialize Early Stopping if enabled
@@ -2881,6 +2917,7 @@ def train_model(args):
             model.train()
             epoch_loss = 0
             train_dice = 0
+            train_iou = 0
             
             batch_stopped_early = False
             for batch_idx, batch_data in enumerate(train_loader):
@@ -3127,22 +3164,27 @@ def train_model(args):
                         batch_accuracy = (predicted_classes == labels).float().mean().item()
                         batch_dice = batch_accuracy  # Use accuracy as the metric
                     else:
-                        # Segmentation task - calculate dice score
+                        # Segmentation task - calculate dice and iou scores
                         # Apply proper thresholding for binary segmentation
                         if outputs.shape[1] == 1:
                             val_outputs_soft = torch.sigmoid(outputs)
                             threshold = args.threshold if args.threshold is not None else 0.5
                             val_outputs_hard = (val_outputs_soft > threshold).float()
                             dice_metric(y_pred=val_outputs_hard, y=labels)
+                            iou_metric(y_pred=val_outputs_hard, y=labels)
                         else:
                             # Multi-class - apply softmax and argmax
                             val_outputs = torch.softmax(outputs, dim=1)
                             val_outputs = torch.argmax(val_outputs, dim=1, keepdim=True).float()
                             dice_metric(y_pred=val_outputs, y=labels)
+                            iou_metric(y_pred=val_outputs, y=labels)
                         
                         batch_dice = dice_metric.aggregate().item()
+                        batch_iou = iou_metric.aggregate().item()
                         dice_metric.reset()
+                        iou_metric.reset()
                     train_dice += batch_dice
+                    train_iou += batch_iou if 'batch_iou' in locals() else batch_dice
                 
                 # Call batch end callback with current metrics
                 if callback:
@@ -3175,12 +3217,14 @@ def train_model(args):
             
             epoch_loss /= len(train_loader)
             train_dice /= len(train_loader)
+            train_iou /= len(train_loader)
             
             # Validation
             logger.info(f"[VAL] Starting validation for epoch {epoch+1}")
             model.eval()
             val_loss = 0
             val_dice = 0
+            val_iou = 0
             
             # --- Enhanced validation data analysis ---
             try:
@@ -3384,6 +3428,7 @@ def train_model(args):
                             val_outputs = torch.argmax(val_outputs, dim=1, keepdim=True).float()
                         
                         dice_metric(y_pred=val_outputs, y=val_labels)
+                        iou_metric(y_pred=val_outputs, y=val_labels)
                     if val_idx % 5 == 0:
                         val_progress_pct = (val_idx / len(val_loader)) * 100
                         logger.info(f"[VAL] Batch {val_idx}/{len(val_loader)} ({val_progress_pct:.1f}%) - Loss: {batch_val_loss:.4f}")
@@ -3394,10 +3439,13 @@ def train_model(args):
                 if class_info and class_info.get('task_type') == 'artery_classification':
                     # For classification, use average accuracy (stored in val_accuracies)
                     val_dice = sum(val_accuracies) / len(val_accuracies) if 'val_accuracies' in locals() and val_accuracies else 0.0
+                    val_iou = val_dice  # For classification, IoU equals accuracy
                 else:
-                    # For segmentation, use dice metric
+                    # For segmentation, use dice and iou metrics
                     val_dice = dice_metric.aggregate().item()
+                    val_iou = iou_metric.aggregate().item()
                     dice_metric.reset()
+                    iou_metric.reset()
             
             # Create metrics dictionary with appropriate names based on task type
             if class_info and class_info.get('task_type') == 'artery_classification':
@@ -3414,8 +3462,10 @@ def train_model(args):
                 metrics = {
                     "train_loss": epoch_loss,
                     "train_dice": train_dice,
+                    "train_iou": train_iou,
                     "val_loss": val_loss,
                     "val_dice": val_dice,
+                    "val_iou": val_iou,
                 }
                 train_metric_name = "Train Dice"
                 val_metric_name = "Val Dice"
@@ -3616,6 +3666,7 @@ def train_model(args):
             
             if val_dice > best_val_dice:
                 best_val_dice = val_dice
+                best_val_iou = val_iou
                 
                 # Use existing model directory instead of creating a new one
                 model_name = f"model_{args.model_id if args.model_id else 'unknown'}_epoch_{epoch+1}_dice_{val_dice:.3f}"

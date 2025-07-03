@@ -45,6 +45,9 @@ class MlManagerConfig(AppConfig):
                 # Perform startup training status validation
                 self.validate_training_statuses()
                 
+                # Perform MLflow synchronization
+                self.sync_mlflow_on_startup()
+                
             except Exception as e:
                 # Log the error but don't crash the application
                 logger.warning(f"❌ Failed to validate training statuses on startup: {e}")
@@ -144,3 +147,109 @@ class MlManagerConfig(AppConfig):
         except Exception as e:
             logger.warning(f"⚠️  Could not check processes for model {model.id}: {e}")
             return False
+
+    def sync_mlflow_on_startup(self):
+        """Synchronize MLflow status on application startup"""
+        logger = logging.getLogger(__name__)
+        logger.info("🔄 Starting MLflow synchronization on startup...")
+        
+        try:
+            import mlflow
+            from mlflow.tracking import MlflowClient
+            
+            client = MlflowClient()
+            updated_count = 0
+            error_count = 0
+            
+            # Get models with MLflow run IDs that might need syncing
+            models_with_runs = self._get_models_needing_sync()
+            
+            if not models_with_runs:
+                logger.info("✅ No models need MLflow synchronization")
+                return
+            
+            logger.info(f"🔍 Synchronizing {len(models_with_runs)} models with MLflow...")
+            
+            for model in models_with_runs:
+                try:
+                    old_status = model.status
+                    updated = self._sync_model_with_mlflow(model, client)
+                    
+                    if updated:
+                        updated_count += 1
+                        logger.info(f"🔧 Model {model.id} ({model.name}): {old_status} → {model.status}")
+                        
+                except Exception as e:
+                    error_count += 1
+                    logger.warning(f"⚠️  Error syncing model {model.id}: {e}")
+            
+            if updated_count > 0:
+                logger.info(f"✅ MLflow sync completed: {updated_count} models updated, {error_count} errors")
+            else:
+                logger.info("✅ MLflow sync completed: all models already in sync")
+                
+        except ImportError:
+            logger.info("⏭️  MLflow not available, skipping synchronization")
+        except Exception as e:
+            logger.warning(f"⚠️  MLflow synchronization failed: {e}")
+    
+    def _get_models_needing_sync(self):
+        """Get models that might need MLflow synchronization"""
+        try:
+            from .models import MLModel
+            from django.utils import timezone
+            from datetime import timedelta
+            
+            # Focus on models that:
+            # 1. Have MLflow run IDs
+            # 2. Are in training/pending status (most likely to be stale)
+            # 3. Are older than 1 hour (avoid interfering with fresh training)
+            
+            one_hour_ago = timezone.now() - timedelta(hours=1)
+            
+            models = MLModel.objects.filter(
+                mlflow_run_id__isnull=False,
+                status__in=['training', 'pending'],
+                created_at__lt=one_hour_ago
+            ).exclude(mlflow_run_id='')
+            
+            return list(models)
+            
+        except Exception as e:
+            # Handle database schema issues (e.g., during migrations)
+            logger = logging.getLogger(__name__)
+            logger.debug(f"Cannot query models for MLflow sync: {e}")
+            return []
+    
+    def _sync_model_with_mlflow(self, model, client):
+        """Sync a single model with its MLflow run"""
+        try:
+            run = client.get_run(model.mlflow_run_id)
+            mlflow_status = run.info.status
+            
+            # Map MLflow status to our model status
+            status_mapping = {
+                'RUNNING': 'training',
+                'FINISHED': 'completed',
+                'FAILED': 'failed',
+                'KILLED': 'stopped'
+            }
+            
+            new_status = status_mapping.get(mlflow_status, model.status)
+            
+            if new_status != model.status:
+                model.status = new_status
+                model.save()
+                return True
+                
+            return False
+            
+        except Exception as e:
+            # If MLflow run doesn't exist, clear the reference
+            if "RESOURCE_DOES_NOT_EXIST" in str(e):
+                model.mlflow_run_id = None
+                model.status = 'failed'
+                model.save()
+                return True
+            else:
+                raise

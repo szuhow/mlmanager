@@ -133,8 +133,17 @@ class ModelProgressUpdater {
 
             // Update performance
             const performanceCell = row.querySelector('.performance-cell');
-            if (performanceCell && data.metrics && data.metrics.best_val_dice > 0) {
-                performanceCell.innerHTML = `<span class="badge bg-info">${data.metrics.best_val_dice.toFixed(3)}</span>`;
+            if (performanceCell && data.metrics) {
+                const bestDice = data.metrics.best_val_dice || 0;
+                const bestIou = data.metrics.best_val_iou || 0;
+                
+                if (bestDice > 0 || bestIou > 0) {
+                    if (bestIou > 0 && bestIou >= bestDice) {
+                        performanceCell.innerHTML = `<span class="badge bg-info">${bestIou.toFixed(3)}</span><small class="text-muted d-block">IoU</small>`;
+                    } else if (bestDice > 0) {
+                        performanceCell.innerHTML = `<span class="badge bg-info">${bestDice.toFixed(3)}</span><small class="text-muted d-block">Dice</small>`;
+                    }
+                }
             }
 
             // Update status if changed

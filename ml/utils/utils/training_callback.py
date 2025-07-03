@@ -58,6 +58,7 @@ class TrainingCallback:
         self.model_id = model_id
         self.run_id = run_id
         self.best_val_dice = float('-inf')
+        self.best_val_iou = float('-inf')
         self.model = MLModel.objects.get(id=model_id)
     
     def on_training_start(self):
@@ -100,10 +101,15 @@ class TrainingCallback:
         self.model.val_loss = logs.get('val_loss', 0.0)
         self.model.train_dice = logs.get('train_dice', 0.0)
         self.model.val_dice = logs.get('val_dice', 0.0)
+        self.model.train_iou = logs.get('train_iou', 0.0)
+        self.model.val_iou = logs.get('val_iou', 0.0)
         
-        # Update best validation dice if current is better
+        # Update best validation dice and iou if current is better
         if logs.get('val_dice', 0.0) > self.model.best_val_dice:
             self.model.best_val_dice = logs.get('val_dice', 0.0)
+        
+        if logs.get('val_iou', 0.0) > self.model.best_val_iou:
+            self.model.best_val_iou = logs.get('val_iou', 0.0)
         
         self.model.save()
         
@@ -113,7 +119,10 @@ class TrainingCallback:
             'val_loss': logs.get('val_loss', 0),
             'train_dice': logs.get('train_dice', 0),
             'val_dice': logs.get('val_dice', 0),
-            'best_val_dice': self.model.best_val_dice
+            'train_iou': logs.get('train_iou', 0),
+            'val_iou': logs.get('val_iou', 0),
+            'best_val_dice': self.model.best_val_dice,
+            'best_val_iou': self.model.best_val_iou
         }, step=epoch)
     
     def on_training_end(self, logs=None):
@@ -122,9 +131,21 @@ class TrainingCallback:
         if self.model.stop_requested:
             self.model.status = 'stopped'
         else:
-            self.model.status = 'completed'
+            # Only set to completed if training actually progressed beyond epoch 0
+            if self.model.current_epoch > 0:
+                self.model.status = 'completed'
+                # Ensure current_epoch equals total_epochs for completed training
+                self.model.current_epoch = self.model.total_epochs
+            else:
+                # If no epochs were completed, mark as failed
+                self.model.status = 'failed'
+                if not self.model.performance_metrics:
+                    self.model.performance_metrics = {}
+                self.model.performance_metrics['error'] = 'Training terminated before completing any epochs'
         
         if logs:
+            if not self.model.performance_metrics:
+                self.model.performance_metrics = {}
             self.model.performance_metrics.update(logs)
         
         # Save training logs to MLflow as artifacts
@@ -352,6 +373,7 @@ class TrainingCallback:
             # Update running training metrics if provided
             self.model.train_loss = batch_logs.get('train_loss', self.model.train_loss)
             self.model.train_dice = batch_logs.get('train_dice', self.model.train_dice)
+            self.model.train_iou = batch_logs.get('train_iou', self.model.train_iou)
         self.model.save()
     
     def set_epoch_batches(self, total_batches):

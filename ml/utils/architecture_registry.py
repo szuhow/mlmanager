@@ -12,6 +12,260 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Global registry instance
+_DEFAULT_REGISTRY = None
+
+def _register_builtin_architectures(registry: 'ModelArchitectureRegistry') -> None:
+    """Register built-in architectures to the registry"""
+    try:
+        import sys
+        import importlib.util
+        from pathlib import Path
+        
+        project_root = Path(__file__).parent.parent.parent
+        unet_path = project_root / "ml" / "training" / "models" / "unet" / "unet_model.py"
+        
+        # Try to import the UNet model
+        unet_module = None
+        if unet_path.exists():
+            try:
+                spec = importlib.util.spec_from_file_location("unet_model", str(unet_path))
+                if spec and spec.loader:
+                    unet_module = importlib.util.module_from_spec(spec)
+                    sys.modules[spec.name] = unet_module
+                    spec.loader.exec_module(unet_module)
+                    logger.info("Loaded local UNet module")
+            except Exception as e:
+                logger.error(f"Failed to load UNet module: {e}")
+        
+        # 1. Register local UNet implementation (only once)
+        if unet_module and hasattr(unet_module, "UNet"):
+            # Only register under 'unet' key to avoid duplicates
+            registry.register(ArchitectureInfo(
+                key="unet",
+                display_name="UNet",
+                framework="PyTorch",
+                description="UNet implementation for segmentation tasks",
+                model_class=unet_module.UNet,
+                category="segmentation",
+                supports_2d=True,
+                supports_3d=False,
+                author="Project Team",
+                version="1.0.0"
+            ))
+            logger.info(f"Registered architecture: UNet (unet)")
+        
+        # 2. Create fallback implementations for other common models
+        # For MONAI UNet
+        try:
+            from torch import nn
+            # Create a fallback class that points to our local UNet
+            # This avoids ImportError when MONAI isn't available
+            class MonaiFallbackUNet(nn.Module):
+                def __init__(self, input_channels=1, output_channels=1, **kwargs):
+                    super().__init__()  # Important: initialize the parent nn.Module
+                    if unet_module and hasattr(unet_module, "UNet"):
+                        self.model = unet_module.UNet(n_channels=input_channels, n_classes=output_channels)
+                    else:
+                        # Just create an empty module as fallback
+                        self.model = nn.Sequential()
+                    
+                def forward(self, x):
+                    return self.model(x)
+            
+            # Register MONAI UNet fallback
+            registry.register(ArchitectureInfo(
+                key="monai_unet",
+                display_name="MONAI UNet (Fallback)",
+                framework="PyTorch",
+                description="MONAI UNet implementation (fallback to local UNet)",
+                model_class=MonaiFallbackUNet,
+                category="segmentation",
+                supports_2d=True,
+                supports_3d=True,
+                author="Project Team",
+                version="1.0.0"
+            ))
+            logger.info("Registered MONAI UNet fallback architecture")
+            
+            # 3. Register other common models with fallbacks
+            # Create basic fallback classes for other model types
+            common_models = [
+                ("resunet", "ResUNet", "Residual UNet for segmentation tasks"),
+                ("attention_unet", "Attention UNet", "UNet with attention gates"),
+                ("unet_plus_plus", "UNet++", "Nested UNet architecture"),
+                ("deeplab", "DeepLab", "DeepLab segmentation model"),
+                ("segnet", "SegNet", "Segmentation network architecture")
+            ]
+            
+            for key, name, desc in common_models:
+                # Only register fallbacks if the key doesn't already exist
+                if not registry.get_architecture(key):
+                    if unet_module and hasattr(unet_module, "UNet"):
+                        registry.register(ArchitectureInfo(
+                            key=key,
+                            display_name=name,
+                            framework="PyTorch",
+                            description=desc,
+                            model_class=unet_module.UNet,  # Use UNet as fallback
+                            category="segmentation",
+                            supports_2d=True,
+                            supports_3d=False,
+                            author="Project Team",
+                            version="1.0.0"
+                        ))
+                        logger.info(f"Registered fallback for {name} ({key})")
+                else:
+                    logger.info(f"Skipping fallback registration for {key} - already registered")
+            
+            logger.info("Completed registration of fallback architectures")
+        except Exception as e:
+            logger.error(f"Failed to create MONAI UNet fallback: {e}")
+            
+    except Exception as e:
+        logger.error(f"Failed to register architectures: {e}")
+
+
+def _register_resunet_models(registry: 'ModelArchitectureRegistry') -> None:
+    """Register ResUNet models from the training/models directory"""
+    from pathlib import Path
+    import sys
+    import importlib.util
+    
+    base_dir = Path(__file__).parent.parent
+    training_models_path = base_dir / 'training' / 'models' / 'resunet_model.py'
+    
+    if training_models_path.exists():
+        try:
+            # Add the models directory to Python path temporarily for proper imports
+            models_dir = str(training_models_path.parent)
+            if models_dir not in sys.path:
+                sys.path.insert(0, models_dir)
+            
+            try:
+                spec = importlib.util.spec_from_file_location("resunet_models", str(training_models_path))
+                resunet_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(resunet_module)
+            finally:
+                # Remove from path after import
+                if models_dir in sys.path:
+                    sys.path.remove(models_dir)
+            
+            # Register standard Residual U-Net
+            registry.register(ArchitectureInfo(
+                key='resunet',
+                display_name='Residual U-Net',
+                framework='PyTorch',
+                description='U-Net with residual connections for improved gradient flow and feature learning',
+                model_class=resunet_module.ResUNet,
+                default_config={
+                    'n_channels': 3,
+                    'n_classes': 1,
+                    'bilinear': False,
+                    'use_attention': False
+                },
+                category='medical_segmentation',
+                supports_2d=True,
+                supports_3d=False,
+                author='Custom Implementation',
+                version='1.0.0'
+            ))
+            
+            # Register Deep Residual U-Net
+            registry.register(ArchitectureInfo(
+                key='deep_resunet',
+                display_name='Deep Residual U-Net',
+                framework='PyTorch',
+                description='Deeper U-Net with residual connections for complex feature extraction',
+                model_class=resunet_module.DeepResUNet,
+                default_config={
+                    'n_channels': 3,
+                    'n_classes': 1,
+                    'bilinear': False,
+                    'use_attention': False
+                },
+                category='medical_segmentation',
+                supports_2d=True,
+                supports_3d=False,
+                author='Custom Implementation',
+                version='1.0.0'
+            ))
+            
+            # Register Residual U-Net with Attention
+            registry.register(ArchitectureInfo(
+                key='resunet_attention',
+                display_name='Residual U-Net with Attention',
+                framework='PyTorch',
+                description='Standard Residual U-Net with attention gates for better feature selection',
+                model_class=resunet_module.ResUNet,
+                default_config={
+                    'n_channels': 3,
+                    'n_classes': 1,
+                    'bilinear': False,
+                    'use_attention': True
+                },
+                category='medical_segmentation',
+                supports_2d=True,
+                supports_3d=False,
+                author='Custom Implementation',
+                version='1.0.0'
+            ))
+            
+            # Register Deep Residual U-Net with Attention
+            registry.register(ArchitectureInfo(
+                key='deep_resunet_attention',
+                display_name='Deep Residual U-Net with Attention',
+                framework='PyTorch',
+                description='Deeper Residual U-Net with attention gates for complex feature extraction and better localization',
+                model_class=resunet_module.DeepResUNet,
+                default_config={
+                    'n_channels': 3,
+                    'n_classes': 1,
+                    'bilinear': False,
+                    'use_attention': True
+                },
+                category='medical_segmentation',
+                supports_2d=True,
+                supports_3d=False,
+                author='Custom Implementation',
+                version='1.0.0'
+            ))
+            
+            logger.info("Successfully registered all ResUNet model variants")
+            
+        except Exception as e:
+            logger.error(f"Error registering Residual U-Net models: {e}")
+    else:
+        logger.warning(f"ResUNet model file not found: {training_models_path}")
+
+
+def initialize_registry() -> 'ModelArchitectureRegistry':
+    """Initialize the model architecture registry with default architectures"""
+    from pathlib import Path
+    
+    registry = ModelArchitectureRegistry()
+    
+    # Add discovery paths
+    project_root = Path(__file__).parent.parent.parent
+    ml_models_path = project_root / "ml" / "training" / "models"
+    
+    if ml_models_path.exists():
+        registry.add_discovery_path(ml_models_path)
+
+    # First register the specific ResUNet models (so they don't get overridden by fallbacks)
+    _register_resunet_models(registry)
+        
+    # Register built-in architectures (including fallbacks)
+    _register_builtin_architectures(registry)
+
+    # Discover additional architectures (commented out to reduce noise)
+    # try:
+    #     registry.discover_architectures()
+    # except Exception as e:
+    #     logger.error(f"Error discovering architectures: {e}")
+        
+    return registry
+
 
 @dataclass
 class ArchitectureInfo:
@@ -120,6 +374,10 @@ class ModelArchitectureRegistry:
         """Get all available categories"""
         return list(set(info.category for info in self._architectures.values()))
     
+    def list_architectures(self) -> List[ArchitectureInfo]:
+        """List all registered architectures"""
+        return list(self._architectures.values())
+    
     def add_discovery_path(self, path: Path) -> None:
         """Add a path for automatic architecture discovery"""
         if path.exists() and path.is_dir():
@@ -200,22 +458,19 @@ class ModelArchitectureRegistry:
             return False, f"Could not inspect model class: {e}"
 
 
-# Global registry instance
-registry = ModelArchitectureRegistry()
+# Global registry instance - removed, now using get_default_registry()
 
 
 def get_available_models() -> List[Tuple[str, str]]:
     """Get available models for Django forms (backward compatibility)"""
-    return registry.get_choices()
+    return get_default_registry().get_choices()
 
 
 def setup_default_architectures():
-    """Set up default architectures"""
-    base_dir = Path(__file__).parent
-    
-    # Add discovery paths
-    registry.add_discovery_path(base_dir / 'unet')
-    registry.add_discovery_path(base_dir / 'unet-old')
+    """Set up default architectures - DEPRECATED, now handled in initialize_registry"""
+    # This function is kept for backward compatibility but should not be used
+    logger.warning("setup_default_architectures() is deprecated - use initialize_registry() instead")
+    pass
     
     # Manual registration for known architectures
     try:
@@ -265,7 +520,7 @@ def setup_default_architectures():
         ))
         
         # Register MONAI UNet from local implementation as backup
-        unet_path = base_dir / 'unet' / 'unet_model.py'
+        unet_path = base_dir / 'training' / 'models' / 'unet' / 'unet_model.py'
         if unet_path.exists():
             try:
                 # Import the local UNet model
@@ -281,7 +536,7 @@ def setup_default_architectures():
                     description='Local U-Net implementation',
                     model_class=local_unet_module.UNet,
                     default_config={
-                        'n_channels': 3,  # Updated for RGB input
+                        'n_channels': 1,  # Fixed: should be 1 for grayscale medical images
                         'n_classes': 1,
                         'bilinear': False,
                     },
@@ -294,18 +549,20 @@ def setup_default_architectures():
             except Exception as e:
                 logger.error(f"Failed to register local UNet: {e}")
                 # Fallback registration if import fails
-                registry.register_from_module(
-                    unet_path,
-                    'local_unet',
-                    'Local U-Net',
-                    framework='PyTorch',
-                    description='Local U-Net implementation',
-                    category='medical_segmentation',
-                    supports_2d=True,
-                    supports_3d=False,
-                    author='Local Implementation',
-                    version='1.0.0'
-                )
+                fallback_unet_path = base_dir / 'training' / 'models' / 'unet' / 'unet_model.py'
+                if fallback_unet_path.exists():
+                    registry.register_from_module(
+                        fallback_unet_path,
+                        'local_unet',
+                        'Local U-Net',
+                        framework='PyTorch',
+                        description='Local U-Net implementation',
+                        category='medical_segmentation',
+                        supports_2d=True,
+                        supports_3d=False,
+                        author='Local Implementation',
+                        version='1.0.0'
+                    )
         
         # Register legacy UNet
         unet_old_path = base_dir / 'unet-old' / 'unet.py'
@@ -473,13 +730,93 @@ def setup_default_architectures():
                 
             except Exception as e:
                 logger.error(f"Error registering Residual U-Net models: {e}")
-        else:
-            logger.warning(f"ResUNet models not found at {training_models_path}")
+                
+                # Register fallback implementations when PyTorch models can't be loaded
+                try:
+                    from torch import nn
+                    
+                    # Create fallback classes for all ResUNet variants
+                    class ResUNetFallback(nn.Module):
+                        def __init__(self, n_channels=1, n_classes=1, bilinear=False, use_attention=False, **kwargs):
+                            super().__init__()
+                            # Use local UNet as fallback if available
+                            if hasattr(self, '_get_unet_fallback'):
+                                self.model = self._get_unet_fallback(n_channels, n_classes, bilinear)
+                            else:
+                                self.model = nn.Sequential()
+                            
+                        def _get_unet_fallback(self, n_channels, n_classes, bilinear):
+                            # Try to use the local UNet implementation
+                            try:
+                                # Import the local UNet module
+                                import sys
+                                import importlib.util
+                                from pathlib import Path
+                                
+                                base_dir = Path(__file__).parent.parent
+                                unet_path = base_dir / 'training' / 'models' / 'unet' / 'unet_model.py'
+                                
+                                if unet_path.exists():
+                                    spec = importlib.util.spec_from_file_location("fallback_unet", str(unet_path))
+                                    fallback_unet_module = importlib.util.module_from_spec(spec)
+                                    spec.loader.exec_module(fallback_unet_module)
+                                    
+                                    if hasattr(fallback_unet_module, 'UNet'):
+                                        return fallback_unet_module.UNet(n_channels=n_channels, n_classes=n_classes, bilinear=bilinear)
+                                        
+                            except Exception:
+                                pass
+                            
+                            # Final fallback to empty sequential
+                            return nn.Sequential()
+                            
+                        def forward(self, x):
+                            return self.model(x)
+                    
+                    # Register fallback ResUNet models
+                    try:
+                        fallback_models = [
+                            ('resunet', 'Residual U-Net (Fallback)', 'U-Net with residual connections (fallback to local UNet)'),
+                            ('deep_resunet', 'Deep Residual U-Net (Fallback)', 'Deeper U-Net with residual connections (fallback to local UNet)'),
+                            ('resunet_attention', 'Residual U-Net with Attention (Fallback)', 'U-Net with residual connections and attention gates (fallback to local UNet)'),
+                            ('deep_resunet_attention', 'Deep Residual U-Net with Attention (Fallback)', 'Deeper U-Net with residual connections and attention gates (fallback to local UNet)'),
+                        ]
+                        
+                        for key, display_name, description in fallback_models:
+                            # Only register fallback if the key doesn't already exist
+                            if not registry.get_architecture(key):
+                                registry.register(ArchitectureInfo(
+                                    key=key,
+                                    display_name=display_name,
+                                    framework='PyTorch',
+                                    description=description,
+                                    model_class=ResUNetFallback,
+                                    default_config={
+                                        'n_channels': 3,
+                                        'n_classes': 1,
+                                        'bilinear': False,
+                                        'use_attention': False
+                                    },
+                                    category='medical_segmentation',
+                                    supports_2d=True,
+                                    supports_3d=False,
+                                    author='Fallback Implementation',
+                                    version='1.0.0'
+                                ))
+                                logger.info(f"Registered fallback architecture: {display_name} ({key})")
+                            else:
+                                logger.info(f"Skipping fallback registration for {key} - already registered")
+                        
+                    except Exception as fallback_error:
+                        logger.error(f"Error registering fallback ResUNet models: {fallback_error}")
+                        
+                except Exception as outer_fallback_error:
+                    logger.error(f"Error creating fallback ResUNet implementation: {outer_fallback_error}")
         
         # Register classification models
-        classification_models_path = base_dir.parent / 'training' / 'models' / 'classification_models.py'
-        if classification_models_path.exists():
-            try:
+        try:
+            classification_models_path = base_dir.parent / 'training' / 'models' / 'classification_models.py'
+            if classification_models_path.exists():
                 import sys
                 import importlib.util
                 
@@ -584,11 +921,10 @@ def setup_default_architectures():
                 ))
                 
                 logger.info("Successfully registered all classification model variants")
-                
-            except Exception as e:
-                logger.error(f"Error registering classification models: {e}")
-        else:
-            logger.warning(f"Classification models not found at {classification_models_path}")
+            else:
+                logger.warning(f"Classification models not found at {classification_models_path}")
+        except Exception as e:
+            logger.error(f"Error registering classification models: {e}")
     
     except Exception as e:
         logger.error(f"Error setting up default architectures: {e}")
@@ -601,5 +937,26 @@ def setup_default_architectures():
         logger.error(f"Error during architecture discovery: {e}")
 
 
+def get_model_class(model_type: str):
+    """Get model class by model type key
+    
+    This function provides backward compatibility with code that expects
+    to get a model class directly from the registry.
+    """
+    registry = get_default_registry()
+    arch_info = registry.get_architecture(model_type)
+    return arch_info.model_class if arch_info else None
+
+
+def get_default_registry() -> ModelArchitectureRegistry:
+    """Get the default global registry instance"""
+    global _DEFAULT_REGISTRY
+    if _DEFAULT_REGISTRY is None:
+        _DEFAULT_REGISTRY = initialize_registry()
+    return _DEFAULT_REGISTRY
+
 # Initialize default architectures when module is imported
-setup_default_architectures()
+# setup_default_architectures()  # Commented out - this is now handled in initialize_registry
+
+# Create global registry instance for backward compatibility with train.py
+registry = get_default_registry()

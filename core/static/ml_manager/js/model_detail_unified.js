@@ -33,6 +33,9 @@ class ModelDetailManager {
         // Start updates for training, pending, or loading states (covers recently started training)
         this.isTraining = statusValue && ['training', 'pending', 'loading'].includes(statusValue);
         
+        // Preload logs data in the background
+        this.preloadLogs();
+        
         if (this.isTraining) {
             console.log(`ModelDetailManager: Starting updates for model status: ${statusValue}`);
             this.startUpdates();
@@ -58,6 +61,26 @@ class ModelDetailManager {
         }
         
         this.setupEventListeners();
+        
+        // Preload logs immediately for faster access
+        this.preloadLogs();
+    }
+    
+    preloadLogs() {
+        // Preload logs data in the background so it's ready when modal opens
+        console.log('ModelDetailManager: Preloading logs data');
+        const url = `/ml/model/${this.modelId}/logs/`;
+        
+        // Store logs data in this.logsData for faster display when modal opens
+        fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                this.logsData = data;
+                console.log('ModelDetailManager: Logs preloaded successfully');
+            })
+            .catch(error => {
+                console.error('Error preloading logs:', error);
+            });
     }
     
     startTrainingWatch() {
@@ -205,6 +228,9 @@ class ModelDetailManager {
         
         // Show success indicator
         this.showLiveIndicator();
+        
+        // Auto-refresh logs if modal is open
+        this.autoRefreshLogs();
         
         // Refresh training preview on epoch completion
         if (data.progress && data.progress.current_epoch) {
@@ -415,6 +441,104 @@ class ModelDetailManager {
             }
         }, 5000);
     }
+    
+    // Logs Modal Functions
+    openLogsModal() {
+        const modal = new bootstrap.Modal(document.getElementById('logsModal'));
+        modal.show();
+        
+        // Check if we have preloaded logs data
+        const logsContent = document.getElementById('modal-logs-content');
+        if (this.logsData) {
+            // Use the preloaded logs data immediately
+            console.log('ModelDetailManager: Using preloaded logs data');
+            this.displayLogsData(this.logsData, logsContent);
+        } else {
+            // Otherwise load logs normally
+            this.loadModalLogs();
+        }
+    }
+    
+    loadModalLogs(showAll = false) {
+        const logsContent = document.getElementById('modal-logs-content');
+        if (!logsContent) return;
+        
+        if (!logsContent.querySelector('.loading-indicator')) {
+            logsContent.innerHTML = `
+                <div class="text-center py-3 loading-indicator">
+                    <i class="fas fa-spinner fa-spin fa-2x text-primary"></i>
+                    <p class="mt-2">Loading logs...</p>
+                </div>
+            `;
+        }
+        
+        const url = `/ml/model/${this.modelId}/logs/`;
+        const params = showAll ? '?show_all=true' : '';
+        
+        fetch(url + params)
+            .then(response => response.json())
+            .then(data => {
+                this.logsData = data; // Store for future use
+                this.displayLogsData(data, logsContent);
+            })
+            .catch(error => {
+                console.error('Error loading logs:', error);
+                logsContent.innerHTML = '<p class="text-danger">Error loading logs. Please try again.</p>';
+            });
+    }
+    
+    displayLogsData(data, logsContent) {
+        if (!logsContent) return;
+        
+        if (data.status === 'success' && data.logs && data.logs.length > 0) {
+            // Format structured logs with proper line breaks and styling
+            const formattedLogs = data.logs.map(log => {
+                const timestamp = log.timestamp || '';
+                const level = log.level || 'INFO';
+                const content = log.content || '';
+                
+                // Create colored log line based on level
+                let levelClass = 'text-info';
+                if (level === 'ERROR') levelClass = 'text-danger';
+                else if (level === 'WARNING') levelClass = 'text-warning';
+                else if (level === 'DEBUG') levelClass = 'text-muted';
+                
+                return `<div class="log-line mb-1">
+                    <span class="text-muted">${timestamp}</span> 
+                    <span class="${levelClass} fw-bold">[${level}]</span> 
+                    <span>${this.escapeHtml(content)}</span>
+                </div>`;
+            }).join('');
+            
+            logsContent.innerHTML = formattedLogs;
+        } else if (typeof data === 'string' && data.trim()) {
+            // Fallback for plain text logs
+            const formattedLogs = data.split('\n').map(line => 
+                line.trim() ? `<div class="log-line">${this.escapeHtml(line)}</div>` : '<br>'
+            ).join('');
+            
+            logsContent.innerHTML = formattedLogs || '<p class="text-muted">No logs available yet.</p>';
+        } else {
+            logsContent.innerHTML = '<p class="text-muted">No logs available yet.</p>';
+        }
+        
+        // Auto-scroll to bottom
+        logsContent.scrollTop = logsContent.scrollHeight;
+    }
+    
+    autoRefreshLogs() {
+        // Auto-refresh logs if modal is open and training is active
+        const modal = document.getElementById('logsModal');
+        if (modal && modal.classList.contains('show') && this.isTraining) {
+            this.loadModalLogs();
+        }
+    }
+    
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
 }
 
 // Image Navigation System for Training Epochs
@@ -574,6 +698,18 @@ style.textContent = `
     
     .metric-value {
         transition: background-color 0.5s ease;
+    }
+    
+    .log-line {
+        font-family: 'Courier New', monospace;
+        font-size: 0.9rem;
+        line-height: 1.4;
+        word-wrap: break-word;
+        white-space: pre-wrap;
+    }
+    
+    .log-line:hover {
+        background-color: #f8f9fa;
     }
 `;
 document.head.appendChild(style);

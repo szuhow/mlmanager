@@ -469,6 +469,32 @@
         <button id="manual-refresh" class="btn btn-outline-info btn-sm me-2" title="Manual Refresh">
             <i class="fas fa-sync-alt"></i>
         </button>
+        <div class="btn-group me-2" role="group">
+            <button id="sync-mlflow" class="btn btn-outline-warning btn-sm" title="Sync MLflow Status">
+                <i class="fas fa-sync"></i> Sync MLflow
+            </button>
+            <button class="btn btn-outline-warning btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+                <span class="visually-hidden">Toggle Dropdown</span>
+            </button>
+            <ul class="dropdown-menu">
+                <li><a class="dropdown-item" href="#" id="sync-status-only">
+                    <i class="fas fa-sync me-2"></i>Sync Status Only
+                </a></li>
+                <li><a class="dropdown-item" href="#" id="cleanup-orphaned">
+                    <i class="fas fa-broom me-2"></i>Cleanup Orphaned Runs
+                </a></li>
+                <li><a class="dropdown-item" href="#" id="sync-all-data">
+                    <i class="fas fa-sync-alt me-2"></i>Full Sync & Cleanup
+                </a></li>
+                <li><hr class="dropdown-divider"></li>
+                <li><a class="dropdown-item" href="#" id="test-mlflow">
+                    <i class="fas fa-flask me-2"></i>Test MLflow Connection
+                </a></li>
+                <li><a class="dropdown-item text-danger" href="#" id="force-end-runs">
+                    <i class="fas fa-stop me-2"></i>Force End All Running
+                </a></li>
+            </ul>
+        </div>
         <a href="{% url 'ml_manager:template-list' %}" class="btn btn-outline-secondary me-2">
             <i class="fas fa-clipboard-list"></i> Templates
         </a>
@@ -558,7 +584,7 @@
                         </thead>
                         <tbody>
                             {% for model in models %}
-                            <tr data-model-id="{{ model.pk }}" data-model-status="{{ model.status }}" data-dataset-type="{{ model.training_data_info.dataset_type|default:'segmentation' }}">
+                            <tr data-model-id="{{ model.pk }}" data-model-status="{{ model.status }}" data-dataset-type="{% if model.training_data_info and 'dataset_type' in model.training_data_info %}{{ model.training_data_info.dataset_type }}{% else %}segmentation{% endif %}">
                                 <td>
                                     <div class="model-checkbox-container">
                                         <input type="checkbox" class="form-check-input model-checkbox checkbox-enhanced" value="{{ model.pk }}">
@@ -571,31 +597,60 @@
                                     {% endif %}
                                 </td>
                                 <td>
-                                    <span class="badge status-badge {% if model.status == 'completed' %}bg-success{% elif model.status == 'training' %}bg-warning{% else %}bg-danger{% endif %}">
-                                        {{ model.status|title }}
+                                    <span class="badge status-badge 
+                                        {% if model.status == 'completed' %}bg-success
+                                        {% elif model.status == 'training' %}bg-warning text-dark
+                                        {% elif model.status == 'loading' %}bg-info text-dark
+                                        {% elif model.status == 'pending' %}bg-secondary
+                                        {% elif model.status == 'failed' %}bg-danger
+                                        {% else %}bg-dark{% endif %}">
+                                        {% if model.status == 'loading' %}
+                                            <i class="fas fa-spinner fa-spin me-1"></i>Loading Dataset
+                                        {% elif model.status == 'pending' %}
+                                            <i class="fas fa-clock me-1"></i>Pending
+                                        {% else %}
+                                            {{ model.status|title }}
+                                        {% endif %}
                                     </span>
                                 </td>
                                 <td>
-                                    {% if model.status == 'training' %}
+                                    {% if model.status == 'training' or model.status == 'loading' %}
                                         <div class="progress" style="width: 120px;">
-                                            <div class="progress-bar" role="progressbar" style="width: {{ model.progress_percentage|default:0 }}%">
-                                                {{ model.current_epoch }}/{{ model.total_epochs }}
-                                            </div>
+                                            {% if model.status == 'loading' %}
+                                                <div class="progress-bar progress-bar-striped progress-bar-animated bg-info" role="progressbar" style="width: 100%">
+                                                    Loading...
+                                                </div>
+                                            {% else %}
+                                                <div class="progress-bar" role="progressbar" style="width: {{ model.progress_percentage|default:0 }}%">
+                                                    {{ model.current_epoch }}/{{ model.total_epochs }}
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                    {% elif model.status == 'pending' %}
+                                        <div class="d-flex align-items-center">
+                                            <div class="spinner-border spinner-border-sm text-secondary me-2" role="status" aria-hidden="true"></div>
+                                            <span class="text-muted">Preparing...</span>
                                         </div>
                                     {% else %}
                                         <span class="text-muted">{{ model.current_epoch }}/{{ model.total_epochs }}</span>
                                     {% endif %}
                                 </td>
                                 <td class="performance-cell">
-                                    {% if model.training_data_info and model.training_data_info.dataset_type == 'arcade_classification' %}
+                                    {% if model.training_data_info and 'dataset_type' in model.training_data_info and model.training_data_info.dataset_type == 'arcade_classification' %}
                                         {% if model.performance_metrics.val_accuracy|default:0 > 0 %}
                                             <span class="badge performance-badge bg-info">{{ model.performance_metrics.val_accuracy|default:0|floatformat:3 }}</span>
                                         {% else %}
                                             <span class="text-muted">-</span>
                                         {% endif %}
                                     {% else %}
-                                        {% if model.best_val_dice > 0 %}
-                                            <span class="badge performance-badge bg-info">{{ model.best_val_dice|floatformat:3 }}</span>
+                                        {% if model.best_val_dice > 0 or model.best_val_iou > 0 %}
+                                            {% if model.best_val_iou > 0 and model.best_val_iou >= model.best_val_dice %}
+                                                <span class="badge performance-badge bg-info">{{ model.best_val_iou|floatformat:3 }}</span>
+                                                <small class="text-muted d-block">IoU</small>
+                                            {% else %}
+                                                <span class="badge performance-badge bg-info">{{ model.best_val_dice|floatformat:3 }}</span>
+                                                <small class="text-muted d-block">Dice</small>
+                                            {% endif %}
                                         {% else %}
                                             <span class="text-muted">-</span>
                                         {% endif %}
@@ -979,28 +1034,13 @@ document.addEventListener('DOMContentLoaded', function() {
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'success') {
-                    // Remove deleted rows from the table
-                    checkedBoxes.forEach(checkbox => {
-                        const row = checkbox.closest('tr');
-                        if (row) {
-                            row.style.transition = 'opacity 0.3s ease';
-                            row.style.opacity = '0.3';
-                            row.style.backgroundColor = '#f8d7da';
-                            
-                            setTimeout(() => {
-                                if (row.parentNode) {
-                                    row.remove();
-                                    updateModelCount();
-                                }
-                            }, 1000);
-                        }
-                    });
-                    
-                    // Reset selection
-                    updateBatchActions();
-                    
                     // Show success message
                     showNotification('success', `Successfully deleted ${modelIds.length} model(s)`);
+                    
+                    // Reload the page to ensure proper state
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1500);
                 } else {
                     alert(data.message || 'Error deleting models');
                 }
@@ -1229,7 +1269,8 @@ document.addEventListener('DOMContentLoaded', function() {
             'training': 'bg-warning text-dark',
             'completed': 'bg-success',
             'failed': 'bg-danger',
-            'pending': 'bg-secondary'
+            'pending': 'bg-secondary',
+            'loading': 'bg-info text-dark'
         };
         return statusClasses[status] || 'bg-secondary';
     }
@@ -1324,15 +1365,23 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
+    // Define manual refresh function
+    function manualRefresh() {
+        updateActiveModels();
+        // Briefly show it's working
+        const refreshButton = document.getElementById('manual-refresh');
+        if (refreshButton) {
+            refreshButton.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i>';
+            setTimeout(() => {
+                refreshButton.innerHTML = '<i class="fas fa-sync-alt"></i>';
+            }, 1000);
+        }
+    }
+    
     // Setup manual refresh button
     if (manualRefreshButton) {
         manualRefreshButton.addEventListener('click', function() {
-            updateActiveModels();
-            // Briefly show it's working
-            this.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i>';
-            setTimeout(() => {
-                this.innerHTML = '<i class="fas fa-sync-alt"></i>';
-            }, 1000);
+            manualRefresh();
         });
     }
     
@@ -1382,6 +1431,272 @@ document.addEventListener('DOMContentLoaded', function() {
                 toast.remove();
             }
         }, 5000);
+    }
+
+    // MLflow synchronization functions
+    function setupMLflowSync() {
+        // Main sync button (sync status only)
+        const syncButton = document.getElementById('sync-mlflow');
+        if (syncButton) {
+            syncButton.addEventListener('click', function() {
+                syncMLflowStatus();
+            });
+        }
+
+        // Dropdown options
+        const syncStatusOnly = document.getElementById('sync-status-only');
+        if (syncStatusOnly) {
+            syncStatusOnly.addEventListener('click', function(e) {
+                e.preventDefault();
+                syncMLflowStatus();
+            });
+        }
+
+        const cleanupOrphaned = document.getElementById('cleanup-orphaned');
+        if (cleanupOrphaned) {
+            cleanupOrphaned.addEventListener('click', function(e) {
+                e.preventDefault();
+                cleanupOrphanedRuns();
+            });
+        }
+
+        const syncAllData = document.getElementById('sync-all-data');
+        if (syncAllData) {
+            syncAllData.addEventListener('click', function(e) {
+                e.preventDefault();
+                syncAllMLflowData();
+            });
+        }
+
+        const forceEndRuns = document.getElementById('force-end-runs');
+        if (forceEndRuns) {
+            forceEndRuns.addEventListener('click', function(e) {
+                e.preventDefault();
+                if (confirm('This will force end ALL running MLflow runs. Are you sure?')) {
+                    forceEndAllRunningMLflowRuns();
+                }
+            });
+        }
+        
+        const testMlflow = document.getElementById('test-mlflow');
+        if (testMlflow) {
+            testMlflow.addEventListener('click', function(e) {
+                e.preventDefault();
+                testMLflowConnection();
+            });
+        }
+    }
+
+    function syncMLflowStatus() {
+        const button = document.getElementById('sync-mlflow');
+        const originalHTML = button.innerHTML;
+        
+        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Syncing...';
+        button.disabled = true;
+
+        fetch('{% url "ml_manager:api-sync-mlflow-status" %}', {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                showNotification('success', `Synchronized ${data.updated_models.length} models. ${data.errors.length} errors.`);
+                if (data.updated_models.length > 0) {
+                    manualRefresh(); // Refresh the model list
+                }
+            } else {
+                showNotification('danger', 'Error: ' + data.message);
+            }
+        })
+        .catch(error => {
+            console.error('Error syncing MLflow status:', error);
+            showNotification('danger', 'Failed to sync MLflow status');
+        })
+        .finally(() => {
+            button.innerHTML = originalHTML;
+            button.disabled = false;
+        });
+    }
+
+    function cleanupOrphanedRuns() {
+        showNotification('info', 'Cleaning up orphaned runs...');
+
+        fetch('{% url "ml_manager:api-cleanup-orphaned-runs" %}', {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                const cleanedCount = data.cleaned_models.length;
+                const endedCount = data.ended_runs.length;
+                showNotification('success', `Cleanup completed: ${cleanedCount} models updated, ${endedCount} runs ended. ${data.errors.length} errors.`);
+                if (cleanedCount > 0 || endedCount > 0) {
+                    manualRefresh(); // Refresh the model list
+                }
+            } else {
+                showNotification('danger', 'Error: ' + data.message);
+            }
+        })
+        .catch(error => {
+            console.error('Error cleaning up orphaned runs:', error);
+            showNotification('danger', 'Failed to cleanup orphaned runs');
+        });
+    }
+
+    function syncAllMLflowData() {
+        showNotification('info', 'Performing full MLflow synchronization...');
+
+        fetch('{% url "ml_manager:api-sync-all-mlflow-data" %}', {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                showNotification('success', 'Full MLflow synchronization completed successfully');
+                manualRefresh(); // Refresh the model list
+            } else {
+                showNotification('danger', 'Error: ' + data.message);
+            }
+        })
+        .catch(error => {
+            console.error('Error syncing all MLflow data:', error);
+            showNotification('danger', 'Failed to sync all MLflow data');
+        });
+    }
+
+    function forceEndAllRunningMLflowRuns() {
+        // Force end ALL running MLflow runs directly from MLflow
+        showNotification('warning', 'Scanning MLflow for ALL running runs and force ending them...');
+        
+        fetch('{% url "ml_manager:api-force-end-all-runs" %}', {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                const summary = data.summary;
+                const endedCount = summary.total_runs_ended;
+                const updatedCount = summary.total_models_updated;
+                const errorCount = summary.total_errors;
+                
+                if (endedCount > 0 || updatedCount > 0) {
+                    let message = `Force end completed successfully!<br>`;
+                    if (endedCount > 0) message += `• ${endedCount} MLflow runs forcefully ended<br>`;
+                    if (updatedCount > 0) message += `• ${updatedCount} models updated<br>`;
+                    if (errorCount > 0) message += `• ${errorCount} errors occurred`;
+                    
+                    showNotification('success', message);
+                    
+                    // Show detailed results in console for debugging
+                    console.log('Force end results:', data);
+                    if (data.ended_runs.length > 0) {
+                        console.log('Ended runs:', data.ended_runs);
+                    }
+                    if (data.updated_models.length > 0) {
+                        console.log('Updated models:', data.updated_models);
+                    }
+                    
+                    manualRefresh(); // Refresh the model list
+                } else {
+                    showNotification('info', 'No running MLflow runs found to end.');
+                }
+                
+                if (data.errors.length > 0) {
+                    console.error('Force end errors:', data.errors);
+                    showNotification('warning', `${data.errors.length} errors occurred. Check console for details.`);
+                }
+            } else {
+                showNotification('danger', 'Error: ' + data.message);
+            }
+        })
+        .catch(error => {
+            console.error('Error force ending MLflow runs:', error);
+            showNotification('danger', 'Failed to force end MLflow runs: ' + error.message);
+        });
+    }
+
+    function testMLflowConnection() {
+        showNotification('info', 'Testing MLflow connection and scanning for runs...');
+        
+        fetch('{% url "ml_manager:api-test-mlflow" %}', {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                let message = `MLflow connection successful!<br>`;
+                message += `• Tracking URI: ${data.mlflow_tracking_uri}<br>`;
+                message += `• Total experiments: ${data.total_experiments}<br>`;
+                
+                let totalRuns = 0;
+                let totalRunning = 0;
+                
+                data.experiments.forEach(exp => {
+                    totalRuns += exp.total_runs;
+                    totalRunning += exp.running_runs;
+                });
+                
+                message += `• Total runs across all experiments: ${totalRuns}<br>`;
+                message += `• Currently running runs: ${totalRunning}`;
+                
+                showNotification('success', message);
+                
+                // Log detailed information to console
+                console.log('MLflow connection test results:', data);
+                console.log('Experiments and runs:');
+                data.experiments.forEach(exp => {
+                    console.log(`Experiment "${exp.name}" (ID: ${exp.experiment_id}):`);
+                    console.log(`  Total runs: ${exp.total_runs}, Running: ${exp.running_runs}`);
+                    if (exp.running_runs > 0) {
+                        console.log('  Running runs:');
+                        exp.runs.filter(r => r.status === 'RUNNING').forEach(run => {
+                            console.log(`    - Run ${run.run_id}: ${run.status} (started: ${new Date(run.start_time)})`);
+                        });
+                    }
+                });
+                
+                if (totalRunning > 0) {
+                    showNotification('warning', `Found ${totalRunning} running MLflow runs. Use "Force End All Running" to stop them.`);
+                }
+            } else {
+                showNotification('danger', 'MLflow connection failed: ' + data.message);
+                console.error('MLflow connection error:', data);
+            }
+        })
+        .catch(error => {
+            console.error('Error testing MLflow connection:', error);
+            showNotification('danger', 'Failed to test MLflow connection: ' + error.message);
+        });
+    }
+
+    // Initialize MLflow sync functionality
+    setupMLflowSync();
+
+    // Auto-sync on page load if needed
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('auto_sync') === 'true') {
+        setTimeout(() => {
+            syncMLflowStatus();
+        }, 1000);
     }
 });
 </script>

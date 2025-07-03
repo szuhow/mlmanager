@@ -1,7 +1,7 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.views.generic import ListView, DetailView, FormView, DeleteView
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.urls import reverse_lazy
+from django.urls import reverse_lazy, reverse
 from django.contrib import messages
 from django.db import models
 from django.core.files import File
@@ -16,7 +16,7 @@ import sys
 import os
 from pathlib import Path
 import json
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_http_methods
 from django.contrib.auth.decorators import login_required
 import logging
 import tempfile
@@ -734,19 +734,53 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                 except Exception as e:
                     details['error'] = f"Could not load MLflow data: {e}"
             
-            # Add dataset information if available
+                # Add dataset information if available
             if self.object.training_data_info:
                 details['dataset'] = self.object.training_data_info
+                training_info = self.object.training_data_info
                 
                 # Also extract augmentation info from training_data_info if not already set
                 if not details['augmentation'] or not any(details['augmentation'].values()):
-                    training_info = self.object.training_data_info
                     details['augmentation'] = {
                         'random_flip': training_info.get('use_random_flip', False),
                         'random_rotate': training_info.get('use_random_rotate', False),
                         'random_scale': training_info.get('use_random_scale', False),
                         'random_intensity': training_info.get('use_random_intensity', False),
+                        'random_crop': training_info.get('use_random_crop', False),
+                        'elastic_transform': training_info.get('use_elastic_transform', False),
+                        'gaussian_noise': training_info.get('use_gaussian_noise', False),
                     }
+                
+                # Extract preprocessing information
+                details['preprocessing'] = {
+                    'use_medical_preprocessing': training_info.get('use_medical_preprocessing', False),
+                    'preprocessing_type': training_info.get('preprocessing_type', 'None'),
+                    'use_clahe': training_info.get('use_clahe', False),
+                    'clahe_clip_limit': training_info.get('clahe_clip_limit', 'N/A'),
+                    'clahe_tile_size': training_info.get('clahe_tile_size', 'N/A'),
+                    'use_unsharp_masking': training_info.get('use_unsharp_masking', False),
+                    'unsharp_amount': training_info.get('unsharp_amount', 'N/A'),
+                    'use_frangi_filter': training_info.get('use_frangi_filter', False),
+                    'frangi_sigma_min': training_info.get('frangi_sigma_min', 'N/A'),
+                    'frangi_sigma_max': training_info.get('frangi_sigma_max', 'N/A'),
+                    'use_denoising': training_info.get('use_denoising', False),
+                    'noise_reduction_sigma': training_info.get('noise_reduction_sigma', 'N/A'),
+                    'use_histogram_equalization': training_info.get('use_histogram_equalization', False),
+                    'normalize_intensity': training_info.get('normalize_intensity', False),
+                    'gamma_correction': training_info.get('gamma_correction', 'N/A'),
+                }
+                
+                # Extract optimizer information
+                details['optimizer'] = {
+                    'type': training_info.get('optimizer', 'N/A'),
+                    'learning_rate': training_info.get('learning_rate', 'N/A'),
+                    'lr_scheduler': training_info.get('lr_scheduler', 'None'),
+                    'lr_patience': training_info.get('lr_patience', 'N/A'),
+                    'lr_factor': training_info.get('lr_factor', 'N/A'),
+                    'weight_decay': training_info.get('weight_decay', 'N/A'),
+                    'early_stopping': training_info.get('use_early_stopping', False),
+                    'early_stopping_patience': training_info.get('early_stopping_patience', 'N/A'),
+                }
                 
                 # Extract additional config info from training_data_info if not already set
                 if details['config'].get('crop_size') == 'N/A':
@@ -789,12 +823,14 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
         return details
     
     def _get_architecture_details(self):
-        """Get detailed model architecture information"""
+        """Get detailed model architecture information including model summary"""
         architecture = {
             'name': 'Unknown',
             'type': 'Unknown',
             'framework': 'Unknown',
             'details': {},
+            'model_summary': None,
+            'model_summary_text': None,
             'error': None
         }
         
@@ -805,10 +841,16 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
             
             # Try to determine architecture from model type or config data
             model_type = None
+            input_shape = (1, 256, 256)  # Default input shape
+            
             if hasattr(self.object, 'model_type'):
                 model_type = self.object.model_type
             elif self.object.training_data_info and 'model_type' in self.object.training_data_info:
                 model_type = self.object.training_data_info.get('model_type')
+                # Try to get actual input shape from training config
+                if 'resolution' in self.object.training_data_info:
+                    res = self.object.training_data_info['resolution']
+                    input_shape = (1, res, res)
             elif self.object.model_directory and os.path.exists(self.object.model_directory):
                 # Try to load from config file
                 config_path = os.path.join(self.object.model_directory, 'training_config.json')
@@ -816,9 +858,12 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                     with open(config_path, 'r') as f:
                         config_data = json.load(f)
                     model_type = config_data.get('training_params', {}).get('model_type')
+                    res = config_data.get('training_params', {}).get('resolution', 256)
+                    input_shape = (1, res, res)
                 
-            if model_type == 'unet':
-                architecture.update({
+            # Map model types to architecture details
+            architecture_mapping = {
+                'unet': {
                     'name': 'MonaiUNet',
                     'type': 'U-Net',
                     'framework': 'MONAI/PyTorch',
@@ -829,9 +874,8 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                         'activation': 'ReLU',
                         'normalization': 'Batch Normalization'
                     }
-                })
-            elif model_type == 'unet-old':
-                architecture.update({
+                },
+                'unet-old': {
                     'name': 'PyTorch UNet',
                     'type': 'U-Net (Legacy)',
                     'framework': 'PyTorch',
@@ -840,7 +884,112 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                         'primary_use': 'Image Segmentation',
                         'skip_connections': True,
                     }
-                })
+                },
+                'deep_resunet_attention': {
+                    'name': 'Deep ResUNet with Attention',
+                    'type': 'Deep Residual U-Net + Attention',
+                    'framework': 'PyTorch',
+                    'details': {
+                        'architecture_family': 'Residual Encoder-Decoder',
+                        'primary_use': 'Medical Image Segmentation',
+                        'skip_connections': True,
+                        'residual_connections': True,
+                        'attention_gates': True,
+                        'activation': 'ReLU',
+                        'normalization': 'Batch Normalization'
+                    }
+                },
+                'resunet_attention': {
+                    'name': 'ResUNet with Attention',
+                    'type': 'Residual U-Net + Attention',
+                    'framework': 'PyTorch',
+                    'details': {
+                        'architecture_family': 'Residual Encoder-Decoder',
+                        'primary_use': 'Medical Image Segmentation',
+                        'skip_connections': True,
+                        'residual_connections': True,
+                        'attention_gates': True,
+                        'activation': 'ReLU',
+                        'normalization': 'Batch Normalization'
+                    }
+                },
+                'resunet': {
+                    'name': 'ResUNet',
+                    'type': 'Residual U-Net',
+                    'framework': 'PyTorch',
+                    'details': {
+                        'architecture_family': 'Residual Encoder-Decoder',
+                        'primary_use': 'Medical Image Segmentation',
+                        'skip_connections': True,
+                        'residual_connections': True,
+                        'activation': 'ReLU',
+                        'normalization': 'Batch Normalization'
+                    }
+                },
+                'deep_resunet': {
+                    'name': 'Deep ResUNet',
+                    'type': 'Deep Residual U-Net',
+                    'framework': 'PyTorch',
+                    'details': {
+                        'architecture_family': 'Residual Encoder-Decoder',
+                        'primary_use': 'Medical Image Segmentation',
+                        'skip_connections': True,
+                        'residual_connections': True,
+                        'depth': 'Deep (5+ levels)',
+                        'activation': 'ReLU',
+                        'normalization': 'Batch Normalization'
+                    }
+                },
+                'monai_unet': {
+                    'name': 'MONAI UNet',
+                    'type': 'MONAI U-Net',
+                    'framework': 'MONAI/PyTorch',
+                    'details': {
+                        'architecture_family': 'Encoder-Decoder',
+                        'primary_use': 'Medical Image Segmentation',
+                        'skip_connections': True,
+                        'optimized_for': 'Medical imaging',
+                        'activation': 'PReLU',
+                        'normalization': 'Instance Normalization'
+                    }
+                },
+                'attention_unet': {
+                    'name': 'Attention UNet',
+                    'type': 'U-Net with Attention Gates',
+                    'framework': 'PyTorch',
+                    'details': {
+                        'architecture_family': 'Encoder-Decoder',
+                        'primary_use': 'Medical Image Segmentation',
+                        'skip_connections': True,
+                        'attention_gates': True,
+                        'activation': 'ReLU',
+                        'normalization': 'Batch Normalization'
+                    }
+                }
+            }
+            
+            if model_type and model_type in architecture_mapping:
+                architecture.update(architecture_mapping[model_type])
+            
+            # Generate model summary if we have a model type
+            if model_type:
+                try:
+                    from .utils.model_summary import generate_model_summary, format_model_summary_text
+                    
+                    logger.info(f"Generating model summary for {model_type} with input shape {input_shape}")
+                    model_summary = generate_model_summary(model_type, input_shape)
+                    
+                    if 'error' not in model_summary:
+                        architecture['model_summary'] = model_summary
+                        architecture['model_summary_text'] = format_model_summary_text(model_summary)
+                        logger.info(f"Model summary generated successfully for {model_type}")
+                    else:
+                        logger.warning(f"Model summary generation failed: {model_summary['error']}")
+                        architecture['model_summary_error'] = model_summary['error']
+                        
+                except Exception as e:
+                    logger.error(f"Error generating model summary: {e}")
+                    architecture['model_summary_error'] = str(e)
                     
         except Exception as e:
             architecture['error'] = f"Could not determine architecture: {e}"
@@ -888,20 +1037,120 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
             return None
 
     def _get_training_logs(self):
-        """Get training logs for this model"""
+        """Get training logs for this model from organized directory structure"""
         try:
             log_lines = []
             
-            # 1. Try model-specific log location first
-            if self.object.model_directory and os.path.exists(self.object.model_directory):
-                log_path = os.path.join(self.object.model_directory, 'logs', 'training.log')
+            # 1. Try model-specific log location first from organized structure
+            model_dir = None
+            
+            if self.object.model_directory:
+                # Use existing model_directory if set
+                if os.path.isabs(self.object.model_directory):
+                    model_dir = self.object.model_directory
+                else:
+                    # If relative path, it should be relative to current working directory (in Docker: /app)
+                    model_dir = os.path.abspath(self.object.model_directory)
+            else:
+                # If no model_directory set, try to find it in organized structure
+                logger.info("🔍 No model_directory set, searching in organized structure...")
+                
+                # Try to find model directory by unique_identifier or name
+                search_patterns = []
+                if self.object.unique_identifier:
+                    search_patterns.append(f"*{self.object.unique_identifier}*")
+                if self.object.name:
+                    # Clean model name for directory search
+                    clean_name = self.object.name.replace(" ", "_").replace("(", "").replace(")", "").lower()
+                    search_patterns.append(f"*{clean_name}*")
+                
+                # Search in organized directory structure
+                organized_base = os.path.join("data", "models", "organized")
+                if os.path.exists(organized_base):
+                    for root, dirs, files in os.walk(organized_base):
+                        for dir_name in dirs:
+                            for pattern in search_patterns:
+                                import fnmatch
+                                if fnmatch.fnmatch(dir_name.lower(), pattern.lower()):
+                                    potential_dir = os.path.join(root, dir_name)
+                                    logs_path = os.path.join(potential_dir, 'logs', 'training.log')
+                                    if os.path.exists(logs_path):
+                                        model_dir = potential_dir
+                                        logger.info(f"✅ Found model directory by pattern matching: {model_dir}")
+                                        # Update the model record with found directory
+                                        try:
+                                            self.object.model_directory = model_dir
+                                            self.object.save(update_fields=['model_directory'])
+                                            logger.info(f"💾 Updated model_directory in database: {model_dir}")
+                                        except Exception as e:
+                                            logger.warning(f"Could not update model_directory: {e}")
+                                        break
+                            if model_dir:
+                                break
+                        if model_dir:
+                            break
+                    
+                    # If still not found, try a more broad search
+                    if not model_dir:
+                        logger.info("🔍 Trying broader search by model ID...")
+                        for root, dirs, files in os.walk(organized_base):
+                            for dir_name in dirs:
+                                if str(self.object.id) in dir_name or f"model_{self.object.id}" in dir_name:
+                                    potential_dir = os.path.join(root, dir_name)
+                                    logs_path = os.path.join(potential_dir, 'logs', 'training.log')
+                                    if os.path.exists(logs_path):
+                                        model_dir = potential_dir
+                                        logger.info(f"✅ Found model directory by ID matching: {model_dir}")
+                                        break
+                            if model_dir:
+                                break
+            
+            if model_dir:
+                log_path = os.path.join(model_dir, 'logs', 'training.log')
+                
+                logger.info(f"🎯 Trying to load logs from: {log_path}")
+                logger.info(f"📁 Model directory exists: {os.path.exists(model_dir)}")
+                logger.info(f"📄 Log file exists: {os.path.exists(log_path)}")
+                
                 if os.path.exists(log_path):
                     try:
                         with open(log_path, 'r', encoding='utf-8') as f:
                             log_lines = f.read().splitlines()
-                            logger.info(f"Loaded {len(log_lines)} lines from model-specific log: {log_path}")
+                            logger.info(f"✅ Model-specific log loaded: {log_path} ({len(log_lines)} lines)")
+                            return log_lines if log_lines else ['No content in training log file.']
                     except Exception as e:
-                        logger.warning(f"Could not read model-specific log {log_path}: {e}")
+                        logger.warning(f"❌ Could not read model-specific log {log_path}: {e}")
+                elif os.path.exists(model_dir):
+                    # Debug: List actual directory contents
+                    try:
+                        dir_contents = os.listdir(model_dir)
+                        logger.info(f"📁 Model directory contents: {dir_contents}")
+                        logs_dir = os.path.join(model_dir, 'logs')
+                        if os.path.exists(logs_dir):
+                            logs_contents = os.listdir(logs_dir)
+                            logger.info(f"📄 Logs directory contents: {logs_contents}")
+                            
+                            # Try to find any log file in the logs directory
+                            for log_file in logs_contents:
+                                if log_file.endswith('.log') or 'training' in log_file:
+                                    alt_log_path = os.path.join(logs_dir, log_file)
+                                    try:
+                                        with open(alt_log_path, 'r', encoding='utf-8') as f:
+                                            log_lines = f.read().splitlines()
+                                            logger.info(f"✅ Alternative log file loaded: {alt_log_path} ({len(log_lines)} lines)")
+                                            return log_lines if log_lines else ['No content in log file.']
+                                    except Exception as e:
+                                        logger.warning(f"❌ Could not read alternative log {alt_log_path}: {e}")
+                        else:
+                            logger.warning(f"❌ Logs directory does not exist: {logs_dir}")
+                    except Exception as e:
+                        logger.warning(f"❌ Could not list directory contents: {e}")
+                else:
+                    logger.warning(f"❌ Model directory does not exist: {model_dir}")
+            else:
+                logger.warning("❌ No model directory found (neither set nor discoverable)")
+                logger.info(f"Raw model_directory from DB: '{self.object.model_directory}'")
+                logger.info(f"Model ID: {self.object.id}, Name: '{self.object.name}', Unique ID: '{self.object.unique_identifier}'")
             
             # 2. If no model-specific logs, try global log with filtering
             if not log_lines:
@@ -919,35 +1168,34 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                             ]
                             if model_specific_lines:
                                 log_lines = model_specific_lines
-                                logger.info(f"Loaded {len(log_lines)} model-specific lines from global log")
+                                logger.info(f"📄 Model-specific lines from global log: {len(log_lines)} lines")
                             else:
-                                # If no specific lines found, get ALL global logs (no limit)
-                                log_lines = all_lines
-                                logger.info(f"Loaded {len(log_lines)} total lines from global log (no filtering)")
+                                # Use recent global logs as fallback (last 100 lines)
+                                log_lines = all_lines[-100:] if len(all_lines) > 100 else all_lines
+                                logger.info(f"📄 Global log (fallback): data/logs/training.log ({len(log_lines)} recent lines)")
                     except Exception as e:
-                        logger.warning(f"Could not read global log {global_log_path}: {e}")
+                        logger.warning(f"❌ Could not read global log {global_log_path}: {e}")
             
             # 3. Fallback to database field
             if not log_lines and self.object.training_logs:
                 log_lines = self.object.training_logs.splitlines()
-                logger.info(f"Loaded {len(log_lines)} lines from database field")
+                logger.info(f"💾 Database training_logs field: {len(log_lines)} lines")
             
             # 4. Final fallback - check for any recent training logs
             if not log_lines:
-                # Check data/models/artifacts for any training logs
                 artifacts_path = os.path.join('data', 'models', 'artifacts', 'training.log')
                 if os.path.exists(artifacts_path):
                     try:
                         with open(artifacts_path, 'r', encoding='utf-8') as f:
-                            log_lines = f.read().splitlines()  # Get ALL lines, no limit
-                            logger.info(f"Loaded {len(log_lines)} lines from artifacts log")
+                            log_lines = f.read().splitlines()
+                            logger.info(f"📄 Artifacts log loaded: {len(log_lines)} lines")
                     except Exception as e:
-                        logger.warning(f"Could not read artifacts log {artifacts_path}: {e}")
+                        logger.warning(f"❌ Could not read artifacts log {artifacts_path}: {e}")
             
             return log_lines if log_lines else ['No training logs found for this model.']
             
         except Exception as e:
-            logger.warning(f"Could not load training logs: {e}")
+            logger.warning(f"❌ Could not load training logs: {e}")
             return [f'Error loading logs: {str(e)}']
 
 
@@ -1013,6 +1261,21 @@ class StartTrainingView(LoginRequiredMixin, FormView):
     form_class = TrainingForm
     template_name = 'ml_manager/start_training.html'
     success_url = reverse_lazy('ml_manager:model-list')
+
+    def get_success_url(self):
+        # Check if user wants to redirect to models list instead of staying for monitoring
+        redirect_to_list = self.request.POST.get('redirect_to_list', 'false')
+        
+        # Convert string to boolean (form data comes as strings)
+        redirect_to_list_bool = redirect_to_list in ['true', 'True', '1', 'on']
+        
+        # If we have a model_id and user doesn't want to redirect to list, redirect to model detail for monitoring
+        model_id = getattr(self, '_created_model_id', None)
+        if model_id and not redirect_to_list_bool:
+            return reverse('ml_manager:model-detail', kwargs={'pk': model_id})
+        
+        # Otherwise redirect to models list (default behavior)
+        return super().get_success_url()
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1152,6 +1415,34 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 model_type=form_data['model_type']
             )
             logger.info(f"Created MLModel instance with ID: {ml_model.id}, model_type: {ml_model.model_type}, mlflow_run_id: {mlflow_run_id}")
+            
+            # Set the model directory path to match what train.py creates
+            from datetime import datetime
+            import uuid
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            model_family = form_data.get('model_family', 'UNet-Coronary')
+            unique_id = f"{model_family.replace(' ', '_').lower()}_{timestamp}_{str(uuid.uuid4())[:8]}"
+            date_str = datetime.now().strftime("%Y/%m")
+            family_str = model_family.replace(" ", "_").lower()
+            
+            model_directory = os.path.join(
+                "data",
+                "models",
+                "organized", 
+                date_str,
+                family_str,
+                f"{unique_id}_v1.0.0"
+            )
+            
+            ml_model.model_directory = model_directory
+            ml_model.unique_identifier = unique_id
+            ml_model.model_family = model_family
+            ml_model.version = "1.0.0"
+            ml_model.save()
+            logger.info(f"Set model directory path: {model_directory}")
+            
+            # Save model ID for get_success_url
+            self._created_model_id = ml_model.id
             
             # Debug form data for crop_size
             logger.info(f"DEBUG: crop_size in form_data = {form_data.get('crop_size')}, type = {type(form_data.get('crop_size'))}")
@@ -1395,17 +1686,75 @@ def get_training_progress(request, model_id):
         if hasattr(model, 'total_epochs') and model.total_epochs > 0:
             progress_data['progress_percentage'] = min(100, (model.current_epoch / model.total_epochs) * 100)
         
-        # Get latest metrics if available
+        # Get current metrics from model fields
+        metrics = {
+            'train_loss': getattr(model, 'train_loss', 0.0),
+            'val_loss': getattr(model, 'val_loss', 0.0),
+            'train_dice': getattr(model, 'train_dice', 0.0),
+            'val_dice': getattr(model, 'val_dice', 0.0),
+            'best_val_dice': getattr(model, 'best_val_dice', 0.0),
+        }
+        
+        # Add IoU metrics if available
+        if hasattr(model, 'train_iou'):
+            metrics['train_iou'] = getattr(model, 'train_iou', 0.0)
+        if hasattr(model, 'val_iou'):
+            metrics['val_iou'] = getattr(model, 'val_iou', 0.0)
+        if hasattr(model, 'best_val_iou'):
+            metrics['best_val_iou'] = getattr(model, 'best_val_iou', 0.0)
+        
+        # Get additional metrics from training_data_info if available
         if hasattr(model, 'training_data_info') and model.training_data_info:
-            metrics = model.training_data_info.get('metrics', {})
-            if metrics:
-                progress_data['metrics'] = metrics
+            additional_metrics = model.training_data_info.get('metrics', {})
+            if additional_metrics:
+                metrics.update(additional_metrics)
+        
+        progress_data['metrics'] = metrics
+        
+        # Get training logs for this model (last 50 lines)
+        training_logs = []
+        try:
+            # Try model-specific log first
+            if model.model_directory and os.path.exists(model.model_directory):
+                model_log_path = os.path.join(model.model_directory, 'logs', 'training.log')
+                if os.path.exists(model_log_path):
+                    with open(model_log_path, 'r', encoding='utf-8') as f:
+                        log_lines = f.read().splitlines()
+                        training_logs = log_lines[-50:] if len(log_lines) > 50 else log_lines
+                else:
+                    # Fallback to global log with model filtering
+                    global_log_path = os.path.join('data', 'models', 'artifacts', 'training.log')
+                    if os.path.exists(global_log_path):
+                        with open(global_log_path, 'r', encoding='utf-8') as f:
+                            all_lines = f.read().splitlines()
+                            model_specific_lines = [
+                                line for line in all_lines 
+                                if (f"model_{model.id}" in line or f"Model {model.id}" in line)
+                            ]
+                            training_logs = model_specific_lines[-50:] if len(model_specific_lines) > 50 else model_specific_lines
+            
+            if not training_logs:
+                training_logs = ["Training logs will appear here when training starts..."]
+                
+        except Exception as e:
+            training_logs = [f"Error reading logs: {str(e)}"]
+        
+        # Include training configuration for form updates
+        training_config = {}
+        if hasattr(model, 'training_data_info') and model.training_data_info:
+            training_config = {
+                'loss_function': model.training_data_info.get('loss_function', 'combined'),
+                'segmentation_metric': model.training_data_info.get('segmentation_metric', 'dice'),
+                'model_type': model.training_data_info.get('model_type', 'unet'),
+            }
         
         return JsonResponse({
             'status': 'success',
             'progress': progress_data,
             'model_status': model.status,
-            'metrics': progress_data['metrics']
+            'metrics': metrics,
+            'training_config': training_config,
+            'training_logs': training_logs
         })
         
     except Exception as e:
@@ -1413,6 +1762,71 @@ def get_training_progress(request, model_id):
         return JsonResponse({
             'status': 'error',
             'message': f'Failed to get model progress: {str(e)}'
+        })
+
+
+def get_latest_training_model(request):
+    """Get the latest training or pending model"""
+    try:
+        # Find latest model that is training or pending
+        latest_model = MLModel.objects.filter(
+            status__in=['training', 'pending']
+        ).order_by('-created_at').first()
+        
+        if latest_model:
+            return JsonResponse({
+                'status': 'success',
+                'model_id': latest_model.id,
+                'model_name': latest_model.name,
+                'model_status': latest_model.status
+            })
+        else:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'No training or pending models found'
+            })
+            
+    except Exception as e:
+        logger.error(f"Error getting latest training model: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to get latest model: {str(e)}'
+        })
+
+
+def stop_training_api(request, model_id):
+    """Stop training for a specific model (API endpoint)"""
+    if request.method != 'POST':
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Only POST method allowed'
+        })
+    
+    try:
+        model = get_object_or_404(MLModel, id=model_id)
+        
+        if model.status not in ['training', 'pending']:
+            return JsonResponse({
+                'status': 'error',
+                'message': f'Model is not training (status: {model.status})'
+            })
+        
+        # Set stop requested flag
+        model.stop_requested = True
+        model.save()
+        
+        logger.info(f"Stop requested for model {model_id} via API")
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': 'Training stop requested successfully'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error stopping training for model {model_id}: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to stop training: {str(e)}'
         })
 
 
@@ -1428,30 +1842,41 @@ def batch_delete_models(request):
                 'message': 'No models selected for deletion'
             })
         
+        # Use transaction to ensure atomicity
+        from django.db import transaction
+        
         deleted_count = 0
         errors = []
         
-        for model_id in model_ids:
-            try:
-                model = MLModel.objects.get(id=model_id)
-                
-                # Clean up files and MLflow artifacts like in ModelDeleteView
-                if model.mlflow_run_id:
-                    logger.info(f"Model {model.id} with MLflow run {model.mlflow_run_id} is being deleted")
-                
-                if model.model_file and os.path.exists(model.model_file.path):
-                    try:
-                        os.remove(model.model_file.path)
-                    except Exception as e:
-                        logger.warning(f"Error deleting model file: {e}")
-                
-                model.delete()
-                deleted_count += 1
-                
-            except MLModel.DoesNotExist:
-                errors.append(f"Model {model_id} not found")
-            except Exception as e:
-                errors.append(f"Error deleting model {model_id}: {str(e)}")
+        with transaction.atomic():
+            for model_id in model_ids:
+                try:
+                    model = MLModel.objects.get(id=model_id)
+                    model_name = model.name
+                    
+                    # Clean up files and MLflow artifacts like in ModelDeleteView
+                    if model.mlflow_run_id:
+                        logger.info(f"Model {model.id} with MLflow run {model.mlflow_run_id} is being deleted")
+                    
+                    # Delete the model - this will trigger the custom delete method
+                    model.delete()
+                    deleted_count += 1
+                    logger.info(f"Successfully deleted model {model_name} (ID: {model_id})")
+                    
+                except MLModel.DoesNotExist:
+                    error_msg = f"Model {model_id} not found"
+                    errors.append(error_msg)
+                    logger.warning(error_msg)
+                except Exception as e:
+                    error_msg = f"Error deleting model {model_id}: {str(e)}"
+                    errors.append(error_msg)
+                    logger.error(error_msg)
+                    # Continue with other models even if one fails
+                    continue
+        
+        # Clear any Django cache that might be interfering
+        from django.core.cache import cache
+        cache.clear()
         
         if deleted_count > 0:
             messages.success(request, f'Successfully deleted {deleted_count} model(s).')
@@ -1462,7 +1887,8 @@ def batch_delete_models(request):
         return JsonResponse({
             'status': 'success',
             'deleted_count': deleted_count,
-            'errors': errors
+            'errors': errors,
+            'message': f'Successfully deleted {deleted_count} model(s)' + (f' with {len(errors)} errors' if errors else '')
         })
         
     except Exception as e:
@@ -1789,6 +2215,23 @@ def get_training_log(request, model_id):
                         logger.info(f"Found model-specific log with {len(log_lines)} lines")
                 except Exception as e:
                     logger.warning(f"Could not read model log {model_log_path}: {e}")
+            else:
+                logger.warning(f"Model-specific log not found at: {model_log_path}")
+                # Debug: check if directory and logs subdirectory exist
+                if os.path.exists(model.model_directory):
+                    try:
+                        dir_contents = os.listdir(model.model_directory)
+                        logger.info(f"Model directory contents: {dir_contents}")
+                        logs_dir = os.path.join(model.model_directory, 'logs')
+                        if os.path.exists(logs_dir):
+                            logs_contents = os.listdir(logs_dir)
+                            logger.info(f"Logs directory contents: {logs_contents}")
+                        else:
+                            logger.warning(f"Logs directory does not exist: {logs_dir}")
+                    except Exception as e:
+                        logger.warning(f"Could not list directory contents: {e}")
+                else:
+                    logger.warning(f"Model directory does not exist: {model.model_directory}")
         
         # 2. If no model-specific logs, try global training log with filtering
         if not log_lines:
@@ -3685,4 +4128,668 @@ def serve_preview_image(request):
     except Exception as e:
         logger.error(f"Error in serve_preview_image: {e}")
         raise Http404("Image not found")
+
+
+def sync_mlflow_status(request):
+    """Synchronize model statuses with MLflow runs"""
+    if request.method != 'POST':
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Only POST method allowed'
+        })
+    
+    try:
+        import mlflow
+        from mlflow.tracking import MlflowClient
+        
+        client = MlflowClient()
+        updated_models = []
+        errors = []
+        
+        # Get all models with MLflow run IDs
+        models_with_runs = MLModel.objects.filter(
+            mlflow_run_id__isnull=False
+        ).exclude(mlflow_run_id='')
+        
+        logger.info(f"Synchronizing {models_with_runs.count()} models with MLflow")
+        
+        for model in models_with_runs:
+            try:
+                # Get MLflow run status
+                run = client.get_run(model.mlflow_run_id)
+                mlflow_status = run.info.status
+                
+                # Update model with timezone-aware datetime if needed
+                if run.info.start_time and hasattr(model, 'created_at'):
+                    # Convert MLflow timestamp (milliseconds) to timezone-aware datetime
+                    from datetime import datetime
+                    from django.utils import timezone
+                    import pytz
+                    
+                    mlflow_start_time = datetime.fromtimestamp(run.info.start_time / 1000.0)
+                    if timezone.is_naive(mlflow_start_time):
+                        # Make it timezone-aware using current timezone
+                        mlflow_start_time = timezone.make_aware(mlflow_start_time)
+                    
+                    # Only update if the model's created_at is naive or significantly different
+                    if timezone.is_naive(model.created_at) or abs((model.created_at - mlflow_start_time).total_seconds()) > 60:
+                        model.created_at = mlflow_start_time
+                
+                # Map MLflow status to our model status
+                status_mapping = {
+                    'RUNNING': 'training',
+                    'FINISHED': 'completed',
+                    'FAILED': 'failed',
+                    'KILLED': 'stopped'
+                }
+                
+                new_status = status_mapping.get(mlflow_status, model.status)
+                
+                if new_status != model.status:
+                    old_status = model.status
+                    model.status = new_status
+                    # Save with timezone-aware datetime
+                    model.save(update_fields=['status', 'created_at'] if hasattr(model, 'created_at') else ['status'])
+                    
+                    updated_models.append({
+                        'model_id': model.id,
+                        'model_name': model.name,
+                        'old_status': old_status,
+                        'new_status': new_status,
+                        'mlflow_status': mlflow_status
+                    })
+                    
+                    logger.info(f"Updated model {model.id} status from {old_status} to {new_status} (MLflow: {mlflow_status})")
+                
+            except Exception as e:
+                error_msg = f"Model {model.id} ({model.name}): {str(e)}"
+                errors.append(error_msg)
+                logger.error(f"Error syncing model {model.id}: {e}")
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': f'Synchronized {len(updated_models)} models',
+            'updated_models': updated_models,
+            'errors': errors,
+            'total_checked': models_with_runs.count()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in sync_mlflow_status: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to sync MLflow status: {str(e)}'
+        })
+
+
+@login_required
+def test_mlflow_connection(request):
+    """Test MLflow connection and list all experiments and runs"""
+    try:
+        import mlflow
+        from mlflow.tracking import MlflowClient
+        
+        client = MlflowClient()
+        
+        # Get all experiments
+        experiments = client.search_experiments()
+        
+        result = {
+            'status': 'success',
+            'mlflow_tracking_uri': mlflow.get_tracking_uri(),
+            'total_experiments': len(experiments),
+            'experiments': []
+        }
+        
+        for exp in experiments:
+            # Get all runs for this experiment
+            all_runs = client.search_runs(experiment_ids=[exp.experiment_id])
+            running_runs = [r for r in all_runs if r.info.status == 'RUNNING']
+            
+            exp_info = {
+                'experiment_id': exp.experiment_id,
+                'name': exp.name,
+                'total_runs': len(all_runs),
+                'running_runs': len(running_runs),
+                'runs': []
+            }
+            
+            for run in all_runs:
+                run_info = {
+                    'run_id': run.info.run_id,
+                    'status': run.info.status,
+                    'start_time': run.info.start_time,
+                    'end_time': run.info.end_time,
+                    'lifecycle_stage': run.info.lifecycle_stage
+                }
+                exp_info['runs'].append(run_info)
+            
+            result['experiments'].append(exp_info)
+        
+        return JsonResponse(result)
+        
+    except Exception as e:
+        return JsonResponse({
+            'status': 'error',
+            'message': f'MLflow connection failed: {str(e)}'
+        })
+
+
+@login_required
+def force_end_all_mlflow_runs(request):
+    """Force end ALL running MLflow runs, regardless of database state"""
+    if request.method != 'POST':
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Only POST method allowed'
+        })
+    
+    try:
+        import mlflow
+        from mlflow.tracking import MlflowClient
+        
+        client = MlflowClient()
+        ended_runs = []
+        updated_models = []
+        errors = []
+        
+        # Get ALL MLflow experiments
+        experiments = client.search_experiments()
+        
+        logger.info(f"Found {len(experiments)} MLflow experiments to check")
+        
+        for experiment in experiments:
+            try:
+                # Search for ALL running runs in this experiment
+                running_runs = client.search_runs(
+                    experiment_ids=[experiment.experiment_id],
+                    filter_string="attribute.status = 'RUNNING'"
+                )
+                
+                logger.info(f"Found {len(running_runs)} running runs in experiment {experiment.name} (ID: {experiment.experiment_id})")
+                
+                # Also log all runs for debugging
+                all_runs = client.search_runs(experiment_ids=[experiment.experiment_id])
+                logger.info(f"Total runs in experiment {experiment.name}: {len(all_runs)}")
+                for run in all_runs:
+                    logger.info(f"  Run {run.info.run_id}: status={run.info.status}, start={run.info.start_time}")
+                
+                for run in running_runs:
+                    try:
+                        # Force terminate the run
+                        client.set_terminated(run.info.run_id, status='KILLED')
+                        
+                        ended_runs.append({
+                            'run_id': run.info.run_id,
+                            'experiment_name': experiment.name,
+                            'start_time': run.info.start_time,
+                            'reason': 'Force ended by user'
+                        })
+                        
+                        logger.info(f"Force ended MLflow run {run.info.run_id} in experiment {experiment.name}")
+                        
+                        # Try to find and update corresponding model in database
+                        try:
+                            model = MLModel.objects.get(mlflow_run_id=run.info.run_id)
+                            old_status = model.status
+                            model.status = 'stopped'
+                            model.stop_requested = True
+                            model.save()
+                            
+                            updated_models.append({
+                                'model_id': model.id,
+                                'model_name': model.name,
+                                'old_status': old_status,
+                                'new_status': 'stopped',
+                                'run_id': run.info.run_id
+                            })
+                            
+                            logger.info(f"Updated model {model.id} status to stopped")
+                            
+                        except MLModel.DoesNotExist:
+                            # MLflow run exists but no corresponding model in database
+                            logger.warning(f"MLflow run {run.info.run_id} has no corresponding model in database")
+                        
+                    except Exception as run_error:
+                        error_msg = f"Failed to end run {run.info.run_id}: {str(run_error)}"
+                        errors.append(error_msg)
+                        logger.error(error_msg)
+                        
+            except Exception as exp_error:
+                error_msg = f"Error processing experiment {experiment.name}: {str(exp_error)}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Also check for any models in database that might be stuck in 'training' status
+        stuck_models = MLModel.objects.filter(status__in=['training', 'pending'])
+        for model in stuck_models:
+            if model.mlflow_run_id:
+                try:
+                    # Check if the run actually exists and is running
+                    run = client.get_run(model.mlflow_run_id)
+                    if run.info.status == 'RUNNING':
+                        # Already handled above
+                        continue
+                    else:
+                        # MLflow run is not running, update model status
+                        old_status = model.status
+                        status_mapping = {
+                            'FINISHED': 'completed',
+                            'FAILED': 'failed',
+                            'KILLED': 'stopped'
+                        }
+                        model.status = status_mapping.get(run.info.status, 'failed')
+                        model.save()
+                        
+                        updated_models.append({
+                            'model_id': model.id,
+                            'model_name': model.name,
+                            'old_status': old_status,
+                            'new_status': model.status,
+                            'run_id': model.mlflow_run_id,
+                            'reason': f'MLflow status was {run.info.status}'
+                        })
+                        
+                except Exception as e:
+                    if "RESOURCE_DOES_NOT_EXIST" in str(e):
+                        # MLflow run doesn't exist, clear model reference
+                        old_status = model.status
+                        model.status = 'failed'
+                        model.mlflow_run_id = None
+                        model.save()
+                        
+                        updated_models.append({
+                            'model_id': model.id,
+                            'model_name': model.name,
+                            'old_status': old_status,
+                            'new_status': 'failed',
+                            'run_id': 'None (cleared)',
+                            'reason': 'MLflow run not found'
+                        })
+            else:
+                # Model has no MLflow run ID but is stuck in training
+                old_status = model.status
+                model.status = 'failed'
+                model.save()
+                
+                updated_models.append({
+                    'model_id': model.id,
+                    'model_name': model.name,
+                    'old_status': old_status,
+                    'new_status': 'failed',
+                    'run_id': 'None',
+                    'reason': 'No MLflow run ID found'
+                })
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': f'Force end completed: {len(ended_runs)} MLflow runs ended, {len(updated_models)} models updated',
+            'ended_runs': ended_runs,
+            'updated_models': updated_models,
+            'errors': errors,
+            'summary': {
+                'total_runs_ended': len(ended_runs),
+                'total_models_updated': len(updated_models),
+                'total_errors': len(errors)
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in force_end_all_mlflow_runs: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to force end MLflow runs: {str(e)}'
+        })
+
+
+def cleanup_orphaned_runs(request):
+    """Clean up orphaned MLflow runs and model references"""
+    if request.method != 'POST':
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Only POST method allowed'
+        })
+    
+    try:
+        import mlflow
+        from mlflow.tracking import MlflowClient
+        
+        client = MlflowClient()
+        cleaned_models = []
+        ended_runs = []
+        errors = []
+        
+        # Get force_all parameter to determine if we should end ALL running
+        force_all = request.GET.get('force_all', 'false').lower() == 'true'
+        
+        if force_all:
+            # Force end ALL running models, regardless of age
+            running_models = MLModel.objects.filter(
+                status__in=['training', 'pending'],
+                mlflow_run_id__isnull=False
+            ).exclude(mlflow_run_id='')
+            
+            logger.info(f"Force ending ALL {running_models.count()} running models")
+            
+            for model in running_models:
+                try:
+                    # Get MLflow run status
+                    run = client.get_run(model.mlflow_run_id)
+                    mlflow_status = run.info.status
+                    
+                    if mlflow_status == 'RUNNING':
+                        # Force end the run
+                        try:
+                            client.set_terminated(model.mlflow_run_id, status='KILLED')
+                            
+                            ended_runs.append({
+                                'run_id': model.mlflow_run_id,
+                                'model_id': model.id,
+                                'model_name': model.name,
+                                'reason': 'Force ended by user'
+                            })
+                            
+                            # Update model status
+                            model.status = 'stopped'
+                            model.stop_requested = True
+                            model.save()
+                            
+                            logger.info(f"Force ended MLflow run {model.mlflow_run_id} for model {model.id}")
+                            
+                        except Exception as end_error:
+                            logger.error(f"Failed to force end run {model.mlflow_run_id}: {end_error}")
+                            errors.append(f"Model {model.id} ({model.name}): Failed to end run - {str(end_error)}")
+                    
+                    elif mlflow_status in ['FINISHED', 'FAILED', 'KILLED']:
+                        # Update model status to match MLflow
+                        status_mapping = {
+                            'FINISHED': 'completed',
+                            'FAILED': 'failed', 
+                            'KILLED': 'stopped'
+                        }
+                        new_status = status_mapping.get(mlflow_status, 'failed')
+                        
+                        if model.status != new_status:
+                            old_status = model.status
+                            model.status = new_status
+                            model.save()
+                            
+                            cleaned_models.append({
+                                'model_id': model.id,
+                                'model_name': model.name,
+                                'old_status': old_status,
+                                'new_status': new_status,
+                                'reason': f'MLflow status was {mlflow_status}'
+                            })
+                    
+                except Exception as e:
+                    if "RESOURCE_DOES_NOT_EXIST" in str(e):
+                        # MLflow run doesn't exist, clean up model reference
+                        model.status = 'failed'
+                        model.mlflow_run_id = None
+                        model.save()
+                        
+                        cleaned_models.append({
+                            'model_id': model.id,
+                            'model_name': model.name,
+                            'old_status': 'training',
+                            'new_status': 'failed',
+                            'reason': 'MLflow run not found'
+                        })
+                    else:
+                        errors.append(f"Model {model.id} ({model.name}): {str(e)}")
+        else:
+            # Original behavior - only cleanup old/orphaned runs
+            from datetime import datetime, timedelta
+            cutoff_time = datetime.now() - timedelta(hours=24)  # Consider runs older than 24h as potentially orphaned
+            
+            stale_models = MLModel.objects.filter(
+                status__in=['training', 'pending'],
+                created_at__lt=cutoff_time,
+                mlflow_run_id__isnull=False
+            ).exclude(mlflow_run_id='')
+            
+            logger.info(f"Checking {stale_models.count()} potentially stale models")
+            
+            for model in stale_models:
+                try:
+                    # Check if MLflow run exists and its status
+                    run = client.get_run(model.mlflow_run_id)
+                    mlflow_status = run.info.status
+                    
+                    if mlflow_status == 'RUNNING':
+                        # Check if the run is actually active (recent log entries)
+                        run_data = run.data
+                        last_logged = run.info.end_time or run.info.start_time
+                        
+                        if last_logged:
+                            # Convert MLflow timestamp (milliseconds) to datetime
+                            last_log_time = datetime.fromtimestamp(last_logged / 1000)
+                            if datetime.now() - last_log_time > timedelta(hours=2):
+                                # Run seems abandoned, end it
+                                try:
+                                    client.set_terminated(model.mlflow_run_id, status='KILLED')
+                                    
+                                    ended_runs.append({
+                                        'run_id': model.mlflow_run_id,
+                                        'model_id': model.id,
+                                        'reason': 'No activity for >2 hours'
+                                    })
+                                    
+                                    # Update model status
+                                    model.status = 'failed'
+                                    model.save()
+                                    
+                                    logger.info(f"Ended orphaned MLflow run {model.mlflow_run_id} for model {model.id}")
+                                    
+                                except Exception as end_error:
+                                    logger.error(f"Failed to end run {model.mlflow_run_id}: {end_error}")
+                                    errors.append(f"Model {model.id}: Failed to end run - {str(end_error)}")
+                    
+                    elif mlflow_status in ['FINISHED', 'FAILED', 'KILLED']:
+                        # Update model status to match MLflow
+                        status_mapping = {
+                            'FINISHED': 'completed',
+                            'FAILED': 'failed',
+                            'KILLED': 'stopped'
+                        }
+                        
+                        old_status = model.status
+                        model.status = status_mapping[mlflow_status]
+                        model.save()
+                        
+                        cleaned_models.append({
+                            'model_id': model.id,
+                            'old_status': old_status,
+                            'new_status': model.status,
+                            'mlflow_status': mlflow_status
+                        })
+                    
+                except Exception as e:
+                    if "RESOURCE_DOES_NOT_EXIST" in str(e):
+                        # MLflow run doesn't exist, clear the reference
+                        model.mlflow_run_id = None
+                        model.status = 'failed'
+                        model.save()
+                        
+                        cleaned_models.append({
+                            'model_id': model.id,
+                            'old_status': 'training',
+                            'new_status': 'failed',
+                            'reason': 'MLflow run not found'
+                        })
+                        
+                        logger.info(f"Cleared orphaned MLflow run reference for model {model.id}")
+                    else:
+                        errors.append(f"Model {model.id}: {str(e)}")
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': f'Cleanup completed',
+            'cleaned_models': cleaned_models,
+            'ended_runs': ended_runs,
+            'errors': errors,
+            'total_checked': len(running_models) if force_all else stale_models.count()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in cleanup_orphaned_runs: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to cleanup orphaned runs: {str(e)}'
+        })
+
+
+@login_required
+def sync_all_mlflow_data(request):
+    """Comprehensive MLflow synchronization and cleanup"""
+    if request.method != 'POST':
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Only POST method allowed'
+        })
+    
+    try:
+        # First sync statuses
+        sync_response = sync_mlflow_status(request)
+        sync_data = sync_response.content.decode('utf-8')
+        sync_result = eval(sync_data)  # Convert JSON string back to dict
+        
+        # Then cleanup orphaned runs  
+        cleanup_response = cleanup_orphaned_runs(request)
+        cleanup_data = cleanup_response.content.decode('utf-8')
+        cleanup_result = eval(cleanup_data)
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': 'Complete MLflow synchronization finished',
+            'sync_result': sync_result,
+            'cleanup_result': cleanup_result
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in sync_all_mlflow_data: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to sync all MLflow data: {str(e)}'
+        })
+
+
+def force_end_mlflow_run(request, run_id):
+    """Force end a specific MLflow run"""
+    if request.method != 'POST':
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Only POST method allowed'
+        })
+    
+    try:
+        import mlflow
+        from mlflow.tracking import MlflowClient
+        
+        client = MlflowClient()
+        
+        # Check if run exists
+        try:
+            run = client.get_run(run_id)
+            current_status = run.info.status
+            
+            if current_status == 'RUNNING':
+                # Force end the run
+                with mlflow.start_run(run_id=run_id):
+                    mlflow.end_run(status='KILLED')
+                
+                logger.info(f"Force ended MLflow run {run_id}")
+                
+                # Update associated model if exists
+                try:
+                    model = MLModel.objects.get(mlflow_run_id=run_id)
+                    model.status = 'stopped'
+                    model.save()
+                    logger.info(f"Updated model {model.id} status to 'stopped'")
+                except MLModel.DoesNotExist:
+                    logger.warning(f"No model found for MLflow run {run_id}")
+                
+                return JsonResponse({
+                    'status': 'success',
+                    'message': f'Successfully ended MLflow run {run_id}',
+                    'previous_status': current_status
+                })
+                
+            else:
+                return JsonResponse({
+                    'status': 'info',
+                    'message': f'MLflow run {run_id} is already {current_status}',
+                    'current_status': current_status
+                })
+                
+        except mlflow.exceptions.MlflowException as e:
+            if "RESOURCE_DOES_NOT_EXIST" in str(e):
+                return JsonResponse({
+                    'status': 'error',
+                    'message': f'MLflow run {run_id} does not exist'
+                })
+            else:
+                raise
+                
+    except Exception as e:
+        logger.error(f"Error force ending MLflow run {run_id}: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to end MLflow run: {str(e)}'
+        })
+
+
+@require_http_methods(["POST"])
+def generate_model_summary_api(request):
+    """API endpoint to generate model summary for given configuration"""
+    import json
+    
+    try:
+        data = json.loads(request.body)
+        model_type = data.get('model_type')
+        input_shape = data.get('input_shape', [1, 256, 256])  # Default shape
+        resolution = data.get('resolution')  # Get resolution if provided
+        
+        if not model_type:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Model type is required'
+            })
+        
+        logger.info(f"Generating model summary for type: {model_type}, input_shape: {input_shape}, resolution: {resolution}")
+        
+        # Generate model summary
+        from .utils.model_summary import generate_model_summary, format_model_summary_text
+        
+        model_summary = generate_model_summary(model_type, tuple(input_shape), resolution=resolution)
+        
+        if 'error' in model_summary:
+            return JsonResponse({
+                'status': 'error',
+                'message': f'Failed to generate model summary: {model_summary["error"]}',
+                'model_summary': None
+            })
+        
+        # Format text summary
+        summary_text = format_model_summary_text(model_summary)
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': 'Model summary generated successfully',
+            'model_summary': model_summary,
+            'summary_text': summary_text
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Invalid JSON data'
+        })
+    except Exception as e:
+        logger.error(f"Error generating model summary: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to generate model summary: {str(e)}'
+        })
 

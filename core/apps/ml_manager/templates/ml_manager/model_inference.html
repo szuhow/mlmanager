@@ -47,7 +47,7 @@
                                     data-accuracy-score="{{ m.performance_metrics.val_accuracy|default:0|floatformat:4|default:'N/A' }}"
                                     data-dataset-type="{{ m.training_data_info.dataset_type|default:'segmentation' }}"
                                     {% if m.id == model.id %}selected{% endif %}>
-                                {% if m.training_data_info.dataset_type == 'arcade_classification' %}
+                                {% if m.training_data_info and 'dataset_type' in m.training_data_info and m.training_data_info.dataset_type == 'arcade_classification' %}
                                     {{ m.name }} | Accuracy: {{ m.performance_metrics.val_accuracy|default:0|floatformat:4|default:'N/A' }} | Size: {{ m.training_data_info.training_parameters.crop_size|default:'128' }}px | {{ m.created_at|date:"m/d H:i" }}
                                 {% else %}
                                     {{ m.name }} | Dice: {{ m.best_val_dice|floatformat:4|default:'N/A' }} | Size: {{ m.training_data_info.training_parameters.crop_size|default:'128' }}px | {{ m.created_at|date:"m/d H:i" }}
