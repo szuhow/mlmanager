@@ -776,14 +776,16 @@ class EnhancedInferenceForm(forms.Form):
         choices=[],  # Will be populated dynamically
         required=True,
         label="Model",
-        help_text="Select the trained model to use for inference"
+        help_text="Select the trained model to use for inference",
+        widget=forms.Select(attrs={'class': 'form-select'})
     )
     
     checkpoint_path = forms.ChoiceField(
         choices=[],  # Will be populated dynamically
         required=False,
         label="Checkpoint (Optional)",
-        help_text="Select specific checkpoint, or leave empty to use the best model"
+        help_text="Select specific checkpoint, or leave empty to use the best model",
+        widget=forms.Select(attrs={'class': 'form-select'})
     )
     
     # Image upload
@@ -806,6 +808,14 @@ class EnhancedInferenceForm(forms.Form):
         initial=512,
         label="Resolution",
         help_text="Choose the input image resolution for processing"
+    )
+    
+    # Force CPU option
+    force_cpu = forms.BooleanField(
+        required=False,
+        initial=False,
+        label="Force CPU",
+        help_text="Force inference to run on CPU even if GPU is available"
     )
     
     # Post-processing configuration
@@ -863,6 +873,92 @@ class EnhancedInferenceForm(forms.Form):
         help_text="Fill small holes using morphological closing"
     )
     
+    apply_dilation = forms.BooleanField(
+        initial=False,
+        required=False,
+        label="Apply Dilation",
+        help_text="Expand object boundaries using morphological dilation"
+    )
+    
+    apply_erosion = forms.BooleanField(
+        initial=False,
+        required=False,
+        label="Apply Erosion",
+        help_text="Shrink object boundaries using morphological erosion"
+    )
+    
+    fill_holes = forms.BooleanField(
+        initial=True,
+        required=False,
+        label="Fill Holes",
+        help_text="Fill holes inside segmented objects"
+    )
+    
+    smooth_boundaries = forms.BooleanField(
+        initial=False,
+        required=False,
+        label="Smooth Boundaries",
+        help_text="Apply Gaussian smoothing to object boundaries"
+    )
+    
+    remove_border_objects = forms.BooleanField(
+        initial=False,
+        required=False,
+        label="Remove Border Objects",
+        help_text="Remove objects that touch image borders"
+    )
+    
+    # Advanced filtering options
+    min_area_ratio = forms.FloatField(
+        initial=0.0,
+        min_value=0.0,
+        max_value=1.0,
+        widget=forms.NumberInput(attrs={'step': '0.01', 'class': 'form-control'}),
+        required=False,
+        label="Minimum Area Ratio",
+        help_text="Remove objects smaller than this fraction of total image area (0.0-1.0)"
+    )
+    
+    max_area_ratio = forms.FloatField(
+        initial=1.0,
+        min_value=0.0,
+        max_value=1.0,
+        widget=forms.NumberInput(attrs={'step': '0.01', 'class': 'form-control'}),
+        required=False,
+        label="Maximum Area Ratio",
+        help_text="Remove objects larger than this fraction of total image area (0.0-1.0)"
+    )
+    
+    min_solidity = forms.FloatField(
+        initial=0.0,
+        min_value=0.0,
+        max_value=1.0,
+        widget=forms.NumberInput(attrs={'step': '0.01', 'class': 'form-control'}),
+        required=False,
+        label="Minimum Solidity",
+        help_text="Remove objects with solidity (area/convex_hull_area) below this threshold"
+    )
+    
+    min_eccentricity = forms.FloatField(
+        initial=0.0,
+        min_value=0.0,
+        max_value=1.0,
+        widget=forms.NumberInput(attrs={'step': '0.01', 'class': 'form-control'}),
+        required=False,
+        label="Minimum Eccentricity",
+        help_text="Remove objects with eccentricity below this threshold (0=circle, 1=line)"
+    )
+    
+    max_eccentricity = forms.FloatField(
+        initial=1.0,
+        min_value=0.0,
+        max_value=1.0,
+        widget=forms.NumberInput(attrs={'step': '0.01', 'class': 'form-control'}),
+        required=False,
+        label="Maximum Eccentricity",
+        help_text="Remove objects with eccentricity above this threshold (0=circle, 1=line)"
+    )
+
     use_adaptive_threshold = forms.BooleanField(
         initial=False,
         required=False,
@@ -914,6 +1010,7 @@ class EnhancedInferenceForm(forms.Form):
         
         # Populate model choices
         from .models import MLModel
+        import os
         
         if model_id:
             # Single model - get only its checkpoints
@@ -922,14 +1019,79 @@ class EnhancedInferenceForm(forms.Form):
                 self.fields['model_id'].choices = [(model.id, model.name)]
                 self.fields['model_id'].initial = model.id
                 self.fields['model_id'].widget.attrs['readonly'] = True
+                
+                # Populate checkpoints for this specific model
+                self._populate_checkpoints(model)
             except MLModel.DoesNotExist:
                 self.fields['model_id'].choices = []
         elif all_models:
             # All models - populate with completed models
             models = MLModel.objects.filter(status='completed')
-            self.fields['model_id'].choices = [(m.id, f"{m.name} (ID: {m.id})") for m in models]
+            model_choices = []
+            for m in models:
+                model_choices.append((m.id, f"{m.name} (ID: {m.id})"))
+            
+            self.fields['model_id'].choices = [('', 'Select a model...')] + model_choices
+            
+            # Set up checkpoint field to be populated via JavaScript
+            self.fields['checkpoint_path'].choices = [('', 'Select model first...')]
         else:
             self.fields['model_id'].choices = []
+            
+    def _populate_checkpoints(self, model):
+        """Populate checkpoint choices for a given model"""
+        import os
+        import glob
+        
+        checkpoint_choices = [('', 'Use best model (default)')]
+        
+        try:
+            # Look for checkpoints in MLflow directory
+            if model.mlflow_run_id:
+                mlflow_path = f"data/mlflow/{model.mlflow_run_id}/artifacts"
+                if os.path.exists(mlflow_path):
+                    # Look for model files
+                    patterns = [
+                        os.path.join(mlflow_path, "**", "*.pth"),
+                        os.path.join(mlflow_path, "**", "*.pt"),
+                        os.path.join(mlflow_path, "**", "model.pkl"),
+                    ]
+                    
+                    for pattern in patterns:
+                        files = glob.glob(pattern, recursive=True)
+                        for file_path in files:
+                            # Create readable name from path
+                            rel_path = os.path.relpath(file_path, mlflow_path)
+                            name = rel_path.replace('/', ' → ')
+                            if 'epoch' in name.lower():
+                                name = f"Epoch checkpoint: {name}"
+                            elif 'final' in name.lower() or 'best' in name.lower():
+                                name = f"Final model: {name}"
+                            else:
+                                name = f"Model: {name}"
+                            
+                            checkpoint_choices.append((file_path, name))
+            
+            # Also look in model's data directory if it exists
+            if hasattr(model, 'data_path') and model.data_path:
+                model_dir = os.path.join("data", "models", str(model.id))
+                if os.path.exists(model_dir):
+                    for root, dirs, files in os.walk(model_dir):
+                        for file in files:
+                            if file.endswith(('.pth', '.pt', '.pkl')):
+                                file_path = os.path.join(root, file)
+                                rel_path = os.path.relpath(file_path, model_dir)
+                                name = f"Model dir: {rel_path}"
+                                checkpoint_choices.append((file_path, name))
+        
+        except Exception as e:
+            print(f"Error finding checkpoints for model {model.id}: {e}")
+        
+        self.fields['checkpoint_path'].choices = checkpoint_choices
+        
+        # If only one non-default choice, make it selected
+        if len(checkpoint_choices) == 2:  # Default + 1 checkpoint
+            self.fields['checkpoint_path'].initial = checkpoint_choices[1][0]
 
 
 class TrainingConfigForm(forms.Form):

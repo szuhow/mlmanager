@@ -631,6 +631,12 @@
                                             <div class="spinner-border spinner-border-sm text-secondary me-2" role="status" aria-hidden="true"></div>
                                             <span class="text-muted">Preparing...</span>
                                         </div>
+                                    {% elif model.status == 'completed' %}
+                                        <div class="progress" style="width: 120px;">
+                                            <div class="progress-bar bg-success" role="progressbar" style="width: 100%">
+                                                100%
+                                            </div>
+                                        </div>
                                     {% else %}
                                         <span class="text-muted">{{ model.current_epoch }}/{{ model.total_epochs }}</span>
                                     {% endif %}
@@ -640,19 +646,16 @@
                                         {% if model.performance_metrics.val_accuracy|default:0 > 0 %}
                                             <span class="badge performance-badge bg-info">{{ model.performance_metrics.val_accuracy|default:0|floatformat:3 }}</span>
                                         {% else %}
-                                            <span class="text-muted">-</span>
+                                            <span class="text-muted">No data</span>
                                         {% endif %}
                                     {% else %}
-                                        {% if model.best_val_dice > 0 or model.best_val_iou > 0 %}
-                                            {% if model.best_val_iou > 0 and model.best_val_iou >= model.best_val_dice %}
-                                                <span class="badge performance-badge bg-info">{{ model.best_val_iou|floatformat:3 }}</span>
-                                                <small class="text-muted d-block">IoU</small>
-                                            {% else %}
-                                                <span class="badge performance-badge bg-info">{{ model.best_val_dice|floatformat:3 }}</span>
-                                                <small class="text-muted d-block">Dice</small>
-                                            {% endif %}
+                                        {# Always display Dice/IoU values, even if 0 #}
+                                        {% if model.best_val_iou > 0 and model.best_val_iou >= model.best_val_dice %}
+                                            <span class="badge performance-badge bg-info">{{ model.best_val_iou|floatformat:3 }}</span>
+                                            <small class="text-muted d-block">IoU</small>
                                         {% else %}
-                                            <span class="text-muted">-</span>
+                                            <span class="badge performance-badge bg-info">{{ model.best_val_dice|floatformat:3 }}</span>
+                                            <small class="text-muted d-block">Dice</small>
                                         {% endif %}
                                     {% endif %}
                                 </td>

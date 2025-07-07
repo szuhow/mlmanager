@@ -482,6 +482,24 @@
         color: #495057;
         z-index: 10;
         text-shadow: 1px 1px 2px rgba(255, 255, 255, 0.8);
+        pointer-events: none;
+    }
+    
+    /* Batch progress bar styling */
+    #batch-progress-section .progress {
+        height: 8px;
+        background-color: #f8f9fa;
+        border-radius: 4px;
+    }
+    
+    #batch-progress-section .progress-bar {
+        transition: width 0.2s ease;
+        background-color: #17a2b8;
+    }
+    
+    #batch-info-text {
+        font-weight: 500;
+        color: #6c757d;
     }
     
     /* Form loading state */
@@ -2066,6 +2084,7 @@
                 </h5>
             </div>
             <div class="card-body">
+                <!-- Epoch Progress Bar -->
                 <div class="progress mb-3">
                     <div id="training-progress-bar" class="progress-bar bg-success" role="progressbar" 
                          style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
@@ -2073,7 +2092,18 @@
                     <div id="progress-bar-text" class="progress-text-overlay">Epoch 0/0 (0%)</div>
                 </div>
                 
-                <p class="mb-2"><strong>Batch 13/32 in current epoch</strong></p>
+                <!-- Batch Progress Bar -->
+                <div id="batch-progress-section" class="mb-3" style="display: none;">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <small class="text-muted">Batch Progress in Current Epoch:</small>
+                        <small id="batch-info-text" class="text-muted">Batch 0/0</small>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                        <div id="batch-progress-bar" class="progress-bar bg-info" role="progressbar" 
+                             style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                        </div>
+                    </div>
+                </div>
                 
                 <div class="row">
                     <div class="col-md-3">
@@ -3425,11 +3455,25 @@ function updateTrainingProgress() {
         return;
     }
     
+    console.log('Updating training progress for model:', currentModelId);
+    
     // Fetch progress data
     fetch(`/ml/api/training-progress/${currentModelId}/`)
-    .then(response => response.json())
+    .then(response => {
+        console.log('Progress API response status:', response.status);
+        return response.json();
+    })
     .then(data => {
+        console.log('Progress API data received:', data);
+        
         if (data.status === 'success') {
+            console.log('Progress data:', data.progress);
+            console.log('Batch data:', {
+                current_batch: data.progress.current_batch,
+                total_batches_per_epoch: data.progress.total_batches_per_epoch,
+                batch_progress_percentage: data.progress.batch_progress_percentage
+            });
+            
             updateProgressDisplay(data.progress);
             
             // Update training logs if available
@@ -3446,7 +3490,9 @@ function updateTrainingProgress() {
 }
 
 function updateProgressDisplay(progress) {
-    // Update progress bar
+    console.log('updateProgressDisplay called with:', progress);
+    
+    // Update epoch progress bar
     const progressBar = document.getElementById('training-progress-bar');
     const progressBarText = document.getElementById('progress-bar-text');
     if (progressBar && progress.progress_percentage !== undefined) {
@@ -3455,12 +3501,62 @@ function updateProgressDisplay(progress) {
         if (progressBarText) {
             progressBarText.textContent = `Epoch ${progress.current_epoch || 0}/${progress.total_epochs || 0} (${percentage}%)`;
         }
+        console.log('Updated epoch progress bar:', percentage + '%');
+    }
+    
+    // Update batch progress bar
+    const batchProgressSection = document.getElementById('batch-progress-section');
+    const batchProgressBar = document.getElementById('batch-progress-bar');
+    const batchInfoText = document.getElementById('batch-info-text');
+    
+    console.log('Batch elements found:', {
+        section: !!batchProgressSection,
+        bar: !!batchProgressBar,
+        text: !!batchInfoText
+    });
+    
+    console.log('Batch progress data:', {
+        current_batch: progress.current_batch,
+        total_batches_per_epoch: progress.total_batches_per_epoch,
+        batch_progress_percentage: progress.batch_progress_percentage
+    });
+    
+    if (progress.current_batch && progress.total_batches_per_epoch && progress.current_batch > 0) {
+        console.log('Showing batch progress section');
+        
+        // Show batch progress section
+        if (batchProgressSection) {
+            batchProgressSection.style.display = 'block';
+            console.log('Batch progress section made visible');
+        }
+        
+        // Update batch progress bar
+        if (batchProgressBar && progress.batch_progress_percentage !== undefined) {
+            const batchPercentage = Math.round(progress.batch_progress_percentage);
+            batchProgressBar.style.width = batchPercentage + '%';
+            batchProgressBar.setAttribute('aria-valuenow', progress.current_batch);
+            batchProgressBar.setAttribute('aria-valuemax', progress.total_batches_per_epoch);
+            console.log('Updated batch progress bar:', batchPercentage + '%');
+        }
+        
+        // Update batch info text
+        if (batchInfoText) {
+            batchInfoText.textContent = `Batch ${progress.current_batch}/${progress.total_batches_per_epoch}`;
+            console.log('Updated batch info text:', batchInfoText.textContent);
+        }
+    } else {
+        console.log('Hiding batch progress section (no batch data)');
+        // Hide batch progress section if no batch data
+        if (batchProgressSection) {
+            batchProgressSection.style.display = 'none';
+        }
     }
     
     // Update epoch display (fix missing "E")
     const currentEpochDisplay = document.getElementById('current-epoch-display');
     if (currentEpochDisplay) {
         currentEpochDisplay.textContent = `${progress.current_epoch || 0} / ${progress.total_epochs || 0}`;
+        console.log('Updated epoch display:', currentEpochDisplay.textContent);
     }
     
     // Update metrics

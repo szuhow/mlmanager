@@ -59,7 +59,26 @@ class TrainingCallback:
         self.run_id = run_id
         self.best_val_dice = float('-inf')
         self.best_val_iou = float('-inf')
-        self.model = MLModel.objects.get(id=model_id)
+        
+        # Add debug logging for callback initialization
+        logging.info(f"[CALLBACK INIT] Initializing callback for model_id: {model_id}, run_id: {run_id}")
+        
+        try:
+            self.model = MLModel.objects.get(id=model_id)
+            logging.info(f"[CALLBACK INIT] Successfully loaded model: {self.model.name}")
+        except Exception as e:
+            logging.error(f"[CALLBACK INIT] Failed to load model {model_id}: {e}")
+            raise
+        
+        # Initialize best values in model if they are None
+        if self.model.best_val_dice is None:
+            self.model.best_val_dice = 0.0
+        if self.model.best_val_iou is None:
+            self.model.best_val_iou = 0.0
+            
+        logging.info(f"[CALLBACK] Initialized for model {model_id}, run {run_id}")
+        logging.info(f"[CALLBACK] Initial best_val_dice: {self.model.best_val_dice}, best_val_iou: {self.model.best_val_iou}")
+        self.model.save()
     
     def on_training_start(self):
         """Called when training starts - updates status to loading"""
@@ -83,75 +102,171 @@ class TrainingCallback:
     
     def on_epoch_start(self, epoch, total_epochs):
         """Called at the start of each epoch"""
-        self.model.refresh_from_db()  # Refresh to get latest stop_requested value
-        self.model.current_epoch = epoch + 1  # Convert 0-based to 1-based for UI
-        self.model.total_epochs = total_epochs
-        logging.info(f"[CALLBACK] Epoch {epoch + 1}/{total_epochs} started - updating model {self.model_id}")
-        self.model.save()
+        logging.info(f"[CALLBACK] on_epoch_start called: epoch={epoch}, total_epochs={total_epochs}, model_id={self.model_id}")
         
-        # Check if training should be stopped
-        if self.model.stop_requested:
-            logging.info(f"[CALLBACK] Stop requested for model {self.model_id}")
-            return False
-        return True
+        try:
+            self.model.refresh_from_db()  # Refresh to get latest stop_requested value
+            self.model.current_epoch = epoch + 1  # Convert 0-based to 1-based for UI
+            self.model.total_epochs = total_epochs
+            logging.info(f"[CALLBACK] Epoch {epoch + 1}/{total_epochs} started - updating model {self.model_id}")
+            self.model.save()
+            
+            # Check if training should be stopped
+            if self.model.stop_requested:
+                logging.info(f"[CALLBACK] Stop requested for model {self.model_id}")
+                return False
+                
+            logging.info(f"[CALLBACK] on_epoch_start completed successfully for model {self.model_id}")
+            return True
+        except Exception as e:
+            logging.error(f"[CALLBACK] Error in on_epoch_start for model {self.model_id}: {e}")
+            return True  # Continue training even if callback fails
     
     def on_epoch_end(self, epoch, logs):
         """Called at the end of each epoch with the metrics"""
-        self.model.train_loss = logs.get('train_loss', 0.0)
-        self.model.val_loss = logs.get('val_loss', 0.0)
-        self.model.train_dice = logs.get('train_dice', 0.0)
-        self.model.val_dice = logs.get('val_dice', 0.0)
-        self.model.train_iou = logs.get('train_iou', 0.0)
-        self.model.val_iou = logs.get('val_iou', 0.0)
+        logging.info(f"[CALLBACK] on_epoch_end called: epoch={epoch}, model_id={self.model_id}, logs={logs}")
         
-        # Update best validation dice and iou if current is better
-        if logs.get('val_dice', 0.0) > self.model.best_val_dice:
-            self.model.best_val_dice = logs.get('val_dice', 0.0)
-        
-        if logs.get('val_iou', 0.0) > self.model.best_val_iou:
-            self.model.best_val_iou = logs.get('val_iou', 0.0)
-        
-        self.model.save()
-        
-        # Log metrics to MLflow
-        mlflow.log_metrics({
-            'train_loss': logs.get('train_loss', 0),
-            'val_loss': logs.get('val_loss', 0),
-            'train_dice': logs.get('train_dice', 0),
-            'val_dice': logs.get('val_dice', 0),
-            'train_iou': logs.get('train_iou', 0),
-            'val_iou': logs.get('val_iou', 0),
-            'best_val_dice': self.model.best_val_dice,
-            'best_val_iou': self.model.best_val_iou
-        }, step=epoch)
+        try:
+            self.model.train_loss = logs.get('train_loss', 0.0)
+            self.model.val_loss = logs.get('val_loss', 0.0)
+            self.model.train_dice = logs.get('train_dice', 0.0)
+            self.model.val_dice = logs.get('val_dice', 0.0)
+            self.model.train_iou = logs.get('train_iou', 0.0)
+            self.model.val_iou = logs.get('val_iou', 0.0)
+            
+            # Update best validation dice and iou if current is better
+            current_val_dice = logs.get('val_dice', 0.0)
+            current_val_iou = logs.get('val_iou', 0.0)
+            
+            # Initialize best values if this is the first epoch or if current is better
+            if self.model.best_val_dice is None or current_val_dice > self.model.best_val_dice:
+                self.model.best_val_dice = current_val_dice
+                logging.info(f"[CALLBACK] New best val_dice: {current_val_dice}")
+            
+            if self.model.best_val_iou is None or current_val_iou > self.model.best_val_iou:
+                self.model.best_val_iou = current_val_iou
+                logging.info(f"[CALLBACK] New best val_iou: {current_val_iou}")
+            
+            # Log detailed callback info
+            logging.info(f"[CALLBACK] Epoch {epoch} metrics - Val Dice: {current_val_dice:.4f} (best: {self.model.best_val_dice:.4f}), Val IoU: {current_val_iou:.4f} (best: {self.model.best_val_iou:.4f})")
+            
+            self.model.save()
+            logging.info(f"[CALLBACK] Model saved successfully for epoch {epoch}")
+            
+            # Log metrics to MLflow
+            mlflow.log_metrics({
+                'train_loss': logs.get('train_loss', 0),
+                'val_loss': logs.get('val_loss', 0),
+                'train_dice': logs.get('train_dice', 0),
+                'val_dice': logs.get('val_dice', 0),
+                'train_iou': logs.get('train_iou', 0),
+                'val_iou': logs.get('val_iou', 0),
+                'best_val_dice': self.model.best_val_dice,
+                'best_val_iou': self.model.best_val_iou
+            }, step=epoch)
+            
+            logging.info(f"[CALLBACK] on_epoch_end completed successfully for model {self.model_id}")
+            
+        except Exception as e:
+            logging.error(f"[CALLBACK] Error in on_epoch_end for model {self.model_id}: {e}")
+            logging.error(f"[CALLBACK] Exception details: {type(e).__name__}: {str(e)}")
+            import traceback
+            logging.error(f"[CALLBACK] Traceback: {traceback.format_exc()}")
     
+    def sync_metrics_from_mlflow(self):
+        """Synchronize metrics from MLflow to Django model"""
+        try:
+            import mlflow
+            logging.info(f"[CALLBACK] Syncing metrics from MLflow for model {self.model_id}")
+            
+            # Get MLflow run data
+            run = mlflow.get_run(self.run_id)
+            metrics = run.data.metrics
+            
+            logging.info(f"[CALLBACK] MLflow metrics: {metrics}")
+            
+            # Update Django model with MLflow metrics
+            if 'best_val_dice' in metrics:
+                self.model.best_val_dice = metrics['best_val_dice']
+                logging.info(f"[CALLBACK] Updated best_val_dice from MLflow: {metrics['best_val_dice']}")
+            
+            if 'best_val_iou' in metrics:
+                self.model.best_val_iou = metrics['best_val_iou']
+                logging.info(f"[CALLBACK] Updated best_val_iou from MLflow: {metrics['best_val_iou']}")
+            
+            # Update current epoch metrics
+            if 'val_dice' in metrics:
+                self.model.val_dice = metrics['val_dice']
+            if 'val_iou' in metrics:
+                self.model.val_iou = metrics['val_iou']
+            if 'train_dice' in metrics:
+                self.model.train_dice = metrics['train_dice']
+            if 'train_iou' in metrics:
+                self.model.train_iou = metrics['train_iou']
+            if 'train_loss' in metrics:
+                self.model.train_loss = metrics['train_loss']
+            if 'val_loss' in metrics:
+                self.model.val_loss = metrics['val_loss']
+            
+            self.model.save()
+            logging.info(f"[CALLBACK] Successfully synced metrics from MLflow to Django model")
+            
+        except Exception as e:
+            logging.error(f"[CALLBACK] Failed to sync metrics from MLflow: {e}")
+            import traceback
+            logging.error(f"[CALLBACK] Traceback: {traceback.format_exc()}")
+
     def on_training_end(self, logs=None):
         """Called when training is complete"""
+        logging.info(f"[CALLBACK] Training ended for model {self.model_id}. Current epoch: {self.model.current_epoch}, Stop requested: {self.model.stop_requested}")
+        
         # Check if training was stopped by user request
         if self.model.stop_requested:
             self.model.status = 'stopped'
+            logging.info(f"[CALLBACK] Model {self.model_id} marked as stopped")
         else:
-            # Only set to completed if training actually progressed beyond epoch 0
-            if self.model.current_epoch > 0:
+            # Set to completed if training progressed through at least one epoch or if total_epochs was 1
+            if self.model.current_epoch > 0 or self.model.total_epochs == 1:
                 self.model.status = 'completed'
                 # Ensure current_epoch equals total_epochs for completed training
-                self.model.current_epoch = self.model.total_epochs
+                if self.model.current_epoch < self.model.total_epochs:
+                    self.model.current_epoch = self.model.total_epochs
+                logging.info(f"[CALLBACK] Model {self.model_id} marked as completed")
             else:
                 # If no epochs were completed, mark as failed
                 self.model.status = 'failed'
                 if not self.model.performance_metrics:
                     self.model.performance_metrics = {}
                 self.model.performance_metrics['error'] = 'Training terminated before completing any epochs'
+                logging.info(f"[CALLBACK] Model {self.model_id} marked as failed - no epochs completed")
         
         if logs:
             if not self.model.performance_metrics:
                 self.model.performance_metrics = {}
             self.model.performance_metrics.update(logs)
+            logging.info(f"[CALLBACK] Updated performance metrics: {logs}")
+        
+        # Save final metrics summary
+        final_summary = {
+            'final_train_loss': self.model.train_loss,
+            'final_val_loss': self.model.val_loss,
+            'final_train_dice': self.model.train_dice,
+            'final_val_dice': self.model.val_dice,
+            'final_best_val_dice': self.model.best_val_dice,
+            'final_train_iou': getattr(self.model, 'train_iou', 0.0),
+            'final_val_iou': getattr(self.model, 'val_iou', 0.0),
+            'final_best_val_iou': getattr(self.model, 'best_val_iou', 0.0),
+        }
+        logging.info(f"[CALLBACK] Final metrics summary for model {self.model_id}: {final_summary}")
+        
+        # Sync final metrics from MLflow to ensure they are saved in Django
+        self.sync_metrics_from_mlflow()
         
         # Save training logs to MLflow as artifacts
         self._save_logs_to_mlflow()
         
         self.model.save()
+        logging.info(f"[CALLBACK] Model {self.model_id} saved with status: {self.model.status}")
     
     def on_training_stopped(self, logs=None):
         """Called when training is stopped by user request"""

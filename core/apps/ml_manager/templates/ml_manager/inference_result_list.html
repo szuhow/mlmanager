@@ -1,0 +1,247 @@
+{% extends "ml_manager/base.html" %}
+{% load static %}
+
+{% block title %}Inference Results{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-12">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h2>
+                        <i class="fas fa-magic text-primary"></i>
+                        Inference Results
+                    </h2>
+                    <p class="text-muted mb-0">View and manage all inference results</p>
+                </div>
+                <div>
+                    <a href="{% url 'ml_manager:general-inference' %}" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> New Inference
+                    </a>
+                </div>
+            </div>
+
+            <!-- Summary Statistics -->
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <div class="card bg-primary text-white">
+                        <div class="card-body">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-list fa-2x me-3"></i>
+                                <div>
+                                    <h3 class="mb-0">{{ total_results }}</h3>
+                                    <small>Total Results</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card bg-success text-white">
+                        <div class="card-body">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-check-circle fa-2x me-3"></i>
+                                <div>
+                                    <h3 class="mb-0">{{ completed_results }}</h3>
+                                    <small>Completed</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card bg-danger text-white">
+                        <div class="card-body">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-exclamation-triangle fa-2x me-3"></i>
+                                <div>
+                                    <h3 class="mb-0">{{ failed_results }}</h3>
+                                    <small>Failed</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card bg-info text-white">
+                        <div class="card-body">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-percentage fa-2x me-3"></i>
+                                <div>
+                                    <h3 class="mb-0">
+                                        {% if total_results > 0 %}
+                                            {{ completed_results|floatformat:0 }}/{{ total_results }}
+                                        {% else %}
+                                            0
+                                        {% endif %}
+                                    </h3>
+                                    <small>Success Rate</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Table -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="fas fa-table"></i>
+                        Recent Inference Results
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if inference_results %}
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>Image</th>
+                                    <th>Model</th>
+                                    <th>Status</th>
+                                    <th>Objects Found</th>
+                                    <th>Processing Time</th>
+                                    <th>Date</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for result in inference_results %}
+                                <tr>
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            {% if result.input_image %}
+                                            <img src="{{ result.input_image.url }}" 
+                                                 alt="{{ result.input_filename }}"
+                                                 class="rounded me-2"
+                                                 style="width: 50px; height: 50px; object-fit: cover;">
+                                            {% endif %}
+                                            <div>
+                                                <strong>{{ result.input_filename }}</strong>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <a href="{% url 'ml_manager:model-detail' pk=result.model.pk %}" 
+                                           class="text-decoration-none">
+                                            {{ result.model.name }}
+                                        </a>
+                                    </td>
+                                    <td>
+                                        {% if result.status == 'completed' %}
+                                            <span class="badge bg-success">
+                                                <i class="fas fa-check-circle"></i> Completed
+                                            </span>
+                                        {% elif result.status == 'processing' %}
+                                            <span class="badge bg-warning">
+                                                <i class="fas fa-spinner fa-spin"></i> Processing
+                                            </span>
+                                        {% elif result.status == 'failed' %}
+                                            <span class="badge bg-danger">
+                                                <i class="fas fa-exclamation-triangle"></i> Failed
+                                            </span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if result.status == 'completed' %}
+                                            <span class="badge bg-primary">{{ result.detected_objects_count }}</span>
+                                        {% else %}
+                                            <span class="text-muted">-</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if result.processing_time %}
+                                            {{ result.processing_time_display }}
+                                        {% else %}
+                                            <span class="text-muted">-</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <small class="text-muted">
+                                            {{ result.created_at|date:"M d, H:i" }}
+                                        </small>
+                                    </td>
+                                    <td>
+                                        <a href="{% url 'ml_manager:inference-result' pk=result.pk %}" 
+                                           class="btn btn-sm btn-outline-primary">
+                                            <i class="fas fa-eye"></i>
+                                        </a>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Pagination -->
+                    {% if is_paginated %}
+                    <nav aria-label="Results pagination" class="mt-4">
+                        <ul class="pagination justify-content-center">
+                            {% if page_obj.has_previous %}
+                                <li class="page-item">
+                                    <a class="page-link" href="?page=1">&laquo; First</a>
+                                </li>
+                                <li class="page-item">
+                                    <a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a>
+                                </li>
+                            {% endif %}
+
+                            <li class="page-item active">
+                                <span class="page-link">
+                                    Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
+                                </span>
+                            </li>
+
+                            {% if page_obj.has_next %}
+                                <li class="page-item">
+                                    <a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a>
+                                </li>
+                                <li class="page-item">
+                                    <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}">Last &raquo;</a>
+                                </li>
+                            {% endif %}
+                        </ul>
+                    </nav>
+                    {% endif %}
+
+                    {% else %}
+                    <!-- Empty State -->
+                    <div class="text-center py-5">
+                        <i class="fas fa-magic fa-4x text-muted mb-3"></i>
+                        <h4 class="text-muted">No Inference Results Yet</h4>
+                        <p class="text-muted">Run your first inference to see results here.</p>
+                        <a href="{% url 'ml_manager:general-inference' %}" class="btn btn-primary">
+                            <i class="fas fa-plus"></i> Start Inference
+                        </a>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.card {
+    border-radius: 1rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.table th {
+    font-weight: 600;
+    border-top: none;
+}
+
+.table-hover tbody tr:hover {
+    background-color: rgba(0, 123, 255, 0.05);
+}
+
+.badge {
+    font-size: 0.9em;
+}
+</style>
+
+{% endblock %}

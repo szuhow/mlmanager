@@ -2347,12 +2347,22 @@ def train_model(args):
     
     callback = None
     if hasattr(args, 'model_id') and args.model_id is not None:
-        from ml.utils.utils.training_callback import TrainingCallback
-        callback = TrainingCallback(args.model_id, args.mlflow_run_id)
-        # Store the model directory path in Django model
-        callback.set_model_directory(model_dir)
-        # Set status to 'loading' when training script starts
-        callback.on_training_start()
+        logger.info(f"[CALLBACK SETUP] Creating callback for model_id: {args.model_id}")
+        try:
+            from ml.utils.utils.training_callback import TrainingCallback
+            callback = TrainingCallback(args.model_id, args.mlflow_run_id)
+            # Store the model directory path in Django model
+            callback.set_model_directory(model_dir)
+            # Set status to 'loading' when training script starts
+            callback.on_training_start()
+            logger.info(f"[CALLBACK SETUP] Callback created and initialized successfully")
+        except Exception as e:
+            logger.error(f"[CALLBACK SETUP] Failed to create callback: {e}")
+            import traceback
+            logger.error(f"[CALLBACK SETUP] Traceback: {traceback.format_exc()}")
+            callback = None
+    else:
+        logger.info("[CALLBACK SETUP] No model_id provided, callback will not be created")
 
     try:
         logger.info("[TRAINING] Starting training with parameters: %s", vars(args))
@@ -2900,7 +2910,7 @@ def train_model(args):
                 training_stopped_early = True
                 break
             elif callback and not callback.on_epoch_start(epoch, args.epochs):
-                logger.info("Stop requested via callback. Exiting training loop.")
+                logger.info("[CALLBACK] Stop requested via callback. Exiting training loop.")
                 training_stopped_early = True
                 break
             elif hasattr(args, 'model_id') and args.model_id is not None and callback is None and DJANGO_AVAILABLE:
@@ -3488,7 +3498,10 @@ def train_model(args):
             
             # Call epoch end callback with metrics
             if callback:
+                logger.info(f"[CALLBACK] Calling callback.on_epoch_end for epoch {epoch}")
                 callback.on_epoch_end(epoch, metrics)
+            else:
+                logger.info(f"[CALLBACK] No callback available for epoch {epoch}")
             
             # Check early stopping condition
             if early_stopping is not None:

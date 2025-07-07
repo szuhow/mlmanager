@@ -125,6 +125,11 @@ class MLModel(models.Model):
     def progress_percentage(self):
         """Calculate training progress percentage including batch progress within epoch"""
         if self.total_epochs > 0:
+            # For completed training, return 100%
+            if self.status == 'completed':
+                return 100.0
+                
+            # For training models, calculate actual progress
             # current_epoch is already 1-based (stored as epoch+1 in callback)
             # but we need 0-based for percentage calculation
             completed_epochs = max(0, self.current_epoch - 1)
@@ -560,3 +565,57 @@ class TrainingTemplate(models.Model):
         if self.is_default:
             TrainingTemplate.objects.filter(is_default=True).update(is_default=False)
         super().save(*args, **kwargs)
+
+
+class InferenceResult(models.Model):
+    """Model to store inference results"""
+    model = models.ForeignKey(MLModel, on_delete=models.CASCADE, related_name='inference_results')
+    
+    # Input information
+    input_image = models.ImageField(upload_to='inference/inputs/%Y/%m/%d/')
+    input_filename = models.CharField(max_length=255, help_text="Original filename of uploaded image")
+    
+    # Output results
+    output_mask = models.ImageField(upload_to='inference/outputs/%Y/%m/%d/', null=True, blank=True)
+    output_overlay = models.ImageField(upload_to='inference/overlays/%Y/%m/%d/', null=True, blank=True)
+    
+    # Inference metadata
+    inference_config = models.JSONField(default=default_dict, encoder=DjangoJSONEncoder, help_text="Inference configuration used")
+    processing_time = models.FloatField(null=True, blank=True, help_text="Processing time in seconds")
+    
+    # Results metrics
+    detected_objects_count = models.IntegerField(default=0, help_text="Number of detected objects")
+    total_area_pixels = models.IntegerField(default=0, help_text="Total segmented area in pixels")
+    confidence_scores = models.JSONField(default=list, encoder=DjangoJSONEncoder, help_text="Confidence scores for detected objects")
+    
+    # Timestamps
+    created_at = models.DateTimeField(default=timezone.now)
+    
+    # Status
+    STATUS_CHOICES = [
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='processing')
+    error_message = models.TextField(blank=True, help_text="Error message if inference failed")
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Inference Result"
+        verbose_name_plural = "Inference Results"
+    
+    def __str__(self):
+        return f"Inference for {self.input_filename} using {self.model.name}"
+    
+    @property
+    def get_display_name(self):
+        """Get display name for the inference result"""
+        return f"{self.input_filename} → {self.model.name}"
+    
+    @property
+    def processing_time_display(self):
+        """Format processing time for display"""
+        if self.processing_time:
+            return f"{self.processing_time:.2f}s"
+        return "N/A"

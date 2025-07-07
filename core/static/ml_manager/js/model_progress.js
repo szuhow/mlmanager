@@ -2,11 +2,14 @@
 class ModelProgressUpdater {
     constructor() {
         this.updateInterval = 5000; // 5 seconds
-        this.fastUpdateInterval = 2000; // 2 seconds for pending models
+        this.fastUpdateInterval = 2000; // 2 seconds for pending models (faster refresh)
         this.intervalId = null;
         this.isUpdating = false;
         this.pendingModels = new Set(); // Track pending models
         this.currentInterval = this.updateInterval;
+        
+        // Debug identifier for this class
+        console.log('ModelProgressUpdater: Constructed at', new Date().toISOString());
     }
 
     start() {
@@ -150,15 +153,30 @@ class ModelProgressUpdater {
             if (data.model_status && data.model_status !== row.dataset.modelStatus) {
                 console.log('ModelProgressUpdater: Status changed from', row.dataset.modelStatus, 'to', data.model_status, 'for model', modelId);
                 
+                // Update the data-model-status attribute to reflect the new status
+                row.dataset.modelStatus = data.model_status;
+                console.log('ModelProgressUpdater: Updated row status attribute to', data.model_status);
+                
                 // If model was pending and now started training, show notification
                 if (row.dataset.modelStatus === 'pending' && data.model_status === 'training') {
                     this.showStatusChangeNotification(modelId, 'Training Started', 'Model has started training successfully');
+                    
+                    // Update the status cell to show "Training" instead of "Pending"
+                    const statusCell = row.querySelector('.status-cell');
+                    if (statusCell) {
+                        statusCell.innerHTML = '<span class="badge bg-warning">training</span>';
+                    }
+                    
+                    // Don't reload, continue with live updates
+                    console.log('ModelProgressUpdater: Continuing with live updates for newly training model');
+                } 
+                // Only reload if training is complete (not for pending->training transitions)
+                else if (['completed', 'failed', 'cancelled'].includes(data.model_status)) {
+                    // Status changed to a final state, reload page to reflect new state
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1000); // Small delay to show the notification
                 }
-                
-                // Status changed, reload page to reflect new state
-                setTimeout(() => {
-                    window.location.reload();
-                }, 1000); // Small delay to show the notification
             }
 
         } catch (error) {

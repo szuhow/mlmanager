@@ -130,6 +130,10 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
         # Initialize mlflow_error to None by default
         context['mlflow_error'] = None
         
+        # Get available checkpoints for this model
+        checkpoints = self._get_model_checkpoints()
+        context['checkpoints'] = checkpoints
+        
         # Get MLflow run info with enhanced error handling
         try:
             if self.object.mlflow_run_id:
@@ -824,6 +828,10 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
     
     def _get_architecture_details(self):
         """Get detailed model architecture information including model summary"""
+        # Add instance-level caching to avoid regenerating multiple times per request
+        if hasattr(self, '_cached_architecture_details'):
+            return self._cached_architecture_details
+            
         architecture = {
             'name': 'Unknown',
             'type': 'Unknown',
@@ -971,8 +979,17 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
             if model_type and model_type in architecture_mapping:
                 architecture.update(architecture_mapping[model_type])
             
-            # Generate model summary if we have a model type
+            # Always provide basic architecture info, but generate detailed summary only if requested
+            # Check if detailed model summary should be generated (for performance)
+            generate_summary = self.request.GET.get('include_summary', 'true').lower() == 'true'  # Default to true for now
+            
+            # Provide basic architecture info even without full summary
             if model_type:
+                architecture['has_model_info'] = True
+                architecture['model_type'] = model_type
+                architecture['input_shape'] = input_shape
+                
+            if model_type and generate_summary and not hasattr(self.object, 'cached_model_summary'):
                 try:
                     from .utils.model_summary import generate_model_summary, format_model_summary_text
                     
@@ -983,6 +1000,10 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                         architecture['model_summary'] = model_summary
                         architecture['model_summary_text'] = format_model_summary_text(model_summary)
                         logger.info(f"Model summary generated successfully for {model_type}")
+                        
+                        # Cache the summary on the object for this request
+                        self.object.cached_model_summary = model_summary
+                        self.object.cached_model_summary_text = architecture['model_summary_text']
                     else:
                         logger.warning(f"Model summary generation failed: {model_summary['error']}")
                         architecture['model_summary_error'] = model_summary['error']
@@ -990,11 +1011,152 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                 except Exception as e:
                     logger.error(f"Error generating model summary: {e}")
                     architecture['model_summary_error'] = str(e)
+            elif hasattr(self.object, 'cached_model_summary'):
+                # Use cached summary
+                architecture['model_summary'] = self.object.cached_model_summary
+                architecture['model_summary_text'] = getattr(self.object, 'cached_model_summary_text', None)
+                logger.info(f"Using cached model summary for {model_type}")
                     
         except Exception as e:
             architecture['error'] = f"Could not determine architecture: {e}"
             
+        # Cache the result
+        self._cached_architecture_details = architecture
         return architecture
+
+    def _get_model_checkpoints(self):
+        """Get available checkpoints for this model, including best and final checkpoints"""
+        import os
+        import glob
+        from pathlib import Path
+        
+        checkpoints = []
+        
+        try:
+            model = self.object
+            
+            # Prepare best and final checkpoint entries (always show these options)
+            checkpoints.append({
+                'name': 'Best Checkpoint',
+                'file_name': 'best',
+                'type': 'best',
+                'icon_class': 'fas fa-star text-warning'
+            })
+            
+            checkpoints.append({
+                'name': 'Final Checkpoint',
+                'file_name': 'final',
+                'type': 'final',
+                'icon_class': 'fas fa-flag-checkered text-success'
+            })
+            
+            # Get specific checkpoint files
+            if model.model_directory and os.path.exists(model.model_directory):
+                # Look for checkpoint files in the model directory and its subdirectories
+                checkpoint_paths = []
+                
+                # Main checkpoint directories
+                for checkpoint_dir in ['checkpoints', 'artifacts', 'weights']:
+                    path = os.path.join(model.model_directory, checkpoint_dir)
+                    if os.path.exists(path) and os.path.isdir(path):
+                        # Find all .pth files in this directory and subdirectories
+                        for pth_file in glob.glob(os.path.join(path, '**', '*.pth'), recursive=True):
+                            checkpoint_paths.append(pth_file)
+                
+                # Also check the model directory itself for .pth files
+                for pth_file in glob.glob(os.path.join(model.model_directory, '*.pth')):
+                    checkpoint_paths.append(pth_file)
+                
+                # Process found checkpoints
+                for path in checkpoint_paths:
+                    filename = os.path.basename(path)
+                    name = filename
+                    
+                    # Extract info from filename if possible
+                    checkpoint_type = 'regular'
+                    icon_class = 'fas fa-bookmark text-info'
+                    
+                    if 'best' in filename.lower():
+                        name = f"Best Model ({filename})"
+                        checkpoint_type = 'best'
+                        icon_class = 'fas fa-star text-warning'
+                    elif 'final' in filename.lower():
+                        name = f"Final Model ({filename})"
+                        checkpoint_type = 'final'
+                        icon_class = 'fas fa-flag-checkered text-success'
+                    elif 'epoch' in filename.lower():
+                        # Extract epoch number if available
+                        import re
+                        epoch_match = re.search(r'epoch[-_]?(\d+)', filename.lower())
+                        if epoch_match:
+                            epoch_num = epoch_match.group(1)
+                            name = f"Epoch {epoch_num}"
+                    
+                    checkpoints.append({
+                        'name': name,
+                        'file_name': filename,
+                        'path': path,
+                        'type': checkpoint_type,
+                        'icon_class': icon_class
+                    })
+            
+            # If no specific checkpoints were found but MLflow run ID exists, try MLflow artifacts
+            if len(checkpoints) <= 2 and model.mlflow_run_id:  # Only the default best and final entries
+                try:
+                    client = mlflow.tracking.MlflowClient()
+                    run = client.get_run(model.mlflow_run_id)
+                    
+                    # Check MLflow artifacts for checkpoint files
+                    mlflow_path = f"data/mlflow/{model.mlflow_run_id}/artifacts"
+                    mlflow_search_paths = [
+                        os.path.join(mlflow_path, "final_model", "weights", "*.pth"),
+                        os.path.join(mlflow_path, "checkpoints", "best_model", "**", "*.pth"),
+                        os.path.join(mlflow_path, "**", "*.pth")
+                    ]
+                    
+                    for pattern in mlflow_search_paths:
+                        files = glob.glob(pattern, recursive=True)
+                        for path in files:
+                            filename = os.path.basename(path)
+                            
+                            # Skip if this file is already in the list
+                            if any(cp['file_name'] == filename for cp in checkpoints):
+                                continue
+                                
+                            # Add to checkpoints list
+                            name = filename
+                            checkpoint_type = 'regular'
+                            icon_class = 'fas fa-bookmark text-info'
+                            
+                            if 'best' in filename.lower():
+                                name = f"Best Model ({filename})"
+                                checkpoint_type = 'best'
+                                icon_class = 'fas fa-star text-warning'
+                            elif 'final' in filename.lower():
+                                name = f"Final Model ({filename})"
+                                checkpoint_type = 'final'
+                                icon_class = 'fas fa-flag-checkered text-success'
+                            elif 'epoch' in filename.lower():
+                                import re
+                                epoch_match = re.search(r'epoch[-_]?(\d+)', filename.lower())
+                                if epoch_match:
+                                    epoch_num = epoch_match.group(1)
+                                    name = f"Epoch {epoch_num}"
+                            
+                            checkpoints.append({
+                                'name': name,
+                                'file_name': filename,
+                                'path': path,
+                                'type': checkpoint_type,
+                                'icon_class': icon_class
+                            })
+                except Exception as e:
+                    logger.warning(f"Could not get checkpoints from MLflow for model {model.id}: {e}")
+        
+        except Exception as e:
+            logger.warning(f"Error getting model checkpoints: {e}")
+        
+        return checkpoints
 
     def _extract_runtime_device_from_logs(self):
         """Extract the actual runtime device from training logs"""
@@ -1038,6 +1200,10 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
 
     def _get_training_logs(self):
         """Get training logs for this model from organized directory structure"""
+        # Add instance-level caching to avoid re-reading logs multiple times per request
+        if hasattr(self, '_cached_training_logs'):
+            return self._cached_training_logs
+            
         try:
             log_lines = []
             
@@ -1117,7 +1283,9 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                         with open(log_path, 'r', encoding='utf-8') as f:
                             log_lines = f.read().splitlines()
                             logger.info(f"✅ Model-specific log loaded: {log_path} ({len(log_lines)} lines)")
-                            return log_lines if log_lines else ['No content in training log file.']
+                            result = log_lines if log_lines else ['No content in training log file.']
+                            self._cached_training_logs = result
+                            return result
                     except Exception as e:
                         logger.warning(f"❌ Could not read model-specific log {log_path}: {e}")
                 elif os.path.exists(model_dir):
@@ -1138,7 +1306,9 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                                         with open(alt_log_path, 'r', encoding='utf-8') as f:
                                             log_lines = f.read().splitlines()
                                             logger.info(f"✅ Alternative log file loaded: {alt_log_path} ({len(log_lines)} lines)")
-                                            return log_lines if log_lines else ['No content in log file.']
+                                            result = log_lines if log_lines else ['No content in log file.']
+                                            self._cached_training_logs = result
+                                            return result
                                     except Exception as e:
                                         logger.warning(f"❌ Could not read alternative log {alt_log_path}: {e}")
                         else:
@@ -1192,11 +1362,15 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                     except Exception as e:
                         logger.warning(f"❌ Could not read artifacts log {artifacts_path}: {e}")
             
-            return log_lines if log_lines else ['No training logs found for this model.']
+            result = log_lines if log_lines else ['No training logs found for this model.']
+            self._cached_training_logs = result
+            return result
             
         except Exception as e:
             logger.warning(f"❌ Could not load training logs: {e}")
-            return [f'Error loading logs: {str(e)}']
+            result = [f'Error loading logs: {str(e)}']
+            self._cached_training_logs = result
+            return result
 
 
 class ModelPredictionListView(LoginRequiredMixin, ListView):
@@ -1677,14 +1851,19 @@ def get_training_progress(request, model_id):
             'status': model.status,
             'current_epoch': getattr(model, 'current_epoch', 0),
             'total_epochs': getattr(model, 'total_epochs', 0),
+            'current_batch': getattr(model, 'current_batch', 0),
+            'total_batches_per_epoch': getattr(model, 'total_batches_per_epoch', 0),
             'progress_percentage': 0,
+            'batch_progress_percentage': 0,
             'metrics': {},
             'last_update': None
         }
         
-        # Calculate progress percentage
-        if hasattr(model, 'total_epochs') and model.total_epochs > 0:
-            progress_data['progress_percentage'] = min(100, (model.current_epoch / model.total_epochs) * 100)
+        # Calculate progress percentage using model's property (includes batch progress)
+        progress_data['progress_percentage'] = model.progress_percentage
+        
+        # Use model's batch progress percentage property
+        progress_data['batch_progress_percentage'] = model.batch_progress_percentage
         
         # Get current metrics from model fields
         metrics = {
@@ -1897,6 +2076,272 @@ def batch_delete_models(request):
             'status': 'error',
             'message': f'Batch delete failed: {str(e)}'
         })
+
+
+class GeneralInferenceView(LoginRequiredMixin, FormView):
+    """General inference view with all available trained models"""
+    template_name = 'ml_manager/general_inference.html'
+    form_class = EnhancedInferenceForm
+    
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['all_models'] = True  # Show all completed models
+        return kwargs
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        
+        # Get all completed models for the context
+        completed_models = MLModel.objects.filter(status='completed').order_by('-created_at')
+        context['completed_models'] = completed_models
+        context['total_models'] = completed_models.count()
+        
+        return context
+    
+    def form_valid(self, form):
+        model_id = form.cleaned_data['model_id']
+        uploaded_file = form.cleaned_data['image']
+        
+        try:
+            model = get_object_or_404(MLModel, pk=model_id)
+            
+            # Import here to avoid circular imports
+            from .models import InferenceResult
+            import tempfile
+            import shutil
+            from django.conf import settings
+            
+            # Create inference result record
+            inference_result = InferenceResult.objects.create(
+                model=model,
+                input_image=uploaded_file,
+                input_filename=uploaded_file.name,
+                inference_config={
+                    'threshold': form.cleaned_data.get('threshold', 0.5),
+                    'resolution': form.cleaned_data.get('resolution', 512),
+                    'confidence_threshold': form.cleaned_data.get('confidence_threshold', 0.5),
+                    'min_component_size': form.cleaned_data.get('min_component_size', 100),
+                    'morphology_kernel_size': form.cleaned_data.get('morphology_kernel_size', 3),
+                    'apply_opening': form.cleaned_data.get('apply_opening', True),
+                    'apply_closing': form.cleaned_data.get('apply_closing', True),
+                    'apply_dilation': form.cleaned_data.get('apply_dilation', False),
+                    'apply_erosion': form.cleaned_data.get('apply_erosion', False),
+                    'fill_holes': form.cleaned_data.get('fill_holes', True),
+                    'smooth_boundaries': form.cleaned_data.get('smooth_boundaries', False),
+                    'remove_border_objects': form.cleaned_data.get('remove_border_objects', False),
+                    'min_area_ratio': form.cleaned_data.get('min_area_ratio', 0.0),
+                    'max_area_ratio': form.cleaned_data.get('max_area_ratio', 1.0),
+                    'min_solidity': form.cleaned_data.get('min_solidity', 0.0),
+                    'min_eccentricity': form.cleaned_data.get('min_eccentricity', 0.0),
+                    'max_eccentricity': form.cleaned_data.get('max_eccentricity', 1.0),
+                    'use_adaptive_threshold': form.cleaned_data.get('use_adaptive_threshold', False),
+                    'use_tta': form.cleaned_data.get('use_tta', False),
+                    'tta_flip_horizontal': form.cleaned_data.get('tta_flip_horizontal', True),
+                    'tta_flip_vertical': form.cleaned_data.get('tta_flip_vertical', True),
+                    'tta_rotate_90': form.cleaned_data.get('tta_rotate_90', True),
+                    'tta_scale': form.cleaned_data.get('tta_scale', False),
+                    'model_type': getattr(model, 'model_type', 'unet'),
+                },
+                status='processing'
+            )
+            
+            try:
+                # Get model weights path - use selected checkpoint or default
+                selected_checkpoint = form.cleaned_data.get('checkpoint_path')
+                
+                if selected_checkpoint and os.path.exists(selected_checkpoint):
+                    # Use the specifically selected checkpoint
+                    model_weights_path = selected_checkpoint
+                    logger.info(f"Using selected checkpoint: {model_weights_path}")
+                else:
+                    # Use default model weights path
+                    model_weights_path = model.model_weights_path
+                    if not model_weights_path or not os.path.exists(model_weights_path):
+                        # Try to find weights in model directory
+                        if model.model_directory and os.path.exists(model.model_directory):
+                            for file in os.listdir(model.model_directory):
+                                if file.endswith('.pth'):
+                                    model_weights_path = os.path.join(model.model_directory, file)
+                                    break
+                    
+                    # Try to find the best model in MLflow artifacts if still not found
+                    if not model_weights_path or not os.path.exists(model_weights_path):
+                        if model.mlflow_run_id:
+                            mlflow_path = f"data/mlflow/{model.mlflow_run_id}/artifacts"
+                            # Look for final_model first, then best_model, then any model
+                            search_paths = [
+                                os.path.join(mlflow_path, "final_model", "weights", "*.pth"),
+                                os.path.join(mlflow_path, "checkpoints", "best_model", "**", "*.pth"),
+                                os.path.join(mlflow_path, "**", "*.pth"),
+                            ]
+                            
+                            import glob
+                            for pattern in search_paths:
+                                files = glob.glob(pattern, recursive=True)
+                                if files:
+                                    model_weights_path = files[0]  # Use first found
+                                    logger.info(f"Found model weights: {model_weights_path}")
+                                    break
+                
+                if not model_weights_path or not os.path.exists(model_weights_path):
+                    raise FileNotFoundError(f"Model weights not found for model {model.name}. Checked paths: {selected_checkpoint}, {model.model_weights_path}")
+                
+                # Create output directory for this inference
+                inference_output_dir = os.path.join(
+                    settings.MEDIA_ROOT, 
+                    'inference', 
+                    'outputs', 
+                    f'{inference_result.id}'
+                )
+                os.makedirs(inference_output_dir, exist_ok=True)
+                
+                # Run enhanced inference
+                logger.info(f"Starting enhanced inference for {uploaded_file.name} using model {model.name}")
+                
+                # Import and run enhanced inference
+                import sys
+                sys.path.append(os.path.join(settings.BASE_DIR, '..', 'ml'))
+                from ml.utils.enhanced_inference import run_enhanced_inference
+                
+                inference_config = inference_result.inference_config.copy()
+                inference_config['model_type'] = getattr(model, 'model_type', 'unet')
+                
+                # Determine device to use - respect force_cpu option
+                force_cpu = form.cleaned_data.get('force_cpu', False)
+                device = "cpu" if force_cpu or not torch.cuda.is_available() else "cuda"
+                
+                logger.info(f"Using device: {device} (force_cpu={force_cpu}, CUDA available={torch.cuda.is_available()})")
+                
+                results = run_enhanced_inference(
+                    model_path=model_weights_path,
+                    input_image_path=inference_result.input_image.path,
+                    output_dir=inference_output_dir,
+                    config=inference_config,
+                    device=device
+                )
+                
+                if results['status'] == 'completed':
+                    # Update inference result with actual results
+                    inference_result.processing_time = results['processing_time']
+                    inference_result.detected_objects_count = results['detected_objects_count']
+                    inference_result.total_area_pixels = results['total_area_pixels']
+                    inference_result.confidence_scores = results['confidence_scores']
+                    inference_result.status = 'completed'
+                    
+                    # Save output file paths if available
+                    if 'output_files' in results and results['output_files']:
+                        # Save overlay image to the model's output_overlay field
+                        if 'overlay' in results['output_files']:
+                            overlay_path = results['output_files']['overlay']
+                            # Convert absolute path to relative path for Django
+                            relative_overlay_path = os.path.relpath(overlay_path, settings.MEDIA_ROOT)
+                            inference_result.output_overlay.name = relative_overlay_path
+                        
+                        # Save mask image to the model's output_mask field  
+                        if 'segmentation_mask' in results['output_files']:
+                            mask_path = results['output_files']['segmentation_mask']
+                            relative_mask_path = os.path.relpath(mask_path, settings.MEDIA_ROOT)
+                            inference_result.output_mask.name = relative_mask_path
+                    
+                    inference_result.save()
+                    
+                    logger.info(f"Enhanced inference completed in {results['processing_time']:.2f}s for {uploaded_file.name}")
+                    
+                    messages.success(
+                        self.request, 
+                        f'Inference completed successfully in {results["processing_time"]:.2f}s! '
+                        f'Found {results["detected_objects_count"]} objects.'
+                    )
+                else:
+                    # Handle failed inference with better error reporting
+                    inference_result.status = 'failed'
+                    
+                    # Get error message
+                    user_error = results.get('error_message', 'Unknown error')
+                    technical_error = results.get('technical_error', user_error)
+                    
+                    # Store both errors
+                    inference_result.error_message = user_error
+                    # Store technical details in JSON config for debugging
+                    inference_result.inference_config['technical_error'] = technical_error
+                    inference_result.save()
+                    
+                    # Show user-friendly message
+                    messages.error(self.request, f'Inference failed: {user_error}')
+                    
+                    # For CUDA errors, suggest using CPU
+                    if 'cuda' in technical_error.lower() or 'nvidia' in technical_error.lower():
+                        messages.warning(self.request, 'Try selecting "Force CPU" in the advanced options.')
+                    
+                    return self.form_invalid(form)
+                
+                # Redirect to inference results view
+                return redirect('ml_manager:inference-result', pk=inference_result.pk)
+                
+            except Exception as e:
+                logger.error(f"Enhanced inference failed: {str(e)}")
+                inference_result.status = 'failed'
+                inference_result.error_message = str(e)
+                inference_result.save()
+                raise e
+                
+        except Exception as e:
+            messages.error(self.request, f'Inference failed: {str(e)}')
+            return self.form_invalid(form)
+
+
+class InferenceResultView(LoginRequiredMixin, DetailView):
+    """View to display inference results"""
+    model = None  # Will be set dynamically
+    template_name = 'ml_manager/inference_result.html'
+    context_object_name = 'inference_result'
+    
+    def get_object(self):
+        from .models import InferenceResult
+        from django.shortcuts import get_object_or_404
+        return get_object_or_404(InferenceResult, pk=self.kwargs['pk'])
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        inference_result = self.get_object()
+        
+        context['model'] = inference_result.model
+        context['inference_config'] = inference_result.inference_config
+        
+        # Add performance metrics
+        if inference_result.status == 'completed':
+            context['metrics'] = {
+                'objects_found': inference_result.detected_objects_count,
+                'total_area': inference_result.total_area_pixels,
+                'processing_time': inference_result.processing_time_display,
+                'avg_confidence': sum(inference_result.confidence_scores) / len(inference_result.confidence_scores) if inference_result.confidence_scores else 0,
+            }
+        
+        return context
+
+
+class InferenceResultListView(LoginRequiredMixin, ListView):
+    """View to list all inference results"""
+    template_name = 'ml_manager/inference_result_list.html'
+    context_object_name = 'inference_results'
+    paginate_by = 20
+    
+    def get_queryset(self):
+        from .models import InferenceResult
+        return InferenceResult.objects.select_related('model').order_by('-created_at')
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        
+        # Add summary statistics
+        from .models import InferenceResult
+        queryset = self.get_queryset()
+        
+        context['total_results'] = queryset.count()
+        context['completed_results'] = queryset.filter(status='completed').count()
+        context['failed_results'] = queryset.filter(status='failed').count()
+        
+        return context
 
 
 class ModelInferenceView(LoginRequiredMixin, FormView):
@@ -4791,5 +5236,80 @@ def generate_model_summary_api(request):
         return JsonResponse({
             'status': 'error',
             'message': f'Failed to generate model summary: {str(e)}'
+        })
+
+
+@require_http_methods(["GET"])
+def get_model_checkpoints_api(request):
+    """API endpoint to get available checkpoints for a model"""
+    model_id = request.GET.get('model_id')
+    
+    if not model_id:
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Model ID is required'
+        })
+    
+    try:
+        model = get_object_or_404(MLModel, id=model_id)
+        
+        import os
+        import glob
+        
+        checkpoint_choices = [{'value': '', 'label': 'Use best model (default)'}]
+        
+        # Look for checkpoints in MLflow directory
+        if model.mlflow_run_id:
+            mlflow_path = f"data/mlflow/{model.mlflow_run_id}/artifacts"
+            if os.path.exists(mlflow_path):
+                # Look for model files
+                patterns = [
+                    os.path.join(mlflow_path, "**", "*.pth"),
+                    os.path.join(mlflow_path, "**", "*.pt"),
+                    os.path.join(mlflow_path, "**", "model.pkl"),
+                ]
+                
+                for pattern in patterns:
+                    files = glob.glob(pattern, recursive=True)
+                    for file_path in files:
+                        # Create readable name from path
+                        rel_path = os.path.relpath(file_path, mlflow_path)
+                        name = rel_path.replace('/', ' → ')
+                        if 'epoch' in name.lower():
+                            name = f"Epoch checkpoint: {name}"
+                        elif 'final' in name.lower() or 'best' in name.lower():
+                            name = f"Final model: {name}"
+                        else:
+                            name = f"Model: {name}"
+                        
+                        checkpoint_choices.append({
+                            'value': file_path,
+                            'label': name
+                        })
+        
+        # Also look in model's data directory if it exists
+        model_dir = os.path.join("data", "models", str(model.id))
+        if os.path.exists(model_dir):
+            for root, dirs, files in os.walk(model_dir):
+                for file in files:
+                    if file.endswith(('.pth', '.pt', '.pkl')):
+                        file_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(file_path, model_dir)
+                        name = f"Model dir: {rel_path}"
+                        checkpoint_choices.append({
+                            'value': file_path,
+                            'label': name
+                        })
+        
+        return JsonResponse({
+            'status': 'success',
+            'checkpoints': checkpoint_choices
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting checkpoints for model {model_id}: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to get checkpoints: {str(e)}'
         })
 

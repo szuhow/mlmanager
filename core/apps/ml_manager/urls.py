@@ -13,6 +13,9 @@ urlpatterns = [
     path('model/<int:pk>/delete/', views.ModelDeleteView.as_view(), name='model-delete'),
     path('models/batch-delete/', views.batch_delete_models, name='batch-delete-models'),
     path('model/<int:pk>/inference/', views.ModelInferenceView.as_view(), name='model-inference'),
+    path('inference/', views.GeneralInferenceView.as_view(), name='general-inference'),
+    path('inference/results/', views.InferenceResultListView.as_view(), name='inference-results'),
+    path('inference/result/<int:pk>/', views.InferenceResultView.as_view(), name='inference-result'),
     path('model/<int:pk>/save-as-template/', views.SaveAsTemplateView.as_view(), name='save-as-template'),
     
     # Training template URLs
@@ -54,6 +57,9 @@ urlpatterns = [
     
     # Model preview endpoint
     path('api/model-summary/', views.generate_model_summary_api, name='api-model-summary'),
+    
+    # Model checkpoints API
+    path('api/model-checkpoints/', views.get_model_checkpoints_api, name='api-model-checkpoints'),
     
     # Training preview image URL  
     path('model/<int:model_id>/training-preview/<str:filename>', views.serve_training_preview_image, name='training-preview-image'),

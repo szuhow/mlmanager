@@ -1,0 +1,557 @@
+{% extends 'ml_manager/base.html' %}
+{% load static %}
+
+{% block title %}Model Inference{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h1><i class="fas fa-magic"></i> Model Inference</h1>
+                <nav aria-label="breadcrumb">
+                    <ol class="breadcrumb">
+                        <li class="breadcrumb-item"><a href="{% url 'ml_manager:model-list' %}">Models</a></li>
+                        <li class="breadcrumb-item active">Inference</li>
+                    </ol>
+                </nav>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Available Models Panel -->
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="fas fa-brain"></i> Available Models ({{ total_models }})</h5>
+                </div>
+                <div class="card-body">
+                    {% if completed_models %}
+                        <div class="list-group">
+                            {% for model in completed_models %}
+                            <div class="list-group-item">
+                                <div class="d-flex w-100 justify-content-between">
+                                    <h6 class="mb-1">{{ model.name }}</h6>
+                                    <small class="text-muted">ID: {{ model.id }}</small>
+                                </div>
+                                <p class="mb-1">
+                                    <small class="text-muted">
+                                        Created: {{ model.created_at|date:"M d, Y" }}
+                                    </small>
+                                </p>
+                                {% if model.best_val_dice or model.best_val_iou %}
+                                <div class="mb-1">
+                                    {% if model.best_val_dice and model.best_val_dice > 0 %}
+                                        <span class="badge bg-info">Dice: {{ model.best_val_dice|floatformat:3 }}</span>
+                                    {% endif %}
+                                    {% if model.best_val_iou and model.best_val_iou > 0 %}
+                                        <span class="badge bg-success">IoU: {{ model.best_val_iou|floatformat:3 }}</span>
+                                    {% endif %}
+                                </div>
+                                {% endif %}
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <a href="{% url 'ml_manager:model-detail' model.id %}" class="btn btn-outline-primary btn-sm">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
+                                    <a href="{% url 'ml_manager:model-inference' model.id %}" class="btn btn-outline-success btn-sm">
+                                        <i class="fas fa-magic"></i> Use
+                                    </a>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <div class="text-center text-muted py-4">
+                            <i class="fas fa-brain fa-3x mb-3"></i>
+                            <p>No trained models available for inference.</p>
+                            <a href="{% url 'ml_manager:start-training' %}" class="btn btn-primary">
+                                <i class="fas fa-plus"></i> Start Training
+                            </a>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Inference Form Panel -->
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="fas fa-upload"></i> Run Inference</h5>
+                </div>
+                <div class="card-body">
+                    {% if completed_models %}
+                        <form method="post" enctype="multipart/form-data">
+                            {% csrf_token %}
+                            
+                            <!-- Model Selection -->
+                            <div class="mb-3">
+                                <label for="{{ form.model_id.id_for_label }}" class="form-label">
+                                    {{ form.model_id.label }}
+                                </label>
+                                {{ form.model_id }}
+                                {% if form.model_id.help_text %}
+                                    <div class="form-text">{{ form.model_id.help_text }}</div>
+                                {% endif %}
+                                {% if form.model_id.errors %}
+                                    <div class="invalid-feedback d-block">
+                                        {{ form.model_id.errors }}
+                                    </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Checkpoint Selection -->
+                            {% if form.checkpoint_path %}
+                            <div class="mb-3">
+                                <label for="{{ form.checkpoint_path.id_for_label }}" class="form-label">
+                                    {{ form.checkpoint_path.label }}
+                                </label>
+                                {{ form.checkpoint_path }}
+                                {% if form.checkpoint_path.help_text %}
+                                    <div class="form-text">{{ form.checkpoint_path.help_text }}</div>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+
+                            <!-- Image Upload -->
+                            <div class="mb-3">
+                                <label for="{{ form.image.id_for_label }}" class="form-label">
+                                    {{ form.image.label }}
+                                </label>
+                                {{ form.image }}
+                                {% if form.image.help_text %}
+                                    <div class="form-text">{{ form.image.help_text }}</div>
+                                {% endif %}
+                                {% if form.image.errors %}
+                                    <div class="invalid-feedback d-block">
+                                        {{ form.image.errors }}
+                                    </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Advanced Options -->
+                            <div class="accordion mb-3" id="advancedOptions">
+                                <div class="accordion-item">
+                                    <h2 class="accordion-header" id="headingAdvanced">
+                                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseAdvanced">
+                                            <i class="fas fa-cogs"></i>&nbsp; Advanced Configuration
+                                        </button>
+                                    </h2>
+                                    <div id="collapseAdvanced" class="accordion-collapse collapse" data-bs-parent="#advancedOptions">
+                                        <div class="accordion-body">
+                                            <!-- Basic Settings -->
+                                            <div class="card mb-3">
+                                                <div class="card-header">
+                                                    <h6 class="mb-0"><i class="fas fa-sliders-h"></i> Basic Settings</h6>
+                                                </div>
+                                                <div class="card-body">
+                                                    <div class="row">
+                                                        <div class="col-md-4">
+                                                            <div class="mb-3">
+                                                                <label for="{{ form.resolution.id_for_label }}" class="form-label">
+                                                                    {{ form.resolution.label }}
+                                                                </label>
+                                                                {{ form.resolution }}
+                                                                {% if form.resolution.help_text %}
+                                                                    <div class="form-text">{{ form.resolution.help_text }}</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                        
+                                                        <div class="col-md-4">
+                                                            <div class="mb-3 mt-4 form-check">
+                                                                {{ form.force_cpu }}
+                                                                <label for="{{ form.force_cpu.id_for_label }}" class="form-check-label">
+                                                                    {{ form.force_cpu.label }}
+                                                                </label>
+                                                                {% if form.force_cpu.help_text %}
+                                                                    <div class="form-text">{{ form.force_cpu.help_text }}</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <div class="mb-3">
+                                                                <label for="{{ form.threshold.id_for_label }}" class="form-label">
+                                                                    {{ form.threshold.label }}
+                                                                </label>
+                                                                {{ form.threshold }}
+                                                                {% if form.threshold.help_text %}
+                                                                    <div class="form-text">{{ form.threshold.help_text }}</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <div class="mb-3">
+                                                                <label for="{{ form.confidence_threshold.id_for_label }}" class="form-label">
+                                                                    {{ form.confidence_threshold.label }}
+                                                                </label>
+                                                                {{ form.confidence_threshold }}
+                                                                {% if form.confidence_threshold.help_text %}
+                                                                    <div class="form-text">{{ form.confidence_threshold.help_text }}</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="row">
+                                                        <div class="col-md-6">
+                                                            <div class="form-check form-switch mb-2">
+                                                                {{ form.use_adaptive_threshold }}
+                                                                <label class="form-check-label" for="{{ form.use_adaptive_threshold.id_for_label }}">
+                                                                    {{ form.use_adaptive_threshold.label }}
+                                                                </label>
+                                                            </div>
+                                                            {% if form.use_adaptive_threshold.help_text %}
+                                                                <small class="form-text text-muted">{{ form.use_adaptive_threshold.help_text }}</small>
+                                                            {% endif %}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <!-- Morphological Operations -->
+                                            <div class="card mb-3">
+                                                <div class="card-header">
+                                                    <h6 class="mb-0"><i class="fas fa-shapes"></i> Morphological Operations</h6>
+                                                </div>
+                                                <div class="card-body">
+                                                    <div class="row">
+                                                        <div class="col-md-6">
+                                                            <div class="mb-3">
+                                                                <label for="{{ form.morphology_kernel_size.id_for_label }}" class="form-label">
+                                                                    {{ form.morphology_kernel_size.label }}
+                                                                </label>
+                                                                {{ form.morphology_kernel_size }}
+                                                                {% if form.morphology_kernel_size.help_text %}
+                                                                    <div class="form-text">{{ form.morphology_kernel_size.help_text }}</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="row">
+                                                        <div class="col-md-3">
+                                                            <div class="form-check form-switch mb-2">
+                                                                {{ form.apply_opening }}
+                                                                <label class="form-check-label" for="{{ form.apply_opening.id_for_label }}">
+                                                                    {{ form.apply_opening.label }}
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <div class="form-check form-switch mb-2">
+                                                                {{ form.apply_closing }}
+                                                                <label class="form-check-label" for="{{ form.apply_closing.id_for_label }}">
+                                                                    {{ form.apply_closing.label }}
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <div class="form-check form-switch mb-2">
+                                                                {{ form.apply_dilation }}
+                                                                <label class="form-check-label" for="{{ form.apply_dilation.id_for_label }}">
+                                                                    {{ form.apply_dilation.label }}
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <div class="form-check form-switch mb-2">
+                                                                {{ form.apply_erosion }}
+                                                                <label class="form-check-label" for="{{ form.apply_erosion.id_for_label }}">
+                                                                    {{ form.apply_erosion.label }}
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="row">
+                                                        <div class="col-md-4">
+                                                            <div class="form-check form-switch mb-2">
+                                                                {{ form.fill_holes }}
+                                                                <label class="form-check-label" for="{{ form.fill_holes.id_for_label }}">
+                                                                    {{ form.fill_holes.label }}
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <div class="form-check form-switch mb-2">
+                                                                {{ form.smooth_boundaries }}
+                                                                <label class="form-check-label" for="{{ form.smooth_boundaries.id_for_label }}">
+                                                                    {{ form.smooth_boundaries.label }}
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <div class="form-check form-switch mb-2">
+                                                                {{ form.remove_border_objects }}
+                                                                <label class="form-check-label" for="{{ form.remove_border_objects.id_for_label }}">
+                                                                    {{ form.remove_border_objects.label }}
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <!-- Component Filtering -->
+                                            <div class="card mb-3">
+                                                <div class="card-header">
+                                                    <h6 class="mb-0"><i class="fas fa-filter"></i> Component Filtering</h6>
+                                                </div>
+                                                <div class="card-body">
+                                                    <div class="row">
+                                                        <div class="col-md-4">
+                                                            <div class="mb-3">
+                                                                <label for="{{ form.min_component_size.id_for_label }}" class="form-label">
+                                                                    {{ form.min_component_size.label }}
+                                                                </label>
+                                                                {{ form.min_component_size }}
+                                                                {% if form.min_component_size.help_text %}
+                                                                    <div class="form-text">{{ form.min_component_size.help_text }}</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <div class="mb-3">
+                                                                <label for="{{ form.min_area_ratio.id_for_label }}" class="form-label">
+                                                                    {{ form.min_area_ratio.label }}
+                                                                </label>
+                                                                {{ form.min_area_ratio }}
+                                                                {% if form.min_area_ratio.help_text %}
+                                                                    <div class="form-text">{{ form.min_area_ratio.help_text }}</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <div class="mb-3">
+                                                                <label for="{{ form.max_area_ratio.id_for_label }}" class="form-label">
+                                                                    {{ form.max_area_ratio.label }}
+                                                                </label>
+                                                                {{ form.max_area_ratio }}
+                                                                {% if form.max_area_ratio.help_text %}
+                                                                    <div class="form-text">{{ form.max_area_ratio.help_text }}</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="row">
+                                                        <div class="col-md-4">
+                                                            <div class="mb-3">
+                                                                <label for="{{ form.min_solidity.id_for_label }}" class="form-label">
+                                                                    {{ form.min_solidity.label }}
+                                                                </label>
+                                                                {{ form.min_solidity }}
+                                                                {% if form.min_solidity.help_text %}
+                                                                    <div class="form-text">{{ form.min_solidity.help_text }}</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <div class="mb-3">
+                                                                <label for="{{ form.min_eccentricity.id_for_label }}" class="form-label">
+                                                                    {{ form.min_eccentricity.label }}
+                                                                </label>
+                                                                {{ form.min_eccentricity }}
+                                                                {% if form.min_eccentricity.help_text %}
+                                                                    <div class="form-text">{{ form.min_eccentricity.help_text }}</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <div class="mb-3">
+                                                                <label for="{{ form.max_eccentricity.id_for_label }}" class="form-label">
+                                                                    {{ form.max_eccentricity.label }}
+                                                                </label>
+                                                                {{ form.max_eccentricity }}
+                                                                {% if form.max_eccentricity.help_text %}
+                                                                    <div class="form-text">{{ form.max_eccentricity.help_text }}</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <!-- Test Time Augmentation -->
+                                            <div class="card mb-3">
+                                                <div class="card-header">
+                                                    <h6 class="mb-0"><i class="fas fa-magic"></i> Test Time Augmentation (TTA)</h6>
+                                                </div>
+                                                <div class="card-body">
+                                                    <div class="row">
+                                                        <div class="col-md-12">
+                                                            <div class="form-check form-switch mb-3">
+                                                                {{ form.use_tta }}
+                                                                <label class="form-check-label" for="{{ form.use_tta.id_for_label }}">
+                                                                    {{ form.use_tta.label }}
+                                                                </label>
+                                                            </div>
+                                                            {% if form.use_tta.help_text %}
+                                                                <small class="form-text text-muted">{{ form.use_tta.help_text }}</small>
+                                                            {% endif %}
+                                                        </div>
+                                                    </div>
+                                                    <div class="row">
+                                                        <div class="col-md-3">
+                                                            <div class="form-check mb-2">
+                                                                {{ form.tta_flip_horizontal }}
+                                                                <label class="form-check-label" for="{{ form.tta_flip_horizontal.id_for_label }}">
+                                                                    {{ form.tta_flip_horizontal.label }}
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <div class="form-check mb-2">
+                                                                {{ form.tta_flip_vertical }}
+                                                                <label class="form-check-label" for="{{ form.tta_flip_vertical.id_for_label }}">
+                                                                    {{ form.tta_flip_vertical.label }}
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <div class="form-check mb-2">
+                                                                {{ form.tta_rotate_90 }}
+                                                                <label class="form-check-label" for="{{ form.tta_rotate_90.id_for_label }}">
+                                                                    {{ form.tta_rotate_90.label }}
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <div class="form-check mb-2">
+                                                                {{ form.tta_scale }}
+                                                                <label class="form-check-label" for="{{ form.tta_scale.id_for_label }}">
+                                                                    {{ form.tta_scale.label }}
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Submit Button -->
+                            <div class="d-grid">
+                                <button type="submit" class="btn btn-primary btn-lg">
+                                    <i class="fas fa-magic"></i> Run Inference
+                                </button>
+                            </div>
+                        </form>
+                    {% else %}
+                        <div class="text-center text-muted py-4">
+                            <i class="fas fa-exclamation-triangle fa-3x mb-3"></i>
+                            <h5>No Models Available</h5>
+                            <p>You need to train a model before running inference.</p>
+                            <a href="{% url 'ml_manager:start-training' %}" class="btn btn-primary">
+                                <i class="fas fa-plus"></i> Start Training
+                            </a>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.list-group-item {
+    border-left: 4px solid #28a745;
+    margin-bottom: 0.5rem;
+    border-radius: 0.5rem !important;
+}
+
+.list-group-item:hover {
+    background-color: #f8f9fa;
+    transform: translateX(2px);
+    transition: all 0.2s ease;
+}
+
+.accordion-button {
+    background-color: #f8f9fa;
+    border: none;
+}
+
+.accordion-button:not(.collapsed) {
+    background-color: #e3f2fd;
+    box-shadow: none;
+}
+
+.form-control, .form-select {
+    border-radius: 0.5rem;
+}
+
+.btn {
+    border-radius: 0.5rem;
+}
+
+.card {
+    border-radius: 1rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+</style>
+
+<script>
+// Update checkpoints when model is selected
+document.addEventListener('DOMContentLoaded', function() {
+    const modelSelect = document.getElementById('id_model_id');
+    const checkpointSelect = document.getElementById('id_checkpoint_path');
+    
+    if (modelSelect && checkpointSelect) {
+        modelSelect.addEventListener('change', function() {
+            const modelId = this.value;
+            
+            if (!modelId) {
+                checkpointSelect.innerHTML = '<option value="">Select model first...</option>';
+                checkpointSelect.disabled = true;
+                return;
+            }
+            
+            // Show loading state
+            checkpointSelect.innerHTML = '<option value="">Loading checkpoints...</option>';
+            checkpointSelect.disabled = true;
+            
+            // Fetch checkpoints for selected model
+            fetch(`{% url 'ml_manager:api-model-checkpoints' %}?model_id=${modelId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        // Clear existing options
+                        checkpointSelect.innerHTML = '';
+                        
+                        // Add checkpoint options
+                        data.checkpoints.forEach(checkpoint => {
+                            const option = document.createElement('option');
+                            option.value = checkpoint.value;
+                            option.textContent = checkpoint.label;
+                            checkpointSelect.appendChild(option);
+                        });
+                        
+                        checkpointSelect.disabled = false;
+                        
+                        // Add visual feedback
+                        const checkpointCount = data.checkpoints.length - 1; // Exclude "Use best model"
+                        if (checkpointCount > 0) {
+                            const label = checkpointSelect.parentElement.querySelector('label');
+                            if (label) {
+                                label.innerHTML = `Checkpoint (Optional) <span class="badge bg-info">${checkpointCount} available</span>`;
+                            }
+                        }
+                    } else {
+                        checkpointSelect.innerHTML = '<option value="">Error loading checkpoints</option>';
+                        console.error('Error loading checkpoints:', data.message);
+                    }
+                })
+                .catch(error => {
+                    checkpointSelect.innerHTML = '<option value="">Error loading checkpoints</option>';
+                    console.error('Error fetching checkpoints:', error);
+                });
+        });
+        
+        // Trigger initial load if model is already selected
+        if (modelSelect.value) {
+            modelSelect.dispatchEvent(new Event('change'));
+        }
+    }
+});
+</script>
+{% endblock %}

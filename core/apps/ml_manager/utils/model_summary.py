@@ -27,11 +27,29 @@ def generate_model_summary(model_type: str, input_shape: Tuple[int, ...] = (1, 2
     # If resolution is provided, use it for input shape
     if resolution:
         input_shape = (input_shape[0], resolution, resolution)
+        
+    # Check if this is a MONAI model - they have different parameter counts
+    is_monai_model = model_type.lower() in ['monai_unet', 'unet']
+    
     try:
         from ml.utils.architecture_registry import get_model_class, get_default_registry
         
-        # First try direct lookup
-        model_class = get_model_class(model_type)
+        # Special handling for MONAI UNet - use accurate model
+        if is_monai_model:
+            try:
+                # Try to import the actual MONAI model creator
+                from ml.utils.monai_utils import get_monai_unet
+                logger.info("Using actual MONAI UNet model for accurate parameter count")
+                model_class = get_monai_unet
+            except ImportError:
+                logger.warning("Could not import MONAI UNet directly, continuing with registry lookup")
+                model_class = None
+        else:
+            model_class = None
+            
+        # Only try direct lookup if we didn't get a model class from MONAI
+        if not model_class:
+            model_class = get_model_class(model_type)
         
         # If not found, create specialized fallback models
         if not model_class:
@@ -99,6 +117,16 @@ def generate_model_summary(model_type: str, input_shape: Tuple[int, ...] = (1, 2
                         'monai_unet': ['monai_unet', 'unet', 'local_unet'],
                         'attention_unet': ['attention_unet', 'local_attention_unet', 'unet'],
                     }
+                    
+                    # Special handling for MONAI UNet - use more accurate representation
+                    if model_type.lower() == 'monai_unet' or model_type.lower() == 'unet':
+                        try:
+                            # Try to import actual MONAI UNet model
+                            from ml.utils.monai_utils import get_monai_unet
+                            model_class = get_monai_unet
+                            logger.info("Using actual MONAI UNet implementation for preview")
+                        except ImportError:
+                            logger.warning("Could not import MONAI UNet, falling back to generic model")
                     
                     alternative_keys = model_mapping.get(model_type.lower(), ['unet', 'local_unet'])
                     for key in alternative_keys:
