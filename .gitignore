@@ -167,3 +167,6 @@ data/*
 data/datasets/*
 !data/datasets/coronary_dataset.py
 core/data/*
+.vscode/
+# add .DS_Store to ignore list
+.DS_Store
