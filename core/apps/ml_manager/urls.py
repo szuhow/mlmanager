@@ -55,6 +55,10 @@ urlpatterns = [
     path('api/force-end-all-runs/', views.force_end_all_mlflow_runs, name='api-force-end-all-runs'),
     path('api/test-mlflow/', views.test_mlflow_connection, name='api-test-mlflow'),
     
+    # MLflow experiments management
+    path('api/mlflow-experiments/', views.get_mlflow_experiments, name='api-get-mlflow-experiments'),
+    path('api/create-mlflow-experiment/', views.create_mlflow_experiment_api, name='api-create-mlflow-experiment'),
+    
     # Model preview endpoint
     path('api/model-summary/', views.generate_model_summary_api, name='api-model-summary'),
     

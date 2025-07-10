@@ -5,7 +5,7 @@
             "label": "Enhanced ML Manager: Start All Services",
             "type": "shell",
             "command": "make",
-            "args": ["enhanced-start"],
+            "args": ["start-cpu"],
             "group": "build",
             "isBackground": false,
             "presentation": {
@@ -22,7 +22,7 @@
             "label": "Enhanced ML Manager: Stop All Services",
             "type": "shell",
             "command": "make",
-            "args": ["enhanced-stop"],
+            "args": ["stop-cpu"],
             "group": "build",
             "isBackground": false,
             "presentation": {
@@ -37,7 +37,7 @@
             "label": "Enhanced ML Manager: Show Logs",
             "type": "shell",
             "command": "make",
-            "args": ["enhanced-logs"],
+            "args": ["logs-cpu"],
             "group": "build",
             "isBackground": true,
             "presentation": {
@@ -52,7 +52,7 @@
             "label": "Enhanced ML Manager: Django Logs",
             "type": "shell",
             "command": "make",
-            "args": ["enhanced-logs-django"],
+            "args": ["logs-django-cpu"],
             "group": "build",
             "isBackground": true,
             "presentation": {
@@ -67,7 +67,7 @@
             "label": "Enhanced ML Manager: Restart Services",
             "type": "shell",
             "command": "make",
-            "args": ["enhanced-restart"],
+            "args": ["restart-cpu"],
             "group": "build",
             "isBackground": false,
             "presentation": {
@@ -96,7 +96,7 @@
             "label": "Django: Migrate Database",
             "type": "shell",
             "command": "docker",
-            "args": ["compose", "-f", "docker-compose.enhanced.yml", "exec", "django", "python", "manage.py", "migrate"],
+            "args": ["compose", "-f", "docker-compose.cpu.yml", "exec", "django", "python", "manage.py", "migrate"],
             "group": "build",
             "isBackground": false,
             "presentation": {
@@ -111,7 +111,7 @@
             "label": "Django: Create Superuser",
             "type": "shell",
             "command": "docker",
-            "args": ["compose", "-f", "docker-compose.enhanced.yml", "exec", "django", "python", "manage.py", "createsuperuser"],
+            "args": ["compose", "-f", "docker-compose.cpu.yml", "exec", "django", "python", "manage.py", "createsuperuser"],
             "group": "build",
             "isBackground": false,
             "presentation": {

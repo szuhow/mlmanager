@@ -1,5 +1,5 @@
 """
-ML training services.
+ML training services with Celery integration.
 """
 
 import subprocess
@@ -11,55 +11,66 @@ from ..utils.mlflow_utils import setup_mlflow_experiment
 
 
 class MLTrainingService:
-    """Service for handling ML model training."""
+    """Service for handling ML model training with Celery."""
     
     def __init__(self, model_id):
         self.model = MLModel.objects.get(id=model_id)
         
     def start_training(self, training_params):
-        """Start training process for the model."""
-        # Setup MLflow experiment
-        experiment_id = setup_mlflow_experiment(self.model.name)
-        
-        # Update model status
-        self.model.status = 'loading'
-        self.model.save()
-        
-        # Prepare training command
-        training_script = Path(settings.BASE_DIR).parent / 'ml' / 'training' / 'train.py'
-        
-        command = [
-            sys.executable,
-            str(training_script),
-            '--mode=train',
-            f'--model-id={self.model.id}',
-            f'--experiment-id={experiment_id}',
-            f'--model-type={training_params.get("model_type", "unet")}',
-            f'--data-path={training_params.get("data_path")}',
-            f'--batch-size={training_params.get("batch_size", 32)}',
-            f'--epochs={training_params.get("epochs", 10)}',
-            f'--learning-rate={training_params.get("learning_rate", 0.001)}',
-        ]
-        
-        # Start training process
+        """Start training process for the model using Celery."""
         try:
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            # Import Celery task
+            from ..tasks.tasks import train_model_task
             
-            # Store process ID for monitoring
-            self.model.training_process_id = process.pid
-            self.model.status = 'training'
+            # DON'T setup MLflow experiment here - it will be handled in Celery task
+            # based on user's experiment selection from the form
+            
+            # Update model status
+            self.model.status = 'training'  # Changed from 'loading' to 'training' for consistency
             self.model.save()
             
-            return {'success': True, 'process_id': process.pid}
+            # Start training task asynchronously
+            task = train_model_task.delay(self.model.id, training_params)
+            
+            # Store only task ID, not full logs
+            self.model.training_logs = f"Training started - Task ID: {task.id}. Logs are saved to files in model directory."
+            self.model.celery_task_id = task.id  # Add task_id to model if field exists
+            self.model.save()
+            
+            return {
+                'success': True, 
+                'task_id': task.id,
+                'model_id': self.model.id,
+                'status': 'queued'
+            }
             
         except Exception as e:
             self.model.status = 'failed'
+            self.model.training_logs = f"Training failed to start: {str(e)}. Check logs in model directory for details."
             self.model.save()
+            return {'success': False, 'error': str(e)}
+    
+    def stop_training(self):
+        """Stop training process using Celery."""
+        try:
+            # Import Celery task
+            from ..tasks.tasks import stop_training_task
+            
+            # Start stop task asynchronously
+            task = stop_training_task.delay(self.model.id)
+            
+            # Update model status
+            self.model.status = 'stopping'
+            self.model.save()
+            
+            return {
+                'success': True,
+                'task_id': task.id,
+                'model_id': self.model.id,
+                'status': 'stopping'
+            }
+            
+        except Exception as e:
             return {'success': False, 'error': str(e)}
     
     def get_training_status(self):
@@ -69,4 +80,8 @@ class MLTrainingService:
             'progress': getattr(self.model, 'training_progress', 0),
             'current_epoch': getattr(self.model, 'current_epoch', 0),
             'total_epochs': getattr(self.model, 'total_epochs', 0),
+            'train_loss': getattr(self.model, 'train_loss', 0.0),
+            'val_loss': getattr(self.model, 'val_loss', 0.0),
+            'train_dice': getattr(self.model, 'train_dice', 0.0),
+            'val_dice': getattr(self.model, 'val_dice', 0.0),
         }

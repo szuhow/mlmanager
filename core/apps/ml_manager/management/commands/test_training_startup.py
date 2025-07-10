@@ -1,5 +1,5 @@
 from django.core.management.base import BaseCommand
-from ml_manager.models import MLModel
+from core.apps.ml_manager.models import MLModel
 import subprocess
 import time
 import sys

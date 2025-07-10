@@ -166,3 +166,4 @@ data/*
 !data/datasets/
 data/datasets/*
 !data/datasets/coronary_dataset.py
+core/data/*

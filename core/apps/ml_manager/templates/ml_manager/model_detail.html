@@ -158,13 +158,6 @@
                 <i class="fas fa-sync-alt"></i>
             </button>
             
-            <!-- Stop training button (only show if training) -->
-            {% if model.status == 'training' %}
-            <button class="btn btn-outline-danger btn-sm" id="stopTrainingBtn" title="Stop Training">
-                <i class="fas fa-stop"></i> Stop
-            </button>
-            {% endif %}
-            
             <button class="btn btn-outline-secondary" onclick="openLogsModal()">
                 <i class="fas fa-file-alt me-1"></i>
                 Training Logs
@@ -176,36 +169,7 @@
                 <span class="badge bg-danger ms-1">Failed</span>
                 {% endif %}
             </button>
-            
-            <div class="dropdown d-inline-block">
-                <button class="btn btn-primary dropdown-toggle" type="button" id="inferenceDropdown" data-bs-toggle="dropdown" aria-expanded="false">
-                    <i class="fas fa-brain me-1"></i> Run Inference
-                </button>
-                <ul class="dropdown-menu" aria-labelledby="inferenceDropdown">
-                    <li><a class="dropdown-item" href="{% url 'ml_manager:model-inference' model.pk %}?checkpoint=best">
-                        <i class="fas fa-star me-1 text-warning"></i> Best Checkpoint
-                    </a></li>
-                    <li><a class="dropdown-item" href="{% url 'ml_manager:model-inference' model.pk %}?checkpoint=final">
-                        <i class="fas fa-flag-checkered me-1 text-success"></i> Final Checkpoint
-                    </a></li>
-                    {% if checkpoints|length > 2 %} {# If we have more than just the best and final options #}
-                        <li><hr class="dropdown-divider"></li>
-                        <li><h6 class="dropdown-header">Specific Checkpoints</h6></li>
-                        {% for checkpoint in checkpoints %}
-                            {% if checkpoint.type != 'best' and checkpoint.type != 'final' %}
-                                <li><a class="dropdown-item" href="{% url 'ml_manager:model-inference' model.pk %}?checkpoint={{ checkpoint.file_name }}">
-                                    <i class="{{ checkpoint.icon_class }} me-1"></i> {{ checkpoint.name }}
-                                </a></li>
-                            {% endif %}
-                        {% endfor %}
-                    {% endif %}
-                    <li><hr class="dropdown-divider"></li>
-                    <li><a class="dropdown-item" href="{% url 'ml_manager:general-inference' %}?model_id={{ model.pk }}">
-                        <i class="fas fa-cog me-1 text-secondary"></i> Advanced Options
-                    </a></li>
-                </ul>
-            </div>
-            
+            <a href="{% url 'ml_manager:model-inference' model.pk %}" class="btn btn-primary">Run Inference</a>
             <a href="{% url 'ml_manager:model-list' %}" class="btn btn-secondary">Back to List</a>
         </div>
     </div>
@@ -257,32 +221,16 @@
                     <h5 class="card-title mb-0">Training Progress</h5>
                 </div>
                 <div class="card-body" id="training-progress">
-                    <!-- Progress bar - show for training and completed models -->
-                    {% if model.status == 'training' or model.status == 'completed' %}
+                    {% if model.status == 'training' %}
                     <div class="progress progress-enhanced mb-3">
-                        <div class="progress-bar {% if model.status == 'completed' %}bg-success{% endif %}" role="progressbar" 
-                             style="width: {% if model.status == 'completed' %}100{% else %}{{ progress_percentage|default:0 }}{% endif %}%"
-                             aria-valuenow="{% if model.status == 'completed' %}{{ model.total_epochs }}{% else %}{{ model.current_epoch }}{% endif %}" 
-                             aria-valuemin="0" 
-                             aria-valuemax="{{ model.total_epochs }}">
-                            {% if model.status == 'completed' %}
-                                Training Completed: {{ model.current_epoch }}/{{ model.total_epochs }} (100%)
-                            {% else %}
-                                Epoch {{ model.current_epoch }}/{{ model.total_epochs }} ({{ progress_percentage|default:0 }}%)
-                            {% endif %}
-                        </div>
-                    </div>
-                    {% elif model.status == 'failed' %}
-                    <div class="progress progress-enhanced mb-3">
-                        <div class="progress-bar bg-danger" role="progressbar" 
+                        <div class="progress-bar" role="progressbar" 
                              style="width: {{ progress_percentage|default:0 }}%"
                              aria-valuenow="{{ model.current_epoch }}" 
                              aria-valuemin="0" 
                              aria-valuemax="{{ model.total_epochs }}">
-                            Training Failed: {{ model.current_epoch }}/{{ model.total_epochs }} ({{ progress_percentage|default:0 }}%)
+                            Epoch {{ model.current_epoch }}/{{ model.total_epochs }} ({{ progress_percentage|default:0 }}%)
                         </div>
                     </div>
-                    {% endif %}
                     
                     <!-- Batch progress within current epoch -->
                     {% if model.total_batches_per_epoch > 0 %}
@@ -344,96 +292,6 @@
                         </div>
                     </div>
                     
-                    <!-- Performance Summary -->
-                    {# Always display performance summary #}
-                    <div class="mt-4 p-3 bg-light rounded">
-                        <h6 class="text-muted mb-3">
-                            <i class="fas fa-chart-line me-2"></i>Performance Summary
-                        </h6>
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="metric-item">
-                                    <span class="metric-label">Final Training Progress:</span>
-                                    <span class="metric-value">
-                                        {{ model.current_epoch }}/{{ model.total_epochs }} epochs
-                                        {% if model.status == 'completed' %}
-                                            <span class="badge bg-success ms-2">Complete</span>
-                                        {% elif model.status == 'failed' %}
-                                            <span class="badge bg-danger ms-2">Failed</span>
-                                        {% else %}
-                                            <span class="badge bg-warning ms-2">In Progress</span>
-                                        {% endif %}
-                                    </span>
-                                </div>
-                                {% if model.train_dice > 0 %}
-                                <div class="metric-item">
-                                    <span class="metric-label">
-                                        {% if model.training_data_info and model.training_data_info.dataset_type == 'arcade_classification' %}
-                                        Final Training Accuracy:
-                                        {% else %}
-                                        Final Training Dice:
-                                        {% endif %}
-                                    </span>
-                                    <span class="metric-value">
-                                        {{ model.train_dice|floatformat:4 }}
-                                        {% if model.train_dice >= 0.9 %}
-                                            <span class="text-success">📈 Excellent</span>
-                                        {% elif model.train_dice >= 0.8 %}
-                                            <span class="text-warning">👍 Good</span>
-                                        {% elif model.train_dice >= 0.7 %}
-                                            <span class="text-info">✓ Fair</span>
-                                        {% else %}
-                                            <span class="text-muted">⚠ Poor</span>
-                                        {% endif %}
-                                    </span>
-                                </div>
-                                {% endif %}
-                            </div>
-                            <div class="col-md-6">
-                                {# Always show the performance metric, even if 0 #}
-                                <div class="metric-item">
-                                    <span class="metric-label">
-                                        {% if model.training_data_info and model.training_data_info.dataset_type == 'arcade_classification' %}
-                                        Best Validation Accuracy:
-                                        {% else %}
-                                        Best Validation Dice:
-                                        {% endif %}
-                                    </span>
-                                    <span class="metric-value">
-                                        {{ model.best_val_dice|floatformat:4 }}
-                                        {% if model.best_val_dice >= 0.9 %}
-                                            <span class="text-success">🏆 Excellent</span>
-                                        {% elif model.best_val_dice >= 0.8 %}
-                                            <span class="text-warning">🥈 Good</span>
-                                        {% elif model.best_val_dice >= 0.7 %}
-                                            <span class="text-info">🥉 Fair</span>
-                                        {% elif model.best_val_dice > 0 %}
-                                            <span class="text-muted">⚠ Poor</span>
-                                        {% else %}
-                                            <span class="text-muted">No data yet</span>
-                                        {% endif %}
-                                    </span>
-                                </div>
-                                {% if model.val_loss > 0 %}
-                                <div class="metric-item">
-                                    <span class="metric-label">Final Validation Loss:</span>
-                                    <span class="metric-value">
-                                        {{ model.val_loss|floatformat:4 }}
-                                        {% if model.val_loss <= 0.1 %}
-                                            <span class="text-success">📉 Low</span>
-                                        {% elif model.val_loss <= 0.3 %}
-                                            <span class="text-warning">📊 Medium</span>
-                                        {% else %}
-                                            <span class="text-danger">📈 High</span>
-                                        {% endif %}
-                                    </span>
-                                </div>
-                                {% endif %}
-                            </div>
-                        </div>
-                    </div>
-                    {% endif %}
-                    
                     <div class="d-flex justify-content-between align-items-center">
                         <button id="stopTrainingBtn" class="btn btn-danger"
                                 {% if model.stop_requested %}disabled{% endif %}>
@@ -454,8 +312,8 @@
                             </div>
                         </div>
                     </div>
-                    
-                    <div class="alert alert-{{ model.status|yesno:'success,danger' }}" {% if model.status == 'training' %}style="display: none;"{% endif %}>
+                    {% else %}
+                    <div class="alert alert-{{ model.status|yesno:'success,danger' }}">
                         <strong>Training {{ model.status|title }}</strong>
                         {% if model.status == 'completed' %}
                             <br><small>Training completed successfully!</small>
@@ -487,6 +345,7 @@
                         </div>
                         {% endif %}
                     </div>
+                    {% endif %}
                     {% endif %}
                 </div>
             </div>
@@ -992,9 +851,8 @@
                             <i class="fas fa-info-circle me-2"></i>
                             Model architecture detected but summary generation failed: {{ architecture_details.model_summary_error }}
                         </div>
-                    {% elif architecture_details.has_model_info or architecture_details.model_summary %}
+                    {% elif architecture_details.model_summary %}
                         <!-- Model Summary Statistics -->
-                        {% if architecture_details.model_summary %}
                         <div class="row mb-4">
                             <div class="col-md-3">
                                 <div class="d-flex align-items-center">
@@ -1048,8 +906,6 @@
                                         <span class="badge bg-warning text-dark">
                                             {% if architecture_details.model_summary.input_shape %}
                                                 {{ architecture_details.model_summary.input_shape|join:"×" }}
-                                            {% elif architecture_details.input_shape %}
-                                                {{ architecture_details.input_shape.1 }}×{{ architecture_details.input_shape.2 }}
                                             {% else %}
                                                 256×256
                                             {% endif %}
@@ -1058,17 +914,6 @@
                                 </div>
                             </div>
                         </div>
-                        {% else %}
-                        <!-- Basic model info without detailed summary -->
-                        <div class="row mb-4">
-                            <div class="col-md-12">
-                                <div class="alert alert-info">
-                                    <i class="fas fa-info-circle me-2"></i>
-                                    Basic architecture information available. <a href="?include_summary=true" class="alert-link">Click here to load detailed model summary</a>.
-                                </div>
-                            </div>
-                        </div>
-                        {% endif %}
                         
                         <!-- Detailed Model Summary - Collapsible -->
                         {% if architecture_details.model_summary_text|default:'' %}
@@ -1340,10 +1185,26 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize unified manager
     window.modelDetailManager = new ModelDetailManager(modelId);
     
-    // Initialize epoch navigation if training images exist
+    // Initialize epoch navigation if training images exist and class is available
     const hasEpochImages = document.querySelectorAll('[data-epoch]').length > 0;
     if (hasEpochImages) {
-        window.epochNavigator = new EpochImageNavigator();
+        // Wait for all scripts to load before initializing
+        function initializeEpochNavigator(retries = 0) {
+            if (typeof EpochImageNavigator !== 'undefined') {
+                try {
+                    window.epochNavigator = new EpochImageNavigator();
+                    console.log('EpochImageNavigator initialized successfully');
+                } catch (error) {
+                    console.error('Error initializing EpochImageNavigator:', error);
+                }
+            } else if (retries < 10) {
+                // Retry up to 10 times with increasing delay
+                setTimeout(() => initializeEpochNavigator(retries + 1), 50 * (retries + 1));
+            } else {
+                console.warn('EpochImageNavigator not available after retries - training images navigation disabled');
+            }
+        }
+        initializeEpochNavigator();
     }
 });
 

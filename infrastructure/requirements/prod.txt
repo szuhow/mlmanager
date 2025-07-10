@@ -1,0 +1,16 @@
+-r base.txt
+
+# Production dependencies
+gunicorn>=20.1.0
+psycopg2-binary>=2.9.0
+whitenoise>=6.2.0
+sentry-sdk>=1.9.0
+uvicorn>=0.18.0
+
+# Enhanced Redis support
+django-redis>=5.4.0
+hiredis>=2.2.3
+
+# Production utilities
+django-cors-headers>=4.3.1
+django-cachalot>=2.6.1

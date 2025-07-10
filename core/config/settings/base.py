@@ -123,6 +123,27 @@ REST_FRAMEWORK = {
     ],
 }
 
+# Celery Configuration
+CELERY_BROKER_URL = get_env_variable('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = get_env_variable('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
+CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60  # 25 minutes
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
+
+# Celery beat configuration
+CELERY_BEAT_SCHEDULE = {
+    'cleanup-failed-trainings': {
+        'task': 'ml_manager.cleanup_failed_trainings',
+        'schedule': 300.0,  # Every 5 minutes
+    },
+}
+
 # Logging configuration
 LOGGING = {
     'version': 1,

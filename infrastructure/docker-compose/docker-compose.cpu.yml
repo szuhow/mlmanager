@@ -1,0 +1,122 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: coronary_experiments
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  django:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.django
+    volumes:
+      - ../..:/app
+      - ../../core/data:/app/core/data
+      - ../../core:/app/core
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - db
+      - mlflow
+    env_file:
+      - ../env/.env.cpu
+    restart: unless-stopped
+    working_dir: /app
+    shm_size: 2gb  # Increase shared memory to prevent bus errors with PyTorch DataLoader
+    command: >
+      sh -c "
+        cd core &&
+        python manage.py migrate &&
+        python manage.py collectstatic --noinput &&
+        python manage.py runserver 0.0.0.0:8000
+      "
+
+  celery-worker:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.django
+    volumes:
+      - ../..:/app
+      - ../../core/data:/app/core/data
+      - ../../core:/app/core
+    depends_on:
+      - redis
+      - db
+    env_file:
+      - ../env/.env.cpu
+    restart: unless-stopped
+    working_dir: /app
+    shm_size: 2gb  # Increase shared memory to prevent bus errors with PyTorch DataLoader
+    command: celery -A core.config worker --loglevel=info --concurrency=2
+
+  celery-beat:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.django
+    volumes:
+      - ../..:/app
+      - ../../core/data:/app/core/data
+      - ../../core:/app/core
+    depends_on:
+      - redis
+      - db
+    env_file:
+      - ../env/.env.cpu
+    restart: unless-stopped
+    working_dir: /app
+    command: celery -A core.config beat --loglevel=info
+
+  flower:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.django
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    env_file:
+      - ../env/.env.cpu
+    restart: unless-stopped
+    working_dir: /app
+    command: celery -A core.config flower --port=5555
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.12.1
+    container_name: mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=http://0.0.0.0:5000
+      - MLFLOW_ARTIFACT_ROOT=/mlflow/artifacts
+      - MLFLOW_BACKEND_STORE_URI=sqlite:////mlflow/data/mlflow.db
+    ports:
+      - "5000:5000"
+    volumes:
+      - ../../core/data/mlflow:/mlflow/artifacts
+      - ../../core/data/mlflow:/mlflow/data
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlflow/data/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  postgres_data:

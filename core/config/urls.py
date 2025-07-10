@@ -33,7 +33,7 @@ urlpatterns = [
     path('', redirect_to_ml, name='home'),
     path('admin/', admin.site.urls),
     path('ml/', include(('core.apps.ml_manager.urls', 'ml_manager'), namespace='ml_manager')),
-    path('datasets/', include(('core.apps.dataset_manager.urls', 'dataset_manager'), namespace='dataset_manager')),
+    # path('datasets/', include(('core.apps.dataset_manager.urls', 'dataset_manager'), namespace='dataset_manager')),  # Temporarily disabled
     
     # API endpoints
     path('api/ml/', include(('core.apps.ml_manager.api_urls', 'ml_manager_api'), namespace='ml_manager_api')),

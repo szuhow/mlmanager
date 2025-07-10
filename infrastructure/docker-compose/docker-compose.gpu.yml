@@ -1,0 +1,109 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: coronary_experiments
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  django:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.django.gpu
+    volumes:
+      - ../..:/app
+      - ../../data:/app/data
+      - ../../core:/app/core
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - db
+    env_file:
+      - ../env/.env.gpu
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: >
+      sh -c "
+        python manage.py migrate &&
+        python manage.py collectstatic --noinput &&
+        python manage.py runserver 0.0.0.0:8000
+      "
+
+  celery-worker:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.django.gpu
+    volumes:
+      - ../..:/app
+      - ../../data:/app/data
+      - ../../core:/app/core
+    depends_on:
+      - redis
+      - db
+    env_file:
+      - ../env/.env.gpu
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: celery -A config worker --loglevel=info --concurrency=1
+
+  celery-beat:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.django
+    volumes:
+      - ../..:/app
+      - ../../data:/app/data
+      - ../../core:/app/core
+    depends_on:
+      - redis
+      - db
+    env_file:
+      - ../env/.env.gpu
+    restart: unless-stopped
+    command: celery -A config beat --loglevel=info
+
+  flower:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.django
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    env_file:
+      - ../env/.env.gpu
+    restart: unless-stopped
+    command: celery -A config flower --port=5555
+
+volumes:
+  redis_data:
+  postgres_data:

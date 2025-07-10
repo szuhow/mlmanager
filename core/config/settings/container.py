@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-dev-key-change-in-production')
@@ -27,8 +27,8 @@ DJANGO_APPS = [
 ]
 
 LOCAL_APPS = [
-    'apps.ml_manager',
-    'apps.dataset_manager',
+    'core.apps.ml_manager',
+    'core.apps.dataset_manager',
 ]
 
 THIRD_PARTY_APPS = [
@@ -47,7 +47,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'config.urls'
+ROOT_URLCONF = 'core.config.urls'
 
 TEMPLATES = [
     {
@@ -65,14 +65,53 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'config.wsgi.application'
+WSGI_APPLICATION = 'core.config.wsgi.application'
 
-# Database
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'data' / 'db.sqlite3',
+# Database configuration for containers
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL:
+    import dj_database_url
+    DATABASES = {
+        'default': dj_database_url.parse(DATABASE_URL)
     }
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'data' / 'db.sqlite3',
+        }
+    }
+
+# Celery Configuration
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
+CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60  # 25 minutes
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
+
+# Celery Beat Configuration
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    'cleanup-failed-trainings': {
+        'task': 'ml_manager.cleanup_failed_trainings',
+        'schedule': crontab(minute=0, hour='*/4'),  # Every 4 hours
+        'options': {
+            'expires': 3600,  # Task expires after 1 hour
+        }
+    },
+    'system-health-check': {
+        'task': 'ml_manager.system_health_check',
+        'schedule': crontab(minute='*/15'),  # Every 15 minutes
+        'options': {
+            'expires': 900,  # Task expires after 15 minutes
+        }
+    },
 }
 
 # Password validation
@@ -101,62 +140,50 @@ USE_TZ = True
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [
-    BASE_DIR / 'core' / 'static',  # Use consistent path with base.py
+    BASE_DIR / 'static',
 ]
 
 # Media files
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'data' / 'media'
 
+# Base organized models directory
+BASE_ORGANIZED_MODELS_DIR = BASE_DIR / 'data' / 'models' / 'organized'
+
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# ==============================================
-# Enhanced ML Manager Settings
-# ==============================================
-ML_MANAGER_SETTINGS = {
-    'MAX_INFERENCE_IMAGES': int(os.environ.get('MAX_INFERENCE_IMAGES', 50)),
-    'TEMP_FILE_CLEANUP_HOURS': int(os.environ.get('TEMP_FILE_CLEANUP_HOURS', 24)),
-    'TRAINING_LOG_MAX_LINES': 1000,
-    
-    # Post-processing defaults
-    'DEFAULT_POST_PROCESSING': {
-        'threshold': float(os.environ.get('DEFAULT_THRESHOLD', 0.6)),
-        'min_component_size': int(os.environ.get('DEFAULT_MIN_COMPONENT_SIZE', 50)),
-        'morphology_kernel_size': int(os.environ.get('DEFAULT_MORPHOLOGY_KERNEL_SIZE', 3)),
-        'apply_opening': os.environ.get('ENABLE_MORPHOLOGICAL_OPENING', 'true').lower() == 'true',
-        'apply_closing': os.environ.get('ENABLE_MORPHOLOGICAL_CLOSING', 'true').lower() == 'true',
-        'confidence_threshold': float(os.environ.get('DEFAULT_CONFIDENCE_THRESHOLD', 0.6)),
-        'use_adaptive_threshold': os.environ.get('ENABLE_ADAPTIVE_THRESHOLD', 'false').lower() == 'true',
-    },
-    
-    # Enhanced loss function defaults
-    'DEFAULT_LOSS_CONFIG': {
-        'loss_function': os.environ.get('DEFAULT_LOSS_FUNCTION', 'combined_dice_focal'),
-        'dice_weight': float(os.environ.get('DEFAULT_DICE_WEIGHT', 0.7)),
-        'focal_alpha': float(os.environ.get('DEFAULT_FOCAL_ALPHA', 0.25)),
-        'focal_gamma': float(os.environ.get('DEFAULT_FOCAL_GAMMA', 2.0)),
-        'weight_decay': float(os.environ.get('DEFAULT_WEIGHT_DECAY', 1e-4)),
-        'dropout_rate': float(os.environ.get('DEFAULT_DROPOUT_RATE', 0.1)),
-    },
-    
-    # Training monitoring
-    'TRAINING_MONITORING': {
-        'log_interval': 10,
-        'save_checkpoint_interval': 5,
-        'max_checkpoints_keep': 5,
-        'early_stopping_patience': int(os.environ.get('DEFAULT_EARLY_STOPPING_PATIENCE', 15)),
-        'early_stopping_metric': os.environ.get('DEFAULT_EARLY_STOPPING_METRIC', 'val_dice_score'),
+# MLflow configuration
+MLFLOW_TRACKING_URI = os.environ.get('MLFLOW_TRACKING_URI', 'http://localhost:5000')
+BASE_MLRUNS_DIR = BASE_DIR / 'data' / 'mlflow'
+MLFLOW_ARTIFACT_ROOT = os.environ.get('MLFLOW_ARTIFACT_ROOT', str(BASE_MLRUNS_DIR))
+
+# REST Framework Configuration
+REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
+}
+
+# Cache Configuration
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': CELERY_BROKER_URL,
+        'TIMEOUT': 300,
     }
 }
 
-# MLflow configuration
-MLFLOW_TRACKING_URI = os.environ.get('MLFLOW_TRACKING_URI', 'http://mlflow:5000')
-MLFLOW_ARTIFACT_ROOT = os.environ.get('MLFLOW_ARTIFACT_ROOT', '/app/data/mlflow')
+# Use Redis for sessions
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+SESSION_CACHE_ALIAS = 'default'
 
-# ==============================================
 # Logging Configuration
-# ==============================================
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -172,9 +199,9 @@ LOGGING = {
     },
     'handlers': {
         'file': {
-            'level': os.environ.get('ML_MANAGER_LOG_LEVEL', 'INFO'),
+            'level': os.environ.get('LOG_LEVEL', 'INFO'),
             'class': 'logging.FileHandler',
-            'filename': '/app/logs/ml_manager.log',
+            'filename': BASE_DIR / 'data' / 'logs' / 'django.log',
             'formatter': 'verbose',
         },
         'console': {
@@ -183,71 +210,20 @@ LOGGING = {
             'formatter': 'simple',
         },
     },
+    'root': {
+        'handlers': ['console', 'file'],
+        'level': 'INFO',
+    },
     'loggers': {
-        'apps.ml_manager': {
-            'handlers': ['file', 'console'],
-            'level': os.environ.get('ML_MANAGER_LOG_LEVEL', 'INFO'),
-            'propagate': True,
-        },
         'django': {
-            'handlers': ['console'],
+            'handlers': ['console', 'file'],
             'level': os.environ.get('DJANGO_LOG_LEVEL', 'INFO'),
-            'propagate': True,
+            'propagate': False,
+        },
+        'core.apps.ml_manager': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': False,
         },
     },
 }
-
-# ==============================================
-# Security Settings
-# ==============================================
-# File upload settings
-FILE_UPLOAD_MAX_MEMORY_SIZE = int(os.environ.get('FILE_UPLOAD_MAX_MEMORY_SIZE', 10 * 1024 * 1024))  # 10MB
-DATA_UPLOAD_MAX_MEMORY_SIZE = int(os.environ.get('DATA_UPLOAD_MAX_MEMORY_SIZE', 50 * 1024 * 1024))  # 50MB
-FILE_UPLOAD_PERMISSIONS = 0o644
-
-# Model storage settings
-MODEL_STORAGE_SETTINGS = {
-    'ROOT_DIR': MEDIA_ROOT / 'models',
-    'CHECKPOINT_DIR': MEDIA_ROOT / 'checkpoints',
-    'INFERENCE_TEMP_DIR': MEDIA_ROOT / 'temp' / 'inference',
-    'LOG_DIR': BASE_DIR / 'logs',
-    'MAX_MODEL_SIZE': int(os.environ.get('MAX_MODEL_SIZE', 500 * 1024 * 1024)),  # 500MB
-}
-
-# Create necessary directories
-for directory in MODEL_STORAGE_SETTINGS.values():
-    if isinstance(directory, Path):
-        directory.mkdir(parents=True, exist_ok=True)
-
-# ==============================================
-# REST Framework Configuration
-# ==============================================
-REST_FRAMEWORK = {
-    'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated',
-    ],
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.SessionAuthentication',
-    ],
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 20,
-}
-
-# ==============================================
-# Cache Configuration (simplified - no Redis)
-# ==============================================
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'enhanced_ml_manager_cache',
-        'OPTIONS': {
-            'MAX_ENTRIES': 1000,
-            'CULL_FREQUENCY': 3,
-        },
-        'TIMEOUT': 300,  # 5 minutes default timeout
-    }
-}
-
-# Use Redis for sessions
-SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
-SESSION_CACHE_ALIAS = 'default'

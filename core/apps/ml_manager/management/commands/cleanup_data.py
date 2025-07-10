@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand
 from django.conf import settings
-from ml_manager.models import MLModel, Prediction, TrainingTemplate
+from core.apps.ml_manager.models import MLModel, Prediction, TrainingTemplate
 import mlflow
 import logging
 import os

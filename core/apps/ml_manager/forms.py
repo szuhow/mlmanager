@@ -23,7 +23,7 @@ def get_env_default(key, default_value, value_type=int):
 
 # Import the new architecture registry system
 try:
-    from ml.utils.architecture_registry import registry as architecture_registry, get_available_models
+    from core.apps.ml_manager.utils.architecture_registry import registry as architecture_registry, get_available_models
 except ImportError:
     # Fallback to legacy system if registry not available
     def get_available_models():
@@ -178,12 +178,50 @@ class TrainingForm(forms.Form):
         widget=forms.Select(attrs={'class': 'form-control', 'id': 'template-select'})
     )
     
+    # MLflow experiment selection
+    mlflow_experiment = forms.ChoiceField(
+        choices=[],  # Will be set dynamically in __init__
+        required=True,
+        initial='coronary-experiments',
+        label="MLflow Experiment",
+        help_text="Choose which MLflow experiment to track this training in",
+        widget=forms.Select(attrs={'class': 'form-control', 'id': 'mlflow-experiment-select'})
+    )
+    
+    # Option to create new experiment
+    create_new_experiment = forms.BooleanField(
+        required=False,
+        initial=False,
+        label="Create New Experiment",
+        help_text="Check to create a new MLflow experiment",
+        widget=forms.CheckboxInput(attrs={'class': 'form-check-input', 'id': 'create-new-experiment'})
+    )
+    
+    new_experiment_name = forms.CharField(
+        max_length=200,
+        required=False,
+        label="New Experiment Name",
+        help_text="Name for the new MLflow experiment (only if creating new)",
+        widget=forms.TextInput(attrs={
+            'class': 'form-control', 
+            'id': 'new-experiment-name',
+            'placeholder': 'Enter experiment name...'
+        })
+    )
+    
+    new_experiment_description = forms.CharField(
+        widget=forms.Textarea(attrs={'rows': 2, 'class': 'form-control', 'id': 'new-experiment-description'}),
+        required=False,
+        label="New Experiment Description",
+        help_text="Optional description for the new experiment"
+    )
+    
     name = forms.CharField(max_length=200, help_text="Name of the training run")
     description = forms.CharField(widget=forms.Textarea, required=False, help_text="Description of the training run")
     model_type = forms.ChoiceField(choices=[], help_text="Model architecture to use")  # Will be set dynamically in __init__
     data_path = forms.CharField(
-        initial="/app/data/datasets/", 
-        help_text="Path to dataset directory. Use '/app/data/datasets/' for ARCADE or '/app/data/datasets/basic' for basic"
+        initial="core/data/datasets/basic", 
+        help_text="Path to dataset directory. Use 'core/data/datasets/basic' for basic dataset, 'core/data/datasets/cadica' for CADICA, or 'core/data/datasets/arcade_challenge_datasets' for ARCADE"
     )
     
     # Dataset type selection - ARCADE support with all 6 task types
@@ -676,9 +714,25 @@ class TrainingForm(forms.Form):
         super().__init__(*args, **kwargs)
         # Import here to avoid circular imports
         from .models import TrainingTemplate
+        from .utils.mlflow_utils import get_available_experiments
         
         # Set template queryset
         self.fields['template'].queryset = TrainingTemplate.objects.all()
+        
+        # Set MLflow experiment choices
+        try:
+            experiment_choices = get_available_experiments()
+            self.fields['mlflow_experiment'].choices = experiment_choices
+            
+            # Set default experiment if available
+            if experiment_choices:
+                default_experiment = next((choice for choice in experiment_choices 
+                                         if 'coronary-experiments' in choice[0]), experiment_choices[0])
+                self.fields['mlflow_experiment'].initial = default_experiment[0]
+        except Exception as e:
+            # Fallback to default if MLflow is not available
+            self.fields['mlflow_experiment'].choices = [('coronary-experiments', 'coronary-experiments')]
+            self.fields['mlflow_experiment'].initial = 'coronary-experiments'
         
         # Set model_type choices dynamically
         model_choices = get_available_models()
@@ -724,6 +778,34 @@ class TrainingForm(forms.Form):
         else:
             # Fallback default
             cleaned_data['crop_size'] = 256
+        
+        # Validate MLflow experiment fields
+        create_new_experiment = cleaned_data.get('create_new_experiment', False)
+        new_experiment_name = cleaned_data.get('new_experiment_name', '').strip()
+        mlflow_experiment = cleaned_data.get('mlflow_experiment')
+        
+        if create_new_experiment:
+            if not new_experiment_name:
+                raise forms.ValidationError("New experiment name is required when creating a new experiment.")
+            
+            # Check if experiment name is valid (no special characters except hyphen and underscore)
+            import re
+            if not re.match(r'^[a-zA-Z0-9_-]+$', new_experiment_name):
+                raise forms.ValidationError("Experiment name can only contain letters, numbers, hyphens, and underscores.")
+            
+            # Check if experiment already exists
+            try:
+                from .utils.mlflow_utils import get_available_experiments
+                existing_experiments = [exp[0] for exp in get_available_experiments()]
+                if new_experiment_name in existing_experiments:
+                    raise forms.ValidationError(f"Experiment '{new_experiment_name}' already exists. Choose a different name.")
+            except Exception:
+                pass  # If we can't check, proceed anyway
+            
+            # Set the experiment to use for training
+            cleaned_data['mlflow_experiment'] = new_experiment_name
+        elif not mlflow_experiment:
+            raise forms.ValidationError("Please select an MLflow experiment or create a new one.")
                 
         return cleaned_data
 

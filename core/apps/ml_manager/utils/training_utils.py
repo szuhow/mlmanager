@@ -60,10 +60,10 @@ class TrainingController:
         
         # Base training script path - check multiple possible locations
         possible_paths = [
-            Path('/app/ml/training/train.py'),  # Docker container path
-            Path('ml/training/train.py'),  # Relative path
-            Path('../ml/training/train.py'),  # Relative path from core
-            Path(__file__).parent.parent.parent.parent / 'ml' / 'training' / 'train.py'  # Absolute path
+            Path('/app/core/apps/ml_manager/training/train.py'),  # Docker container path
+            Path('core/apps/ml_manager/training/train.py'),  # Relative path
+            Path('../core/apps/ml_manager/training/train.py'),  # Relative path from core
+            Path(__file__).parent.parent / 'training' / 'train.py'  # Absolute path
         ]
         
         training_script = None
@@ -467,10 +467,10 @@ class TrainingController:
         try:
             # Try to call the training script with --help to see if it works
             possible_paths = [
-                Path('/app/ml/training/train.py'),
-                Path('ml/training/train.py'),
-                Path('../ml/training/train.py'),
-                Path(__file__).parent.parent.parent.parent / 'ml' / 'training' / 'train.py'
+                Path('/app/core/apps/ml_manager/training/train.py'),
+                Path('core/apps/ml_manager/training/train.py'),
+                Path('../core/apps/ml_manager/training/train.py'),
+                Path(__file__).parent.parent / 'training' / 'train.py'
             ]
             
             training_script = None

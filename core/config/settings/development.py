@@ -113,10 +113,15 @@ MLFLOW_ARTIFACT_ROOT = os.environ.get('MLFLOW_ARTIFACT_ROOT', str(BASE_MLRUNS_DI
 # Organized models storage for development
 BASE_ORGANIZED_MODELS_DIR = BASE_DIR / 'data' / 'models' / 'organized'
 
-# Development-specific caching (use dummy cache)
+# Development-specific caching (use in-memory cache for better performance)
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.dummy.DummyCache',
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+        'TIMEOUT': 300,  # 5 minutes default
+        'OPTIONS': {
+            'MAX_ENTRIES': 1000,
+        }
     }
 }
 
@@ -155,3 +160,16 @@ INTERNAL_IPS = [
     '127.0.0.1',
     'localhost',
 ]
+
+# Celery Beat configuration for periodic tasks
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    'sync-mlflow-data': {
+        'task': 'ml_manager.sync_mlflow_data',
+        'schedule': crontab(minute='*/10'),  # Every 10 minutes
+        'options': {'expires': 60 * 5},  # Expire task if not run within 5 minutes
+    },
+}
+
+CELERY_TIMEZONE = 'UTC'

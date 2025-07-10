@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.contrib.auth.models import User
 
 from core.apps.ml_manager.models import MLModel
-from core.apps.dataset_manager.models import Dataset
+# from core.apps.dataset_manager.models import Dataset  # Temporarily disabled
 from core.apps.ml_manager.serializers import MLModelSerializer
 
 @api_view(['POST'])
@@ -41,19 +41,19 @@ def start_training_api(request):
                     'error': f'Missing required field: {field}'
                 }, status=status.HTTP_400_BAD_REQUEST)
         
-        # Get dataset
-        try:
-            dataset = Dataset.objects.get(id=data['dataset_id'])
-        except Dataset.DoesNotExist:
-            return Response({
-                'error': f'Dataset with ID {data["dataset_id"]} not found'
-            }, status=status.HTTP_404_NOT_FOUND)
+        # Get dataset (temporarily disabled)
+        # try:
+        #     dataset = Dataset.objects.get(id=data['dataset_id'])
+        # except Dataset.DoesNotExist:
+        #     return Response({
+        #         'error': f'Dataset with ID {data["dataset_id"]} not found'
+        #     }, status=status.HTTP_404_NOT_FOUND)
         
-        # Check if dataset is ready
-        if dataset.status != 'ready':
-            return Response({
-                'error': f'Dataset is not ready for training. Current status: {dataset.status}'
-            }, status=status.HTTP_400_BAD_REQUEST)
+        # Check if dataset is ready (temporarily disabled)
+        # if dataset.status != 'ready':
+        #     return Response({
+        #         'error': f'Dataset is not ready for training. Current status: {dataset.status}'
+        #     }, status=status.HTTP_400_BAD_REQUEST)
         
         # Create model
         model = MLModel.objects.create(
@@ -169,16 +169,18 @@ def list_datasets_api(request):
     GET /api/datasets/
     """
     try:
-        datasets = Dataset.objects.filter(
-            created_by=request.user,
-            status='ready'
-        ).order_by('-created_at')
+        # Datasets functionality temporarily disabled
+        # datasets = Dataset.objects.filter(
+        #     created_by=request.user,
+        #     status='ready'
+        # ).order_by('-created_at')
         
-        from core.apps.dataset_manager.serializers import DatasetListSerializer
+        # from core.apps.dataset_manager.serializers import DatasetListSerializer
         
         return Response({
             'success': True,
-            'datasets': DatasetListSerializer(datasets, many=True).data
+            'datasets': []  # Empty list until dataset_manager is fixed
+            # 'datasets': DatasetListSerializer(datasets, many=True).data
         })
         
     except Exception as e:

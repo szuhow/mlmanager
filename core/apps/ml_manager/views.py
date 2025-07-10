@@ -26,6 +26,7 @@ import shutil
 from PIL import Image
 import re
 import hashlib
+import traceback
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.conf import settings
@@ -41,9 +42,9 @@ import numpy as np
 # Create logger
 logger = logging.getLogger(__name__)
 
-# Import run_inference from ml.training.train
+# Import run_inference from training.train
 try:
-    from ml.training.train import run_inference
+    from core.apps.ml_manager.training.train import run_inference
 except ImportError:
     # Fallback if import fails
     def run_inference(*args, **kwargs):
@@ -89,12 +90,14 @@ class ModelListView(LoginRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        # Add MLflow experiments info
+        # Add MLflow experiments info from cache/database instead of direct MLflow call
         try:
-            client = mlflow.tracking.MlflowClient()
-            experiments = client.search_experiments()
-            context['experiments'] = experiments
+            from .utils.mlflow_utils import get_available_experiments
+            experiments_list = get_available_experiments()
+            # Convert to a format similar to MLflow client response for template compatibility
+            context['experiments'] = [{'name': exp[0], 'experiment_id': exp[0]} for exp in experiments_list]
         except Exception as e:
+            logger.warning(f"Failed to get experiments: {e}")
             context['experiments'] = []
             
         # Calculate progress percentage for each model
@@ -364,11 +367,15 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                     'current_epoch': self.object.current_epoch or 0,
                     'total_epochs': self.object.total_epochs or 0,
                     'progress_percentage': context.get('progress_percentage', 0),
+                    'percentage': context.get('progress_percentage', 0),  # For JavaScript compatibility
                     'train_loss': self.object.train_loss,
                     'val_loss': self.object.val_loss,
                     'train_dice': self.object.train_dice,
                     'val_dice': self.object.val_dice,
                     'best_val_dice': self.object.best_val_dice or 0.0,
+                    'current_batch': getattr(self.object, 'current_batch', 0) or 0,
+                    'total_batches': getattr(self.object, 'total_batches_per_epoch', 0) or 0,
+                    'batch_progress_percentage': getattr(self.object, 'batch_progress_percentage', 0) or 0,
                 },
                 'logs': formatted_logs,
                 'parsed_logs': context.get('parsed_logs', {}),
@@ -443,13 +450,54 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
             run = client.get_run(self.object.mlflow_run_id)
             
             # Try multiple artifact and prediction directory paths to handle different MLflow configurations
-            base_paths = [
-                # PRIORITY: Check model-specific directory first (most accurate for organized structure)
-                os.path.join(self.object.model_directory, 'predictions') if self.object.model_directory else None,
-                os.path.join(self.object.model_directory, 'artifacts') if self.object.model_directory else None,
-                # Fallback: Check organized model directory structure by run_id (legacy)
-                os.path.join(settings.BASE_ORGANIZED_MODELS_DIR, run.info.run_id, 'predictions'),
-                os.path.join(settings.BASE_ORGANIZED_MODELS_DIR, run.info.run_id, 'artifacts'),
+            base_paths = []
+            
+            # PRIORITY 1: Use the model's actual directory if available (most accurate)
+            if self.object.model_directory:
+                model_dir = self.object.model_directory
+                # Handle both absolute and relative paths
+                if not os.path.isabs(model_dir):
+                    model_dir = os.path.abspath(model_dir)
+                
+                # Add prediction paths from model directory
+                base_paths.extend([
+                    os.path.join(model_dir, 'predictions'),
+                    os.path.join(model_dir, 'artifacts'),
+                ])
+                
+                # Also try without /app/core prefix if present
+                if '/app/core/' in model_dir:
+                    alt_model_dir = model_dir.replace('/app/core/', '', 1)
+                    base_paths.extend([
+                        os.path.join(alt_model_dir, 'predictions'),
+                        os.path.join(alt_model_dir, 'artifacts'),
+                    ])
+            
+            # PRIORITY 2: Search organized structure by model unique identifier
+            if self.object.unique_identifier:
+                organized_bases = [
+                    'data/models/organized',
+                    '/app/data/models/organized',
+                    os.path.join(os.getcwd(), 'data/models/organized')
+                ]
+                
+                for org_base in organized_bases:
+                    if os.path.exists(org_base):
+                        # Look for directories containing the unique identifier
+                        try:
+                            for root, dirs, files in os.walk(org_base):
+                                for dir_name in dirs:
+                                    if self.object.unique_identifier in dir_name:
+                                        dir_path = os.path.join(root, dir_name)
+                                        base_paths.extend([
+                                            os.path.join(dir_path, 'predictions'),
+                                            os.path.join(dir_path, 'artifacts'),
+                                        ])
+                        except Exception as e:
+                            logger.warning(f"Error searching organized structure: {e}")
+            
+            # PRIORITY 3: MLflow-based paths (fallback)
+            base_paths.extend([
                 # Direct run ID path (current MLflow structure)
                 os.path.join(settings.BASE_MLRUNS_DIR, run.info.run_id, 'artifacts'),
                 # Legacy experiment-based paths  
@@ -463,7 +511,7 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                 os.path.join('mlruns', '0', run.info.run_id, 'artifacts'),
                 os.path.join('mlruns', '1', run.info.run_id, 'artifacts'),
                 os.path.join('mlruns', str(run.info.experiment_id), run.info.run_id, 'artifacts'),
-            ]
+            ])
             
             # Filter out None paths
             base_paths = [path for path in base_paths if path is not None]
@@ -513,8 +561,8 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                             
                             # Check subdirectories for enhanced MLflow structure
                             elif os.path.isdir(item_path):
-                                # Look in organized subdirectories like predictions/epoch_001/, artifacts/, or direct epoch directories
-                                if item in ['predictions', 'visualizations', 'artifacts'] or item.startswith('epoch_'):
+                                # Look only in predictions subdirectory (exclude visualizations, training curves)
+                                if item == 'predictions' or item.startswith('epoch_'):
                                     # Handle both predictions/epoch_XXX/ and direct epoch_XXX/ structures
                                     def check_epoch_directory(epoch_dir_path, epoch_dir_name):
                                         """Check a directory that might contain epoch files"""
@@ -581,16 +629,16 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                     pass
                 return found_files
             
-            # Define search patterns for different MLflow structures (ordered by specificity)
+            # Define search patterns for prediction files only (exclude training curves)
             search_patterns = [
-                # Most specific: predictions_epoch_N.png (numbered)
+                # Most specific: predictions_epoch_N.png (numbered prediction files)
                 {
-                    'pattern': lambda f: f.startswith('predictions_epoch_') and f.endswith('.png') and any(c.isdigit() for c in f),
+                    'pattern': lambda f: f.startswith('predictions_epoch_') and f.endswith('.png') and any(c.isdigit() for c in f) and 'curve' not in f.lower() and 'loss' not in f.lower() and 'training' not in f.lower(),
                     'epoch_extract': lambda f: int(''.join(filter(str.isdigit, f)))
                 },
-                # Directory-based pattern: any PNG file in epoch_N directories
+                # Directory-based pattern: PNG files that are likely predictions (exclude curves/plots)
                 {
-                    'pattern': lambda f: f.endswith('.png'),
+                    'pattern': lambda f: f.endswith('.png') and 'curve' not in f.lower() and 'loss' not in f.lower() and 'training' not in f.lower() and 'plot' not in f.lower() and 'chart' not in f.lower(),
                     'epoch_extract': lambda f: 0,  # Will use directory-based extraction
                     'epoch_extract_alt': lambda d: int(''.join(filter(str.isdigit, d))) if any(c.isdigit() for c in d) else 0
                 }
@@ -620,7 +668,7 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                 preview_data['images'] = unique_files
                 preview_data['latest_epoch'] = unique_files[-1]['epoch']
             else:
-                preview_data['error'] = f"No prediction images found. Searched in: {base_search_path} using multiple patterns for enhanced MLflow structure."
+                preview_data['error'] = f"No prediction images found. Searched in: {base_search_path} for prediction files only (excluding training curves and plots)."
                 
         except Exception as e:
             logging.error(f"Error getting training preview for model {self.object.id}: {e}")
@@ -656,104 +704,36 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                 'cuda_version': torch.version.cuda if torch and torch.cuda.is_available() else 'N/A',
             }
             
-            # Try to load from model directory if available
-            if self.object.model_directory and os.path.exists(self.object.model_directory):
-                config_path = os.path.join(self.object.model_directory, 'training_config.json')
-                if os.path.exists(config_path):
-                    with open(config_path, 'r') as f:
-                        config_data = json.load(f)
-                    
-                    training_params = config_data.get('training_params', {})
-                    
-                    # Extract configuration details
-                    details['config'] = {
-                        'batch_size': training_params.get('batch_size', 'N/A'),
-                        'epochs': training_params.get('epochs', 'N/A'),
-                        'learning_rate': training_params.get('learning_rate', 'N/A'),
-                        'validation_split': training_params.get('validation_split', 'N/A'),
-                        'model_family': training_params.get('model_family', 'N/A'),
-                        'model_type': training_params.get('model_type', 'N/A'),
-                        'data_path': training_params.get('data_path', 'N/A'),
-                        'crop_size': training_params.get('crop_size', 'N/A'),
-                        'num_workers': training_params.get('num_workers', 'N/A'),
-                    }
-                    
-                    # Extract hardware details - get actual runtime device from logs if available
-                    runtime_device = self._extract_runtime_device_from_logs()
-                    config_device = training_params.get('device', config_data.get('device', 'N/A'))
-                    
-                    details['hardware'].update({
-                        'device': runtime_device if runtime_device else config_device,
-                        'config_device': config_device if runtime_device and runtime_device != config_device else None,
-                        'pytorch_version': config_data.get('pytorch_version', details['hardware']['pytorch_version']),
-                    })
-                    
-                    # Extract augmentation details
-                    details['augmentation'] = {
-                        'random_flip': training_params.get('random_flip', False),
-                        'random_rotate': training_params.get('random_rotate', False),
-                        'random_scale': training_params.get('random_scale', False),
-                        'random_intensity': training_params.get('random_intensity', False),
-                    }
-                    
-                # Try to load model summary for architecture details
-                summary_path = os.path.join(self.object.model_directory, 'model_summary.txt')
-                if os.path.exists(summary_path):
-                    with open(summary_path, 'r') as f:
-                        summary_content = f.read()
-                    
-                    # Parse parameter count from summary
-                    total_params = 0
-                    param_lines = [line for line in summary_content.split('\n') if 'params:' in line]
-                    for line in param_lines:
-                        try:
-                            param_count = int(line.split('params: ')[-1])
-                            total_params += param_count
-                        except (ValueError, IndexError):
-                            continue
-                    
-                    details['architecture'] = {
-                        'total_parameters': total_params,
-                        'summary_available': True,
-                        'summary_content': summary_content[:1000] + '...' if len(summary_content) > 1000 else summary_content
-                    }
-            
-            # Fallback to MLflow data if model directory not available
-            elif self.object.mlflow_run_id:
-                try:
-                    client = mlflow.tracking.MlflowClient()
-                    run = client.get_run(self.object.mlflow_run_id)
-                    
-                    # Extract from MLflow parameters
-                    params = run.data.params
-                    details['config'] = {
-                        'batch_size': params.get('batch_size', 'N/A'),
-                        'epochs': params.get('epochs', 'N/A'),
-                        'learning_rate': params.get('learning_rate', 'N/A'),
-                        'validation_split': params.get('validation_split', 'N/A'),
-                        'model_type': params.get('model_type', 'N/A'),
-                        'data_path': params.get('data_path', 'N/A'),
-                    }
-                    
-                except Exception as e:
-                    details['error'] = f"Could not load MLflow data: {e}"
-            
-                # Add dataset information if available
+            # First, load from training_data_info if available (most reliable source)
             if self.object.training_data_info:
-                details['dataset'] = self.object.training_data_info
                 training_info = self.object.training_data_info
                 
-                # Also extract augmentation info from training_data_info if not already set
-                if not details['augmentation'] or not any(details['augmentation'].values()):
-                    details['augmentation'] = {
-                        'random_flip': training_info.get('use_random_flip', False),
-                        'random_rotate': training_info.get('use_random_rotate', False),
-                        'random_scale': training_info.get('use_random_scale', False),
-                        'random_intensity': training_info.get('use_random_intensity', False),
-                        'random_crop': training_info.get('use_random_crop', False),
-                        'elastic_transform': training_info.get('use_elastic_transform', False),
-                        'gaussian_noise': training_info.get('use_gaussian_noise', False),
-                    }
+                # Extract configuration details from training_data_info
+                details['config'] = {
+                    'batch_size': training_info.get('batch_size', 'N/A'),
+                    'epochs': training_info.get('epochs', 'N/A'),
+                    'learning_rate': training_info.get('learning_rate', 'N/A'),
+                    'validation_split': training_info.get('validation_split', 'N/A'),
+                    'model_family': training_info.get('model_family', 'N/A'),
+                    'model_type': training_info.get('model_type', 'N/A'),
+                    'data_path': training_info.get('data_path', 'N/A'),
+                    'crop_size': training_info.get('crop_size', 'N/A'),
+                    'num_workers': training_info.get('num_workers', 'N/A'),
+                }
+                
+                # Extract dataset information
+                details['dataset'] = training_info
+                
+                # Extract augmentation info
+                details['augmentation'] = {
+                    'random_flip': training_info.get('use_random_flip', False),
+                    'random_rotate': training_info.get('use_random_rotate', False),
+                    'random_scale': training_info.get('use_random_scale', False),
+                    'random_intensity': training_info.get('use_random_intensity', False),
+                    'random_crop': training_info.get('use_random_crop', False),
+                    'elastic_transform': training_info.get('use_elastic_transform', False),
+                    'gaussian_noise': training_info.get('use_gaussian_noise', False),
+                }
                 
                 # Extract preprocessing information
                 details['preprocessing'] = {
@@ -785,12 +765,75 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                     'early_stopping': training_info.get('use_early_stopping', False),
                     'early_stopping_patience': training_info.get('early_stopping_patience', 'N/A'),
                 }
-                
-                # Extract additional config info from training_data_info if not already set
-                if details['config'].get('crop_size') == 'N/A':
-                    details['config']['crop_size'] = training_info.get('crop_size', 'N/A')
-                if details['config'].get('num_workers') == 'N/A':
-                    details['config']['num_workers'] = training_info.get('num_workers', 'N/A')
+            
+            # Then, try to load from model directory if available (for additional/override data)
+            if self.object.model_directory and os.path.exists(self.object.model_directory):
+                config_path = os.path.join(self.object.model_directory, 'training_config.json')
+                if os.path.exists(config_path):
+                    with open(config_path, 'r') as f:
+                        config_data = json.load(f)
+                    
+                    training_params = config_data.get('training_params', {})
+                    
+                    # Override with any additional data from training_config.json
+                    for key, value in training_params.items():
+                        if key in details['config'] and details['config'][key] == 'N/A':
+                            details['config'][key] = value
+                    
+                    # Extract hardware details - get actual runtime device from logs if available
+                    runtime_device = self._extract_runtime_device_from_logs()
+                    config_device = training_params.get('device', config_data.get('device', 'N/A'))
+                    
+                    details['hardware'].update({
+                        'device': runtime_device if runtime_device else config_device,
+                        'config_device': config_device if runtime_device and runtime_device != config_device else None,
+                        'pytorch_version': config_data.get('pytorch_version', details['hardware']['pytorch_version']),
+                    })
+                    
+                # Try to load model summary for architecture details
+                summary_path = os.path.join(self.object.model_directory, 'model_summary.txt')
+                if os.path.exists(summary_path):
+                    with open(summary_path, 'r') as f:
+                        summary_content = f.read()
+                    
+                    # Parse parameter count from summary
+                    total_params = 0
+                    param_lines = [line for line in summary_content.split('\n') if 'params:' in line]
+                    for line in param_lines:
+                        try:
+                            param_count = int(line.split('params: ')[-1])
+                            total_params += param_count
+                        except (ValueError, IndexError):
+                            continue
+                    
+                    details['architecture'] = {
+                        'total_parameters': total_params,
+                        'summary_available': True,
+                        'summary_content': summary_content[:1000] + '...' if len(summary_content) > 1000 else summary_content
+                    }
+            
+            # Fallback to MLflow data if training_data_info is not available
+            elif self.object.mlflow_run_id and not details['config']:
+                try:
+                    client = mlflow.tracking.MlflowClient()
+                    run = client.get_run(self.object.mlflow_run_id)
+                    
+                    # Extract from MLflow parameters
+                    params = run.data.params
+                    details['config'] = {
+                        'batch_size': params.get('batch_size', 'N/A'),
+                        'epochs': params.get('epochs', 'N/A'),
+                        'learning_rate': params.get('learning_rate', 'N/A'),
+                        'validation_split': params.get('validation_split', 'N/A'),
+                        'model_type': params.get('model_type', 'N/A'),
+                        'data_path': params.get('data_path', 'N/A'),
+                        'crop_size': params.get('crop_size', 'N/A'),
+                        'num_workers': params.get('num_workers', 'N/A'),
+                        'model_family': params.get('model_family', 'N/A'),
+                    }
+                    
+                except Exception as e:
+                    details['error'] = f"Could not load MLflow data: {e}"
             
             # Ensure all sections have default values even if not loaded from config
             if not details['config']:
@@ -1230,9 +1273,10 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                     clean_name = self.object.name.replace(" ", "_").replace("(", "").replace(")", "").lower()
                     search_patterns.append(f"*{clean_name}*")
                 
-                # Search in organized directory structure
+                # Search in organized directory structure - ENHANCED for better matching
                 organized_base = os.path.join("data", "models", "organized")
                 if os.path.exists(organized_base):
+                    logger.info(f"🔍 Searching organized base: {organized_base}")
                     for root, dirs, files in os.walk(organized_base):
                         for dir_name in dirs:
                             for pattern in search_patterns:
@@ -1256,7 +1300,7 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                         if model_dir:
                             break
                     
-                    # If still not found, try a more broad search
+                    # If still not found, try a more broad search by model ID
                     if not model_dir:
                         logger.info("🔍 Trying broader search by model ID...")
                         for root, dirs, files in os.walk(organized_base):
@@ -1270,6 +1314,40 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                                         break
                             if model_dir:
                                 break
+
+                # NEW: Also check for MLflow artifacts from organized structure
+                if not model_dir and self.object.mlflow_run_id:
+                    logger.info("🔍 Attempting to load training logs from MLflow artifacts...")
+                    try:
+                        import mlflow
+                        run = mlflow.get_run(self.object.mlflow_run_id)
+                        
+                        # Get artifacts with logs
+                        client = mlflow.tracking.MlflowClient()
+                        artifacts = client.list_artifacts(self.object.mlflow_run_id, path="logs")
+                        
+                        if artifacts:
+                            # Try to download training logs from MLflow
+                            for artifact in artifacts:
+                                if 'training' in artifact.path.lower():
+                                    try:
+                                        artifact_path = client.download_artifacts(
+                                            self.object.mlflow_run_id, 
+                                            artifact.path
+                                        )
+                                        if os.path.exists(artifact_path):
+                                            with open(artifact_path, 'r', encoding='utf-8') as f:
+                                                log_lines = f.read().splitlines()
+                                                logger.info(f"✅ MLflow log loaded: {artifact_path} ({len(log_lines)} lines)")
+                                                result = log_lines if log_lines else ['MLflow training log is empty.']
+                                                self._cached_training_logs = result
+                                                return result
+                                    except Exception as e:
+                                        logger.warning(f"Could not download MLflow artifact {artifact.path}: {e}")
+                        else:
+                            logger.info("No log artifacts found in MLflow")
+                    except Exception as e:
+                        logger.warning(f"Failed to access MLflow artifacts: {e}")
             
             if model_dir:
                 log_path = os.path.join(model_dir, 'logs', 'training.log')
@@ -1346,12 +1424,7 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                     except Exception as e:
                         logger.warning(f"❌ Could not read global log {global_log_path}: {e}")
             
-            # 3. Fallback to database field
-            if not log_lines and self.object.training_logs:
-                log_lines = self.object.training_logs.splitlines()
-                logger.info(f"💾 Database training_logs field: {len(log_lines)} lines")
-            
-            # 4. Final fallback - check for any recent training logs
+            # 3. Final fallback - check for any recent training logs in artifacts
             if not log_lines:
                 artifacts_path = os.path.join('data', 'models', 'artifacts', 'training.log')
                 if os.path.exists(artifacts_path):
@@ -1505,12 +1578,10 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                     except:
                         logger.warning("Could not force kill MLflow run, continuing anyway")
             
-            # Create MLflow run first, but DO NOT call mlflow.end_run() here!
-            mlflow_run = mlflow.start_run()
-            mlflow_run_id = mlflow_run.info.run_id
-            logger.info(f"Started new MLflow run: {mlflow_run_id}")
-            # Do not end the run here; let train.py manage run lifecycle
-            # Remove any accidental end_run patching
+            # DON'T create MLflow run here - let Celery task handle it
+            # The run will be created in the Celery task with proper experiment selection
+            mlflow_run_id = None  # Will be set by Celery task
+            logger.info("MLflow run will be created by Celery task")
             ml_model = MLModel.objects.create(
                 name=form_data['name'],
                 description=form_data.get('description', ''),
@@ -1522,7 +1593,7 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 train_dice=0.0,
                 val_dice=0.0,
                 best_val_dice=0.0,
-                mlflow_run_id=mlflow_run_id,
+                mlflow_run_id=mlflow_run_id,  # Will be None initially, set by Celery
                 training_data_info={
                     'model_type': form_data['model_type'],
                     'data_path': form_data['data_path'],
@@ -1590,12 +1661,17 @@ class StartTrainingView(LoginRequiredMixin, FormView):
             )
             logger.info(f"Created MLModel instance with ID: {ml_model.id}, model_type: {ml_model.model_type}, mlflow_run_id: {mlflow_run_id}")
             
-            # Set the model directory path to match what train.py creates
+            # Set the model directory path - use placeholder for MLflow run ID initially
             from datetime import datetime
             import uuid
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             model_family = form_data.get('model_family', 'UNet-Coronary')
-            unique_id = f"{model_family.replace(' ', '_').lower()}_{timestamp}_{str(uuid.uuid4())[:8]}"
+            
+            # Use placeholder for MLflow run ID since it will be created in Celery
+            # The actual directory will be updated when Celery creates the MLflow run
+            mlflow_short_id = "pending"  # Placeholder, will be updated by Celery
+                
+            unique_id = f"{model_family.replace(' ', '_').lower()}_{timestamp}_{mlflow_short_id}_{str(uuid.uuid4())[:8]}"
             date_str = datetime.now().strftime("%Y/%m")
             family_str = model_family.replace(" ", "_").lower()
             
@@ -1625,6 +1701,7 @@ class StartTrainingView(LoginRequiredMixin, FormView):
             
             # Prepare training configuration for direct training
             training_config = {
+                'name': form_data['name'],  # Add training name for MLflow run name
                 'model_type': form_data['model_type'],
                 'data_path': form_data['data_path'],
                 'dataset_type': form_data['dataset_type'],
@@ -1637,6 +1714,11 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 'device': form_data['device'],
                 'crop_size': form_data.get('crop_size', 512),
                 'num_workers': form_data['num_workers'],
+                # MLflow experiment configuration
+                'mlflow_experiment': form_data.get('mlflow_experiment', 'coronary-experiments'),
+                'create_new_experiment': form_data.get('create_new_experiment', False),
+                'new_experiment_name': form_data.get('new_experiment_name', ''),
+                'new_experiment_description': form_data.get('new_experiment_description', ''),
                 # Learning rate scheduler parameters
                 'lr_scheduler': form_data.get('lr_scheduler', 'none'),
                 'lr_patience': form_data.get('lr_patience') or 5,
@@ -1688,55 +1770,35 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 'custom_preprocessing_pipeline': form_data.get('custom_preprocessing_pipeline', ''),
             }
             
-            # Use TrainingController instead of manual subprocess management
-            logger.info(f"Starting training with TrainingController for model {ml_model.id}")
+            # Use MLTrainingService to schedule training as a Celery task
+            logger.info(f"Starting training with Celery for model {ml_model.id}")
             
             # Create enhanced training configuration
             training_config = create_enhanced_training_config(form_data)
             
-            # Add MLflow run ID to config
-            training_config['mlflow_run_id'] = str(mlflow_run_id)
+            # DON'T add MLflow run ID here - it will be created in Celery task
+            # The Celery task will create the MLflow run and update the model record
             
             try:
-                # Initialize TrainingController
-                controller = TrainingController(ml_model, training_config)
+                # Import and initialize MLTrainingService
+                from .services.training_service import MLTrainingService
+                training_service = MLTrainingService(ml_model.id)
                 
-                # Store controller in global storage for later access
-                _active_training_controllers[ml_model.id] = controller
+                # Start training task
+                result = training_service.start_training(training_config)
                 
-                # Start training with monitoring
-                def progress_callback(epoch, total_epochs, metrics):
-                    """Callback to handle training progress updates"""
-                    logger.info(f"Training progress: Epoch {epoch}/{total_epochs}, Metrics: {metrics}")
-                    # You can add WebSocket or database updates here if needed
-                
-                # Start training asynchronously (in background)
-                import threading
-                def run_training():
-                    try:
-                        result = controller.train_with_monitoring(progress_callback)
-                        if result['success']:
-                            ml_model.status = 'completed'
-                            ml_model.model_path = result.get('model_path')
-                            logger.info(f"Training completed successfully for model {ml_model.id}")
-                        else:
-                            ml_model.status = 'failed'
-                            logger.error(f"Training failed for model {ml_model.id}: {result.get('error')}")
-                    except Exception as e:
-                        ml_model.status = 'failed'
-                        logger.error(f"Training exception for model {ml_model.id}: {e}")
-                    finally:
-                        # Clean up controller from storage
-                        if ml_model.id in _active_training_controllers:
-                            del _active_training_controllers[ml_model.id]
-                        ml_model.save()
-                
-                # Start training in background thread
-                training_thread = threading.Thread(target=run_training)
-                training_thread.daemon = True
-                training_thread.start()
-                
-                messages.success(self.request, f"Training started successfully for model '{ml_model.name}' using TrainingController.")
+                if result['success']:
+                    logger.info(f"Training task scheduled successfully with ID: {result['task_id']}")
+                    messages.success(
+                        self.request, 
+                        f"Training started successfully for model '{ml_model.name}'. "
+                        f"Task ID: {result['task_id']}"
+                    )
+                else:
+                    logger.error(f"Failed to schedule training task: {result.get('error')}")
+                    messages.error(self.request, f"Failed to start training: {result.get('error')}")
+                    ml_model.status = 'failed'
+                    ml_model.save()
                 
             except Exception as e:
                 logger.error(f"Error starting training with TrainingController: {e}")
@@ -1770,61 +1832,65 @@ def stop_training(request, model_id):
         model.status = 'stopping'
         model.save()
         
-        # Try to find and stop the TrainingController first
-        controller = _active_training_controllers.get(model_id)
-        if controller:
-            try:
-                controller.stop_training()
-                message = "Training stop signal sent via TrainingController. Training will stop gracefully."
-                logger.info(f"Successfully sent stop signal to TrainingController for model {model_id}")
-            except Exception as e:
-                logger.error(f"Error stopping training via TrainingController: {e}")
-                message = f"Error stopping training: {e}"
-        else:
-            # Fallback to the old method if controller not found
-            logger.warning(f"TrainingController not found for model {model_id}, falling back to process termination")
+        # Use MLTrainingService to stop training task
+        try:
+            from .services.training_service import MLTrainingService
+            training_service = MLTrainingService(model_id)
             
-            # Try to stop the training process
-            # Use more aggressive process termination with SIGTERM
-            try:
-                import psutil
-                import signal
+            # Call the service to stop training
+            result = training_service.stop_training()
+            
+            if result['success']:
+                message = "Stop signal sent via Celery task. Training will stop gracefully."
+                logger.info(f"Successfully sent stop signal via Celery for model {model_id}")
+            else:
+                logger.error(f"Error stopping training via Celery: {result.get('error')}")
+                message = f"Error stopping training: {result.get('error')}"
                 
-                # Find processes related to this model's training
-                stopped_processes = 0
-                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                    try:
-                        cmdline = proc.info['cmdline']
-                        if cmdline and any(str(model_id) in str(arg) for arg in cmdline):
-                            if 'python' in proc.info['name'] and 'train.py' in ' '.join(cmdline):
-                                # First try SIGTERM for graceful shutdown
-                                proc.send_signal(signal.SIGTERM)
-                                stopped_processes += 1
-                                logger.info(f"Sent SIGTERM to training process {proc.info['pid']} for model {model_id}")
-                                
-                                # Wait a bit for graceful shutdown
-                                import time
-                                time.sleep(2)
-                                
-                                # If process still running, send SIGKILL
-                                if proc.is_running():
-                                    proc.kill()
-                                    logger.info(f"Killed training process {proc.info['pid']} for model {model_id}")
-                                    
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
+                # Fallback to the old method if Celery task fails
+                logger.warning(f"Celery stop failed, falling back to process termination")
                 
-                if stopped_processes > 0:
-                    message = f"Forcefully stopped {stopped_processes} training process(es)."
-                else:
-                    message = "Stop signal sent. Training will stop after current epoch."
+                # Try to stop the training process
+                try:
+                    import psutil
+                    import signal
                     
-            except ImportError:
-                # If psutil is not available, just update the status
-                message = "Stop requested. Training will stop after current epoch."
-            except Exception as e:
-                logger.warning(f"Error stopping training process: {e}")
-                message = "Stop requested. Training will stop after current epoch."
+                    # Find processes related to this model's training
+                    stopped_processes = 0
+                    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                        try:
+                            cmdline = proc.info['cmdline']
+                            if cmdline and any(str(model_id) in str(arg) for arg in cmdline):
+                                if 'python' in proc.info['name'] and 'train.py' in ' '.join(cmdline):
+                                    # First try SIGTERM for graceful shutdown
+                                    proc.send_signal(signal.SIGTERM)
+                                    stopped_processes += 1
+                                    logger.info(f"Sent SIGTERM to training process {proc.info['pid']} for model {model_id}")
+                                    
+                                    # Wait a bit for graceful shutdown
+                                    import time
+                                    time.sleep(2)
+                                    
+                                    # If process still running, send SIGKILL
+                                    if proc.is_running():
+                                        proc.kill()
+                                        logger.info(f"Killed training process {proc.info['pid']} for model {model_id}")
+                                        
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
+                    
+                    if stopped_processes > 0:
+                        message = f"Forcefully stopped {stopped_processes} training process(es)."
+                    
+                except ImportError:
+                    # If psutil is not available, just update the status
+                    message = "Stop requested. Training will stop after current epoch."
+                except Exception as e:
+                    logger.warning(f"Error stopping training process: {e}")
+                    message = "Stop requested. Training will stop after current epoch."
+        except Exception as e:
+            logger.error(f"Error initializing training service: {e}")
+            message = f"Error stopping training: {e}"
         
         logger.info(f"Training stop requested for model {model_id}")
         
@@ -1855,12 +1921,14 @@ def get_training_progress(request, model_id):
             'total_batches_per_epoch': getattr(model, 'total_batches_per_epoch', 0),
             'progress_percentage': 0,
             'batch_progress_percentage': 0,
+            'percentage': 0,  # For JavaScript compatibility
             'metrics': {},
             'last_update': None
         }
         
         # Calculate progress percentage using model's property (includes batch progress)
         progress_data['progress_percentage'] = model.progress_percentage
+        progress_data['percentage'] = model.progress_percentage  # For JavaScript compatibility
         
         # Use model's batch progress percentage property
         progress_data['batch_progress_percentage'] = model.batch_progress_percentage
@@ -1893,30 +1961,81 @@ def get_training_progress(request, model_id):
         # Get training logs for this model (last 50 lines)
         training_logs = []
         try:
-            # Try model-specific log first
+            # Try model-specific log first (most reliable)
+            model_log_path = None
             if model.model_directory and os.path.exists(model.model_directory):
                 model_log_path = os.path.join(model.model_directory, 'logs', 'training.log')
-                if os.path.exists(model_log_path):
-                    with open(model_log_path, 'r', encoding='utf-8') as f:
-                        log_lines = f.read().splitlines()
-                        training_logs = log_lines[-50:] if len(log_lines) > 50 else log_lines
-                else:
-                    # Fallback to global log with model filtering
-                    global_log_path = os.path.join('data', 'models', 'artifacts', 'training.log')
-                    if os.path.exists(global_log_path):
-                        with open(global_log_path, 'r', encoding='utf-8') as f:
+                
+            if model_log_path and os.path.exists(model_log_path):
+                with open(model_log_path, 'r', encoding='utf-8') as f:
+                    log_lines = f.read().splitlines()
+                    # Get meaningful training logs (filter out empty lines and basic setup)
+                    meaningful_logs = []
+                    for line in log_lines:
+                        # Skip empty lines and basic setup messages
+                        if line.strip() and not any(skip_phrase in line for skip_phrase in [
+                            'Logging initialized', 'setup completed', 'Model log:', 'Global log:', 'Model directory:'
+                        ]):
+                            meaningful_logs.append(line)
+                    training_logs = meaningful_logs[-50:] if len(meaningful_logs) > 50 else meaningful_logs
+            else:
+                # Fallback 1: Try container data path
+                container_log_paths = [
+                    '/app/core/data/logs/training.log',
+                    '/app/data/logs/training.log',
+                    'core/data/logs/training.log',
+                    'data/logs/training.log'
+                ]
+                
+                for log_path in container_log_paths:
+                    if os.path.exists(log_path):
+                        with open(log_path, 'r', encoding='utf-8') as f:
                             all_lines = f.read().splitlines()
-                            model_specific_lines = [
-                                line for line in all_lines 
-                                if (f"model_{model.id}" in line or f"Model {model.id}" in line)
-                            ]
-                            training_logs = model_specific_lines[-50:] if len(model_specific_lines) > 50 else model_specific_lines
+                            # Filter for this specific model
+                            model_specific_lines = []
+                            for line in all_lines:
+                                if (f"model_{model.id}" in line.lower() or 
+                                    f"Model {model.id}" in line or
+                                    f"[MODEL_{model.id}]" in line or
+                                    (model.unique_id and model.unique_id in line)):
+                                    model_specific_lines.append(line)
+                            
+                            if model_specific_lines:
+                                training_logs = model_specific_lines[-50:] if len(model_specific_lines) > 50 else model_specific_lines
+                                break
+                
+                # Fallback 2: Check for recent Celery task logs
+                if not training_logs and hasattr(model, 'celery_task_id') and model.celery_task_id:
+                    try:
+                        # Try to get more detailed task information
+                        from celery import current_app
+                        from celery.result import AsyncResult
+                        
+                        result = AsyncResult(model.celery_task_id, app=current_app)
+                        if result.state == 'PENDING':
+                            training_logs = [f"Training task {model.celery_task_id} is queued and waiting to start..."]
+                        elif result.state == 'STARTED':
+                            training_logs = [f"Training task {model.celery_task_id} has started. Detailed logs will appear shortly..."]
+                        elif result.state == 'PROGRESS':
+                            training_logs = [f"Training task {model.celery_task_id} is in progress. Check model directory logs for details."]
+                        else:
+                            training_logs = [f"Training task state: {result.state}"]
+                    except:
+                        training_logs = [f"Training initiated with task ID: {model.celery_task_id}"]
             
+            # If still no logs, provide helpful message based on model status  
             if not training_logs:
-                training_logs = ["Training logs will appear here when training starts..."]
+                if model.status == 'pending':
+                    training_logs = ["Model is queued for training. Logs will appear when training starts."]
+                elif model.status == 'loading':
+                    training_logs = ["Model setup in progress. Training logs will appear shortly."]
+                elif model.status == 'training':
+                    training_logs = ["Training in progress. Logs should appear here. Check model directory if this persists."]
+                else:
+                    training_logs = [f"No training logs found. Status: {model.status}"]
                 
         except Exception as e:
-            training_logs = [f"Error reading logs: {str(e)}"]
+            training_logs = [f"Error reading logs: {str(e)}", f"Model status: {model.status}"]
         
         # Include training configuration for form updates
         training_config = {}
@@ -2201,7 +2320,7 @@ class GeneralInferenceView(LoginRequiredMixin, FormView):
                 # Import and run enhanced inference
                 import sys
                 sys.path.append(os.path.join(settings.BASE_DIR, '..', 'ml'))
-                from ml.utils.enhanced_inference import run_enhanced_inference
+                from core.apps.ml_manager.utils.enhanced_inference import run_enhanced_inference
                 
                 inference_config = inference_result.inference_config.copy()
                 inference_config['model_type'] = getattr(model, 'model_type', 'unet')
@@ -2533,6 +2652,86 @@ class ModelLogsView(LoginRequiredMixin, DetailView):
 
 
 @login_required
+def get_mlflow_experiments(request):
+    """Get available MLflow experiments for AJAX requests"""
+    try:
+        from .utils.mlflow_utils import get_available_experiments
+        experiments = get_available_experiments()
+        return JsonResponse({
+            'status': 'success',
+            'experiments': experiments
+        })
+    except Exception as e:
+        logger.error(f"Error getting MLflow experiments: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e),
+            'experiments': [('coronary-experiments', 'coronary-experiments')]  # Fallback
+        })
+
+
+@login_required
+@require_POST
+def create_mlflow_experiment_api(request):
+    """Create a new MLflow experiment via API"""
+    try:
+        data = json.loads(request.body)
+        experiment_name = data.get('name', '').strip()
+        experiment_description = data.get('description', '').strip()
+        
+        if not experiment_name:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Experiment name is required'
+            })
+        
+        # Validate experiment name (letters, numbers, hyphens, underscores only)
+        import re
+        if not re.match(r'^[a-zA-Z0-9_-]+$', experiment_name):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Experiment name can only contain letters, numbers, hyphens, and underscores'
+            })
+        
+        # Check if experiment already exists
+        from .utils.mlflow_utils import get_available_experiments, create_mlflow_experiment
+        existing_experiments = [exp[0] for exp in get_available_experiments()]
+        if experiment_name in existing_experiments:
+            return JsonResponse({
+                'status': 'error',
+                'message': f'Experiment "{experiment_name}" already exists'
+            })
+        
+        # Create the experiment
+        experiment_id = create_mlflow_experiment(experiment_name, experiment_description)
+        
+        if experiment_id:
+            return JsonResponse({
+                'status': 'success',
+                'message': f'Experiment "{experiment_name}" created successfully',
+                'experiment_id': experiment_id,
+                'experiment_name': experiment_name
+            })
+        else:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Failed to create MLflow experiment'
+            })
+            
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Invalid JSON data'
+        })
+    except Exception as e:
+        logger.error(f"Error creating MLflow experiment: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to create experiment: {str(e)}'
+        })
+
+
+@login_required
 def get_template_data(request, template_id):
     """Get template data as JSON for AJAX requests"""
     try:
@@ -2648,63 +2847,158 @@ def get_training_log(request, model_id):
         log_lines = []
         log_sources = []
         
-        # 1. Model-specific log file (highest priority)
-        if model.model_directory and os.path.exists(model.model_directory):
-            model_log_path = os.path.join(model.model_directory, 'logs', 'training.log')
-            if os.path.exists(model_log_path):
-                try:
-                    with open(model_log_path, 'r', encoding='utf-8') as f:
-                        model_log_lines = f.read().splitlines()
-                        log_lines = model_log_lines  # Use only model-specific logs
-                        log_sources.append(f"Model-specific log: {model_log_path}")
-                        logger.info(f"Found model-specific log with {len(log_lines)} lines")
-                except Exception as e:
-                    logger.warning(f"Could not read model log {model_log_path}: {e}")
+        # 1. Model-specific log file from organized directory (highest priority)
+        # Handle both absolute paths and paths relative to container root
+        if model.model_directory:
+            model_dir_paths = []
+            
+            # Try original path
+            if os.path.isabs(model.model_directory):
+                model_dir_paths.append(model.model_directory)
             else:
-                logger.warning(f"Model-specific log not found at: {model_log_path}")
-                # Debug: check if directory and logs subdirectory exist
-                if os.path.exists(model.model_directory):
+                model_dir_paths.append(os.path.abspath(model.model_directory))
+            
+            # Try without /app/core prefix (logs saved outside core directory)
+            if model.model_directory.startswith('/app/core/'):
+                stripped_path = model.model_directory.replace('/app/core/', '', 1)
+                model_dir_paths.append(os.path.abspath(stripped_path))
+                model_dir_paths.append(f'/app/{stripped_path}')
+            
+            # Try with /app prefix if not already there
+            if not model.model_directory.startswith('/app/'):
+                model_dir_paths.append(f'/app/{model.model_directory.lstrip("/")}')
+            
+            # Try relative to current working directory
+            model_dir_paths.append(os.path.join(os.getcwd(), model.model_directory.lstrip('/')))
+            
+            found_directory = None
+            for model_dir in model_dir_paths:
+                if os.path.exists(model_dir):
+                    found_directory = model_dir
+                    logger.info(f"✅ Found model directory at: {found_directory}")
+                    break
+                else:
+                    logger.debug(f"❌ Directory not found: {model_dir}")
+            
+            if found_directory:
+                model_log_path = os.path.join(found_directory, 'logs', 'training.log')
+                if os.path.exists(model_log_path):
                     try:
-                        dir_contents = os.listdir(model.model_directory)
-                        logger.info(f"Model directory contents: {dir_contents}")
-                        logs_dir = os.path.join(model.model_directory, 'logs')
+                        with open(model_log_path, 'r', encoding='utf-8') as f:
+                            model_log_lines = f.read().splitlines()
+                            log_lines = model_log_lines  # Use ONLY model-specific logs
+                            log_sources.append(f"Model-specific log: {model_log_path}")
+                            logger.info(f"✅ Found model-specific log with {len(log_lines)} lines from: {model_log_path}")
+                            # Don't load any other logs when model-specific log is found
+                    except Exception as e:
+                        logger.warning(f"Could not read model log {model_log_path}: {e}")
+                else:
+                    logger.warning(f"Training log not found at: {model_log_path}")
+                    # Try to find alternative log files in the model directory
+                    try:
+                        logs_dir = os.path.join(found_directory, 'logs')
                         if os.path.exists(logs_dir):
                             logs_contents = os.listdir(logs_dir)
-                            logger.info(f"Logs directory contents: {logs_contents}")
+                            logger.info(f"📁 Logs directory contents: {logs_contents}")
+                            # Look for any .log files
+                            for log_file in logs_contents:
+                                if log_file.endswith('.log'):
+                                    alt_log_path = os.path.join(logs_dir, log_file)
+                                    try:
+                                        with open(alt_log_path, 'r', encoding='utf-8') as f:
+                                            log_lines = f.read().splitlines()
+                                            log_sources.append(f"Alternative log: {alt_log_path}")
+                                            logger.info(f"✅ Found alternative log file: {log_file} with {len(log_lines)} lines")
+                                            break
+                                    except Exception as e:
+                                        logger.warning(f"Could not read alternative log {alt_log_path}: {e}")
                         else:
-                            logger.warning(f"Logs directory does not exist: {logs_dir}")
+                            logger.warning(f"❌ Logs directory does not exist: {logs_dir}")
                     except Exception as e:
                         logger.warning(f"Could not list directory contents: {e}")
-                else:
-                    logger.warning(f"Model directory does not exist: {model.model_directory}")
+            else:
+                logger.warning(f"❌ Model directory not found in any of the attempted paths: {model_dir_paths}")
         
-        # 2. If no model-specific logs, try global training log with filtering
-        if not log_lines:
-            global_log_path = os.path.join('data', 'logs', 'training.log')
-            if os.path.exists(global_log_path):
+        # 1.5. If model_directory not set, try to find it in organized structure
+        elif not model.model_directory:
+            logger.info("🔍 No model_directory set, searching organized structure...")
+            
+            # Search in multiple potential organized bases
+            organized_bases = [
+                'data/models/organized',
+                '/app/data/models/organized',
+                os.path.join(os.getcwd(), 'data/models/organized')
+            ]
+            
+            found_directory = None
+            for organized_base in organized_bases:
+                if os.path.exists(organized_base):
+                    logger.info(f"🔍 Searching organized base: {organized_base}")
+                    # Search for model directory using various patterns
+                    search_patterns = []
+                    if model.unique_identifier:
+                        search_patterns.append(f"*{model.unique_identifier}*")
+                    if model.name:
+                        clean_name = model.name.replace(" ", "_").replace("(", "").replace(")", "").lower()
+                        search_patterns.append(f"*{clean_name}*")
+                    search_patterns.append(f"*model_{model_id}*")
+                    
+                    for root, dirs, files in os.walk(organized_base):
+                        for dir_name in dirs:
+                            for pattern in search_patterns:
+                                import fnmatch
+                                if fnmatch.fnmatch(dir_name.lower(), pattern.lower()):
+                                    potential_dir = os.path.join(root, dir_name)
+                                    logs_path = os.path.join(potential_dir, 'logs', 'training.log')
+                                    if os.path.exists(logs_path):
+                                        found_directory = potential_dir
+                                        logger.info(f"✅ Found model directory: {found_directory}")
+                                        break
+                            if found_directory:
+                                break
+                        if found_directory:
+                            break
+                    if found_directory:
+                        break
+                else:
+                    logger.debug(f"❌ Organized base directory does not exist: {organized_base}")
+            
+            if found_directory:
+                # Update model with found directory
                 try:
-                    with open(global_log_path, 'r', encoding='utf-8') as f:
-                        global_log_lines = f.read().splitlines()
-                        # Filter for this model's logs
-                        model_specific_lines = [line for line in global_log_lines 
-                                              if f"model_{model_id}" in line or f"Model {model_id}" in line or f"model={model_id}" in line]
-                        if model_specific_lines:
-                            log_lines = model_specific_lines
-                            log_sources.append(f"Global log (model {model_id} filtered): {global_log_path}")
-                            logger.info(f"Found {len(log_lines)} model-specific lines in global log")
-                        else:
-                            # If no model-specific lines found, show recent global logs as fallback
-                            if lines_limit is None:
-                                log_lines = global_log_lines[-1000:]  # Limit to last 1000 lines to avoid memory issues
-                            else:
-                                log_lines = global_log_lines[-lines_limit:]
-                            log_sources.append(f"Global log (fallback - no model-specific logs found): {global_log_path}")
-                            logger.warning(f"No model-specific logs found, showing {len(log_lines)} recent global lines")
+                    model.model_directory = found_directory
+                    model.save(update_fields=['model_directory'])
+                    logger.info(f"💾 Updated model_directory in database: {found_directory}")
                 except Exception as e:
-                    logger.warning(f"Could not read global log {global_log_path}: {e}")
+                    logger.warning(f"Could not update model_directory: {e}")
+                
+                # Load logs from found directory
+                logs_path = os.path.join(found_directory, 'logs', 'training.log')
+                try:
+                    with open(logs_path, 'r', encoding='utf-8') as f:
+                        log_lines = f.read().splitlines()
+                        log_sources.append(f"Discovered model log: {logs_path}")
+                        logger.info(f"✅ Loaded logs from discovered directory: {len(log_lines)} lines")
+                except Exception as e:
+                    logger.warning(f"Could not read discovered log {logs_path}: {e}")
+            else:
+                logger.warning("❌ Could not find model directory in any organized structure")
+        
+        # 2. If no model-specific logs found, DON'T load global logs to avoid confusion
+        if not log_lines:
+            logger.warning(f"❌ No model-specific logs found for model {model_id}")
+            log_lines = [
+                f"[INFO] No model-specific training logs found for model {model_id}",
+                f"[INFO] Expected log location: {model.model_directory}/logs/training.log" if model.model_directory else "[INFO] Model directory not set",
+                f"[INFO] Please check if training has started and logs are being written",
+                f"[INFO] If training is in progress, logs should appear shortly"
+            ]
+            log_sources.append("Status message - no logs found")
+        
+        # Skip global log loading to avoid mixing different models' logs
         
         # 3. Final fallback to model's training_logs field
-        if not log_lines and model.training_logs:
+        if len(log_lines) <= 4 and model.training_logs:  # Only if we just have status messages
             log_lines = model.training_logs.splitlines()
             log_sources.append("Database field")
             logger.info(f"Using database training_logs field with {len(log_lines)} lines")
@@ -2722,9 +3016,10 @@ def get_training_log(request, model_id):
         if search_query:
             log_lines = [line for line in log_lines if search_query.lower() in line.lower()]
         
-        # Limit lines and get recent ones
+        # Limit lines if specified (but not when lines=all)
         if lines_limit is not None and len(log_lines) > lines_limit:
-            log_lines = log_lines[-lines_limit:]
+            # Take first N lines to show training from the start, not the end
+            log_lines = log_lines[:lines_limit]
         
         # Format lines for JavaScript consumption
         formatted_logs = []
@@ -2749,10 +3044,24 @@ def get_training_log(request, model_id):
         })
         
     except Exception as e:
-        logger.error(f"Error getting training log for model {model_id}: {e}")
+        logger.error(f"❌ Error getting training log for model {model_id}: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return JsonResponse({
             'status': 'error',
-            'message': str(e)
+            'message': str(e),
+            'log_sources': log_sources,
+            'debug_info': {
+                'model_id': model_id,
+                'working_directory': os.getcwd(),
+                'base_dir': getattr(settings, 'BASE_DIR', 'Not set'),
+                'existing_paths': {
+                    'data_logs': os.path.exists('data/logs/training.log'),
+                    'app_data_logs': os.path.exists('/app/data/logs/training.log'),
+                    'core_data_logs': os.path.exists('/app/core/data/logs/training.log'),
+                    'data_models_organized': os.path.exists('data/models/organized'),
+                    'app_data_models_organized': os.path.exists('/app/data/models/organized'),
+                }
+            }
         })
 
 
@@ -2960,6 +3269,8 @@ def dataset_preview_view(request):
         context['data_path'] = data_path
         context['dataset_type'] = dataset_type
         
+        logger.info(f"Dataset preview request - data_path: {data_path}, dataset_type: {dataset_type}")
+        
         if data_path:
             try:
                 import os
@@ -2974,7 +3285,7 @@ def dataset_preview_view(request):
                     return render(request, 'ml_manager/dataset_preview.html', context)
                 
                 # Detect dataset structure using ARCADE loader if it's an ARCADE dataset
-                from ml.datasets.arcade_loader import (
+                from core.apps.ml_manager.datasets.arcade_loader import (
                     is_arcade_dataset, 
                     detect_arcade_task_type, 
                     get_arcade_dataset_root,
@@ -3010,6 +3321,11 @@ def dataset_preview_view(request):
                     detected_type = gui_type_mapping.get(dataset_type, dataset_type)
                     logger.info(f"User selected dataset type: {dataset_type} -> {detected_type}")
                 
+                logger.info(f"About to check if {data_path} is ARCADE dataset...")
+                logger.info(f"Data path exists: {os.path.exists(data_path)}")
+                if os.path.exists(data_path):
+                    logger.info(f"Contents of {data_path}: {os.listdir(data_path)}")
+                
                 if is_arcade_dataset(data_path):
                     logger.info(f"Detected ARCADE dataset at {data_path}")
                     # Use ARCADE-specific detection
@@ -3025,7 +3341,7 @@ def dataset_preview_view(request):
                         
                         # Test torch-arcade loader directly
                         try:
-                            from ml.datasets.torch_arcade_loader import get_arcade_dataset_info
+                            from core.apps.ml_manager.datasets.torch_arcade_loader import get_arcade_dataset_info
                             torch_arcade_info = get_arcade_dataset_info(arcade_root)
                             logger.info(f"Torch-ARCADE info: {torch_arcade_info}")
                         except Exception as torch_e:
@@ -3277,7 +3593,7 @@ def dataset_preview_view(request):
                                                 
                                                 if detected_type == 'semantic_segmentation' or arcade_task == 'semantic_segmentation':
                                                     logger.info("[ARCADE MASK GEN] Creating ARCADESemanticSegmentation dataset")
-                                                    from ml.datasets.torch_arcade_loader import ARCADESemanticSegmentation
+                                                    from core.apps.ml_manager.datasets.torch_arcade_loader import ARCADESemanticSegmentation
                                                     arcade_root = arcade_info.get('root', data_path)
                                                     logger.info(f"[ARCADE MASK GEN] Using root path: {arcade_root}")
                                                     arcade_dataset = ARCADESemanticSegmentation(
@@ -3291,7 +3607,7 @@ def dataset_preview_view(request):
                                                     
                                                 elif detected_type == 'binary_segmentation' and arcade_task == 'stenosis_detection':
                                                     logger.info("[ARCADE MASK GEN] User selected binary_segmentation for stenosis_detection task - using ARCADEStenosisDetection")
-                                                    from ml.datasets.torch_arcade_loader import ARCADEStenosisDetection
+                                                    from core.apps.ml_manager.datasets.torch_arcade_loader import ARCADEStenosisDetection
                                                     arcade_root = arcade_info.get('root', data_path)
                                                     arcade_dataset = ARCADEStenosisDetection(
                                                         root=arcade_root,
@@ -3304,7 +3620,7 @@ def dataset_preview_view(request):
                                                     
                                                 elif detected_type == 'binary_segmentation' and arcade_task == 'binary_segmentation':
                                                     logger.info("[ARCADE MASK GEN] Creating ARCADEBinarySegmentation dataset")
-                                                    from ml.datasets.torch_arcade_loader import ARCADEBinarySegmentation
+                                                    from core.apps.ml_manager.datasets.torch_arcade_loader import ARCADEBinarySegmentation
                                                     arcade_root = arcade_info.get('root', data_path)
                                                     arcade_dataset = ARCADEBinarySegmentation(
                                                         root=arcade_root,
@@ -3317,7 +3633,7 @@ def dataset_preview_view(request):
                                                     
                                                 elif arcade_task == 'stenosis_detection' or detected_type == 'stenosis_detection':
                                                     logger.info("[ARCADE MASK GEN] Creating ARCADEStenosisDetection dataset")
-                                                    from ml.datasets.torch_arcade_loader import ARCADEStenosisDetection
+                                                    from core.apps.ml_manager.datasets.torch_arcade_loader import ARCADEStenosisDetection
                                                     arcade_root = arcade_info.get('root', data_path)
                                                     arcade_dataset = ARCADEStenosisDetection(
                                                         root=arcade_root,
@@ -3329,7 +3645,7 @@ def dataset_preview_view(request):
                                                     expected_classes = 2  # detection: background + stenosis
                                                     
                                                 elif detected_type == 'stenosis_detection':
-                                                    from ml.datasets.torch_arcade_loader import ARCADEStenosisDetection
+                                                    from core.apps.ml_manager.datasets.torch_arcade_loader import ARCADEStenosisDetection
                                                     arcade_root = arcade_info.get('root', data_path)
                                                     arcade_dataset = ARCADEStenosisDetection(
                                                         root=arcade_root,
@@ -3341,7 +3657,7 @@ def dataset_preview_view(request):
                                                     expected_classes = 2  # detection: background + stenosis
                                                     
                                                 elif detected_type == 'artery_classification':
-                                                    from ml.datasets.torch_arcade_loader import ARCADEArteryClassification
+                                                    from core.apps.ml_manager.datasets.torch_arcade_loader import ARCADEArteryClassification
                                                     arcade_root = arcade_info.get('root', data_path)
                                                     arcade_dataset = ARCADEArteryClassification(
                                                         root=arcade_root,
@@ -3353,7 +3669,7 @@ def dataset_preview_view(request):
                                                     expected_classes = 2  # left/right artery classification
                                                     
                                                 elif detected_type == 'stenosis_segmentation':
-                                                    from ml.datasets.torch_arcade_loader import ARCADEStenosisSegmentation
+                                                    from core.apps.ml_manager.datasets.torch_arcade_loader import ARCADEStenosisSegmentation
                                                     arcade_root = arcade_info.get('root', data_path)
                                                     arcade_dataset = ARCADEStenosisSegmentation(
                                                         root=arcade_root,
@@ -3365,7 +3681,7 @@ def dataset_preview_view(request):
                                                     expected_classes = 2  # background + stenosis
                                                     
                                                 elif detected_type == 'semantic_segmentation_binary':
-                                                    from ml.datasets.torch_arcade_loader import ARCADESemanticSegmentationBinary
+                                                    from core.apps.ml_manager.datasets.torch_arcade_loader import ARCADESemanticSegmentationBinary
                                                     arcade_root = arcade_info.get('root', data_path)
                                                     arcade_dataset = ARCADESemanticSegmentationBinary(
                                                         root=arcade_root,
@@ -3622,7 +3938,7 @@ def dataset_preview_view(request):
                                                 # Fall back to generic COCO generation
                                                 logger.info("[FALLBACK] Using COCO utils as fallback")
                                                 try:
-                                                    from ml.datasets.coco_utils import generate_mask_from_coco_file
+                                                    from core.apps.ml_manager.datasets.coco_utils import generate_mask_from_coco_file
                                                     
                                                     # Create temp directory for generated masks
                                                     temp_mask_dir = '/tmp/preview_masks'
@@ -3657,7 +3973,7 @@ def dataset_preview_view(request):
                                         else:
                                             # Non-ARCADE dataset, use generic COCO generation
                                             try:
-                                                from ml.datasets.coco_utils import generate_mask_from_coco_file
+                                                from core.apps.ml_manager.datasets.coco_utils import generate_mask_from_coco_file
                                                 
                                                 # Create temp directory for generated masks
                                                 temp_mask_dir = '/tmp/preview_masks'
@@ -3871,7 +4187,7 @@ def dataset_preview_view(request):
                             if arcade_info:
                                 try:
                                     logger.info(f"[ARCADE BBOX] Starting bounding box detection for stenosis")
-                                    from ml.datasets.torch_arcade_loader import ARCADEStenosisDetection
+                                    from core.apps.ml_manager.datasets.torch_arcade_loader import ARCADEStenosisDetection
                                     
                                     # Create stenosis detection dataset
                                     arcade_root = arcade_info['root']
@@ -4032,7 +4348,7 @@ def dataset_preview_view(request):
                             if arcade_info:
                                 try:
                                     logger.info(f"[ARCADE CLASSIFY] Starting artery classification")
-                                    from ml.datasets.torch_arcade_loader import ARCADEArteryClassification
+                                    from core.apps.ml_manager.datasets.torch_arcade_loader import ARCADEArteryClassification
                                     
                                     # Create artery classification dataset
                                     arcade_root = arcade_info['root']
@@ -4069,7 +4385,7 @@ def dataset_preview_view(request):
                                                             segments.add(category_name)
                                                     
                                                     # Use the distinguish_side function from torch_arcade_loader
-                                                    from ml.datasets.torch_arcade_loader import distinguish_side
+                                                    from core.apps.ml_manager.datasets.torch_arcade_loader import distinguish_side
                                                     artery_side = distinguish_side(segments)
                                                     
                                                     sample_data['artery_side'] = artery_side.title()  # Left or Right
@@ -4330,7 +4646,29 @@ def preprocessing_preview(request):
         normalize_intensity = request.GET.get('normalize_intensity') == 'true'
         gamma_correction = float(request.GET.get('gamma_correction', 1.0))
         
+        # Convert relative path to absolute path if needed
+        if data_path and not os.path.isabs(data_path):
+            # Convert relative path to absolute path from Django project root
+            from django.conf import settings
+            project_root = getattr(settings, 'BASE_DIR', os.getcwd())
+            
+            # Ensure project_root is a string (convert from Path if needed)
+            project_root = str(project_root)
+            
+            # Handle the case where data_path already starts with "core"
+            # If BASE_DIR ends with "core" and data_path starts with "core", 
+            # we need to avoid double "core" in the path
+            if data_path.startswith('core/') and project_root.endswith('/core'):
+                # Remove the leading "core/" from data_path to avoid duplication
+                data_path = data_path[5:]  # Remove "core/" prefix
+            
+            data_path = os.path.join(project_root, data_path)
+        
         # Find a sample image from the dataset
+        logger.info(f"[PREPROCESSING PREVIEW] Original data_path: {request.GET.get('data_path', '')}")
+        logger.info(f"[PREPROCESSING PREVIEW] Resolved data_path: {data_path}")
+        logger.info(f"[PREPROCESSING PREVIEW] Path exists: {os.path.exists(data_path) if data_path else False}")
+        
         if not data_path or not os.path.exists(data_path):
             return JsonResponse({
                 'status': 'error',
@@ -4363,32 +4701,52 @@ def preprocessing_preview(request):
         
         # If no specific image or not found, select randomly
         if sample_image_path is None:
-            # Look for image files in common dataset structures
+            # Look for image files in common dataset structures, but exclude mask directories
             image_patterns = [
-                os.path.join(data_path, '**', '*.png'),
+                os.path.join(data_path, 'images', '*.jpg'),
+                os.path.join(data_path, 'images', '*.jpeg'),
+                os.path.join(data_path, 'images', '*.png'),
+                os.path.join(data_path, 'images', '*.tif'),
+                os.path.join(data_path, 'images', '*.tiff'),
+                os.path.join(data_path, 'imgs', '*.jpg'),  # Common alternative name
+                os.path.join(data_path, 'imgs', '*.jpeg'),
+                os.path.join(data_path, 'imgs', '*.png'),
+                os.path.join(data_path, 'train', 'images', '*.jpg'),
+                os.path.join(data_path, 'train', 'images', '*.png'),
+                os.path.join(data_path, 'val', 'images', '*.jpg'),
+                os.path.join(data_path, 'val', 'images', '*.png'),
+                # Fallback: search all but filter out mask-related files
                 os.path.join(data_path, '**', '*.jpg'),
                 os.path.join(data_path, '**', '*.jpeg'),
-                os.path.join(data_path, '**', '*.tif'),
-                os.path.join(data_path, '**', '*.tiff'),
-                os.path.join(data_path, 'images', '*.png'),
-                os.path.join(data_path, 'train', '*.png'),
-                os.path.join(data_path, 'val', '*.png'),
+                os.path.join(data_path, '**', '*.png'),
             ]
             
             sample_images = []
             for pattern in image_patterns:
-                sample_images.extend(glob.glob(pattern, recursive=True))
+                found_files = glob.glob(pattern, recursive=True)
+                # Filter out files that are likely masks based on path or filename
+                for file_path in found_files:
+                    file_lower = file_path.lower()
+                    # Skip if it's in a mask/label directory or has mask-like filename
+                    if any(mask_keyword in file_lower for mask_keyword in 
+                           ['mask', 'masks', 'label', 'labels', 'annotation', 'annotations', 'gt', 'groundtruth']):
+                        continue
+                    sample_images.append(file_path)
+                
                 if len(sample_images) >= 10:  # Limit search for performance
                     break
+            
+            logger.info(f"[PREPROCESSING PREVIEW] Found {len(sample_images)} valid image files (excluding masks)")
             
             if not sample_images:
                 return JsonResponse({
                     'status': 'error',
-                    'message': 'No sample images found in dataset'
+                    'message': 'No sample images found in dataset (only masks found)'
                 })
             
             # Select a random sample image
             sample_image_path = random.choice(sample_images)
+            logger.info(f"[PREPROCESSING PREVIEW] Selected sample image: {sample_image_path}")
         
         # Load the image
         try:
@@ -4550,7 +4908,7 @@ def serve_preview_image(request):
             raise Http404("Image not found")
         
         # Security check - ensure path is within allowed directories
-        allowed_dirs = ['/app/data/', '/data/', '/tmp/']
+        allowed_dirs = ['/app/core/data/', '/app/data/', '/data/', '/tmp/']
         if not any(image_path.startswith(dir_path) for dir_path in allowed_dirs):
             raise Http404("Access denied")
         

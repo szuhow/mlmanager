@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand
-from ml_manager.models import MLModel
-from shared.utils.training_callback import TrainingCallback
+from core.apps.ml_manager.models import MLModel
+from core.apps.ml_manager.utils.training_callback import TrainingCallback
 
 class Command(BaseCommand):
     help = 'Test the callback system'

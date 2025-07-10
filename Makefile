@@ -1,218 +1,347 @@
-.PHONY: setup start stop restart logs shell rebuild clean django-setup quick help enhanced-start enhanced-stop enhanced-logs enhanced-status
+# ================================================
+# Coronary Experiments ML Manager - Makefile
+# ================================================
 
-# Enhanced ML Manager commands
+.PHONY: help setup build-cpu build-gpu start-cpu start-gpu stop-cpu stop-gpu restart-cpu restart-gpu logs-cpu logs-gpu status-cpu status-gpu clean-cpu clean-gpu shell-cpu shell-gpu migrate-cpu migrate-gpu
+
+# Default target
 .DEFAULT_GOAL := help
 
-ifneq (,$(wildcard .env))
-    include .env
-    export $(shell sed 's/=.*//' .env)
-endif
+# Docker compose command (use new syntax)
+DOCKER_COMPOSE = docker compose
 
-# ==============================================
-# Enhanced ML Manager Docker Commands
-# ==============================================
+# Docker compose files
+COMPOSE_CPU = infrastructure/docker-compose/docker-compose.cpu.yml
+COMPOSE_GPU = infrastructure/docker-compose/docker-compose.gpu.yml
 
-enhanced-setup: ## Setup Enhanced ML Manager environment
-	@echo "🚀 Setting up Enhanced ML Manager..."
-	@cp .env.enhanced.example .env || true
-	@echo "✅ Environment file created. Please edit .env if needed."
-	@docker network create enhanced-ml-network 2>/dev/null || true
-	@echo "✅ Docker network created."
+# Environment files
+ENV_CPU = infrastructure/env/.env.cpu
+ENV_GPU = infrastructure/env/.env.gpu
 
-enhanced-start: ## Start Enhanced ML Manager with all services
-	@echo "🚀 Starting Enhanced ML Manager..."
-	@docker compose -f docker-compose.enhanced.yml up -d
-	@echo "⏳ Waiting for services to be ready..."
-	@sleep 10
-	@echo "🏥 Health check:"
-	@make enhanced-status
-	@echo ""
-	@echo "🎉 Enhanced ML Manager is ready!"
-	@echo "📊 Django App: http://localhost:8000"
-	@echo "📈 MLflow: http://localhost:5000"
-
-enhanced-stop: ## Stop Enhanced ML Manager services
-	@echo "🛑 Stopping Enhanced ML Manager..."
-	@docker compose -f docker-compose.enhanced.yml down
-	@echo "✅ All services stopped."
-
-enhanced-restart: ## Restart Enhanced ML Manager services
-	@echo "🔄 Restarting Enhanced ML Manager..."
-	@make enhanced-stop
-	@sleep 5
-	@make enhanced-start
-
-enhanced-logs: ## Show logs from all Enhanced ML Manager services
-	@docker compose -f docker-compose.enhanced.yml logs -f
-
-enhanced-logs-django: ## Show Django logs
-	@docker compose -f docker-compose.enhanced.yml logs -f django
-
-enhanced-status: ## Check status of Enhanced ML Manager services
-	@echo "📊 Service Status:"
-	@docker compose -f docker-compose.enhanced.yml ps
-	@echo ""
-	@echo "🔍 Health Checks:"
-	@echo -n "Django: "
-	@curl -s http://localhost:8000 >/dev/null && echo "✅ OK" || echo "❌ Failed"
-	@echo -n "MLflow: "
-	@curl -s http://localhost:5000 >/dev/null && echo "✅ OK" || echo "❌ Failed"
-
-enhanced-shell: ## Open shell in Django container
-	@docker exec -it web bash
-
-enhanced-rebuild: ## Rebuild Enhanced ML Manager containers
-	@echo "🔨 Rebuilding Enhanced ML Manager containers..."
-	@docker-compose -f docker-compose.enhanced.yml build --no-cache
-	@echo "✅ Containers rebuilt."
-
-enhanced-clean: ## Clean up Enhanced ML Manager containers and volumes
-	@echo "🧹 Cleaning up Enhanced ML Manager..."
-	@docker-compose -f docker-compose.enhanced.yml down -v --remove-orphans
-	@docker system prune -f
-	@echo "✅ Cleanup completed."
-
-enhanced-migrate: ## Run Django migrations in container
-	@echo "🔄 Running Django migrations..."
-	@docker exec web python core/manage.py migrate
-	@echo "✅ Migrations completed."
-
-enhanced-collectstatic: ## Collect static files in container
-	@echo "📦 Collecting static files..."
-	@docker exec web python core/manage.py collectstatic --noinput
-	@echo "✅ Static files collected."
-
-enhanced-createuser: ## Create Django superuser in container
-	@echo "👤 Creating Django superuser..."
-	@docker exec -it web python core/manage.py createsuperuser
-
-enhanced-test: ## Run tests in container
-	@echo "🧪 Running tests..."
-	@docker exec web python core/manage.py test
-	@echo "✅ Tests completed."
-
-enhanced-backup: ## Backup Enhanced ML Manager data
-	@echo "💾 Creating backup..."
-	@mkdir -p backups
-	@docker exec web tar czf - /app/data | cat > backups/enhanced-ml-backup-$(shell date +%Y%m%d-%H%M%S).tar.gz
-	@echo "✅ Backup created in backups/ directory."
-
-enhanced-monitor: ## Monitor Enhanced ML Manager services
-	@echo "📊 Monitoring Enhanced ML Manager..."
-	@echo "Press Ctrl+C to stop monitoring"
-	@while true; do \
-		clear; \
-		echo "=== Enhanced ML Manager Status ==="; \
-		echo ""; \
-		make enhanced-status; \
-		echo ""; \
-		echo "=== Resource Usage ==="; \
-		docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" web mlflow; \
-		sleep 5; \
-	done
-
-# ==============================================
-# Legacy Commands (kept for compatibility)
-# ==============================================
-
-train: ## Run ML training (legacy)
-	mkdir -p runs
-	@echo $(DATASET_PATH)
-	@echo $(MLFLOW_BACKEND)
-	python ml/training/train.py --path '$(DATASET_PATH)' --epochs "[10]" --shuffle True --lr 0.01 --batch_size [32] --bce_weight "[0.1]" --quarterres 
-
-metrics: ## Show training metrics with TensorBoard
-	tensorboard --logdir runs
-	
-predict: ## Run inference (legacy)
-	python ml/inference/predict.py --image_path '$(IMAGE_PATH)' --epoch 6
-	
-setup: ## Legacy setup
-	@chmod +x scripts/development/*.sh
-	@./scripts/development/setup.sh
-
-quick: ## Legacy quick setup
-	@chmod +x scripts/development/*.sh
-	@./scripts/development/quick-setup.sh
-
-start: ## Legacy start
-	@./scripts/development/dev.sh start
-
-stop: ## Legacy stop
-	@./scripts/development/dev.sh stop
-
-restart: ## Legacy restart
-	@./scripts/development/dev.sh restart
-
-logs: ## Legacy logs
-	@./scripts/development/dev.sh logs
-
-shell: ## Legacy shell
-	@./scripts/development/dev.sh shell
-
-rebuild: ## Legacy rebuild
-	@./scripts/development/dev.sh rebuild
-
-clean: ## Legacy clean
-	@./scripts/development/dev.sh clean
-
-django-setup: ## Legacy Django setup
-	@./scripts/development/django-setup.sh setup
-
-django-migrate:
-	@./scripts/development/django-setup.sh migrate
-
-django-migrate-only:
-	@./scripts/development/django-setup.sh migrate-only
-
-django-makemigrations:
-	@./scripts/development/django-setup.sh makemigrations
-
-django-user:
-	@./scripts/development/django-setup.sh user
-
-django-shell:
-	@./scripts/development/django-setup.sh shell
-
-restructure:
-	@chmod +x scripts/development/restructure-full.sh
-	@./scripts/development/restructure-full.sh run
-
-restructure-apply:
-	@./scripts/development/restructure-full.sh apply
-
-restructure-rollback:
-	@./scripts/development/restructure-full.sh rollback
-
-gradual-restructure:
-	@chmod +x scripts/development/gradual-restructure.sh
-	@./scripts/development/gradual-restructure.sh
-
-restructure-tests:
-	@./scripts/development/gradual-restructure.sh tests
-
-restructure-requirements:
-	@./scripts/development/gradual-restructure.sh requirements
-
-# ==============================================
+# ================================================
 # Help
-# ==============================================
+# ================================================
 
 help: ## Show this help message
-	@echo "Enhanced ML Manager - Docker Commands"
-	@echo "====================================="
+	@echo "🏥 Coronary Experiments ML Manager"
+	@echo "=================================="
 	@echo ""
-	@echo "🚀 Quick Start:"
-	@echo "  make enhanced-setup    # Setup environment"
-	@echo "  make enhanced-start    # Start all services"
-	@echo "  make enhanced-status   # Check service status"
+	@echo "🚀 Quick Start (CPU):"
+	@echo "  make setup-cpu      # Setup CPU environment"
+	@echo "  make build-cpu      # Build CPU containers"
+	@echo "  make start-cpu      # Start CPU services"
+	@echo "  make status-cpu     # Check CPU status"
+	@echo ""
+	@echo "🚀 Quick Start (GPU):"
+	@echo "  make setup-gpu      # Setup GPU environment"
+	@echo "  make build-gpu      # Build GPU containers"
+	@echo "  make start-gpu      # Start GPU services"
+	@echo "  make status-gpu     # Check GPU status"
 	@echo ""
 	@echo "Available commands:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "🌐 Service URLs:"
 	@echo "  Django App: http://localhost:8000"
+	@echo "  Flower:     http://localhost:5555"
 	@echo "  MLflow:     http://localhost:5000"
+	@echo "  Database:   localhost:5432"
+	@echo "  Redis:      localhost:6379"
+
+# ================================================
+# Setup Commands
+# ================================================
+
+setup-cpu: ## Setup CPU environment
+	@echo "⚙️  Setting up CPU environment..."
+	@mkdir -p data/logs data/media data/static data/models
+	@cp $(ENV_CPU) .env
+	@echo "✅ CPU environment setup complete"
+	@echo "📝 You can edit .env file to customize settings"
+
+setup-gpu: ## Setup GPU environment  
+	@echo "⚙️  Setting up GPU environment..."
+	@mkdir -p data/logs data/media data/static data/models
+	@cp $(ENV_GPU) .env
+	@echo "✅ GPU environment setup complete"
+	@echo "📝 You can edit .env file to customize settings"
+	@echo "⚠️  Make sure nvidia-docker is installed for GPU support"
+
+# ================================================
+# Build Commands
+# ================================================
+
+build-cpu: ## Build CPU containers
+	@echo "🔨 Building CPU containers..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) build --no-cache
+	@echo "✅ CPU containers built successfully"
+
+build-gpu: ## Build GPU containers
+	@echo "🔨 Building GPU containers..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) build --no-cache
+	@echo "✅ GPU containers built successfully"
+
+# ================================================
+# Start/Stop Commands
+# ================================================
+
+start-cpu: ## Start CPU services
+	@echo "🚀 Starting CPU services..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) up -d
+	@echo "⏳ Waiting for services to start..."
+	@sleep 35
+	@echo "✅ CPU services started"
+	@make status-cpu
+
+start-gpu: ## Start GPU services
+	@echo "🚀 Starting GPU services..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) up -d
+	@echo "⏳ Waiting for services to start..."
+	@sleep 35
+	@echo "✅ GPU services started"
+	@make status-gpu
+
+stop-cpu: ## Stop CPU services
+	@echo "🛑 Stopping CPU services..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) down
+	@echo "✅ CPU services stopped"
+
+stop-gpu: ## Stop GPU services
+	@echo "🛑 Stopping GPU services..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) down
+	@echo "✅ GPU services stopped"
+
+restart-cpu: ## Restart CPU services
+	@echo "🔄 Restarting CPU services..."
+	@make stop-cpu
+	@sleep 5
+	@make start-cpu
+
+restart-gpu: ## Restart GPU services
+	@echo "🔄 Restarting GPU services..."
+	@make stop-gpu
+	@sleep 5
+	@make start-gpu
+
+# ================================================
+# Status and Logs
+# ================================================
+
+status-cpu: ## Check CPU services status
+	@echo "📊 CPU Services Status:"
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) ps
 	@echo ""
-	@echo "📚 Documentation:"
-	@echo "  docs/ENHANCED_ML_MANAGER_IMPLEMENTATION.md"
+	@echo "🔍 Health Checks:"
+	@echo -n "  Django: "
+	@curl -s http://localhost:8000/health/ >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
+	@echo -n "  Flower: "
+	@curl -s http://localhost:5555 >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
+	@echo -n "  MLflow: "
+	@curl -s http://localhost:5000 >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
+	@echo -n "  Redis:  "
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec redis redis-cli ping >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
+	@echo -n "  DB:     "
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec db pg_isready -U postgres >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
+
+status-gpu: ## Check GPU services status
+	@echo "📊 GPU Services Status:"
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) ps
+	@echo ""
+	@echo "🔍 Health Checks:"
+	@echo -n "  Django: "
+	@curl -s http://localhost:8000/health/ >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
+	@echo -n "  Flower: "
+	@curl -s http://localhost:5555 >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
+	@echo -n "  Redis:  "
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec redis redis-cli ping >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
+	@echo -n "  DB:     "
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec db pg_isready -U postgres >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
+
+logs-cpu: ## Show CPU services logs
+	@echo "📝 CPU Services Logs:"
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) logs -f
+
+logs-gpu: ## Show GPU services logs
+	@echo "📝 GPU Services Logs:"
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) logs -f
+
+logs-django-cpu: ## Show CPU Django logs only
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) logs -f django
+
+logs-django-gpu: ## Show GPU Django logs only
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) logs -f django
+
+logs-celery-cpu: ## Show CPU Celery logs only
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) logs -f celery-worker
+
+logs-celery-gpu: ## Show GPU Celery logs only
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) logs -f celery-worker
+
+# ================================================
+# Database Commands
+# ================================================
+
+migrate-cpu: ## Run migrations (CPU)
+	@echo "🔄 Running migrations (CPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django python core/manage.py migrate
+	@echo "✅ Migrations completed"
+
+migrate-gpu: ## Run migrations (GPU)
+	@echo "🔄 Running migrations (GPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django python core/manage.py migrate
+	@echo "✅ Migrations completed"
+
+makemigrations-cpu: ## Create migrations (CPU)
+	@echo "🔄 Creating migrations (CPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django python core/manage.py makemigrations
+	@echo "✅ Migrations created"
+
+makemigrations-gpu: ## Create migrations (GPU)
+	@echo "🔄 Creating migrations (GPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django python core/manage.py makemigrations
+	@echo "✅ Migrations created"
+
+superuser-cpu: ## Create superuser (CPU)
+	@echo "👤 Creating superuser (CPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django python core/manage.py createsuperuser
+
+superuser-gpu: ## Create superuser (GPU)
+	@echo "👤 Creating superuser (GPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django python core/manage.py createsuperuser
+
+# ================================================
+# Shell Commands
+# ================================================
+
+shell-cpu: ## Open Django shell (CPU)
+	@echo "🐚 Opening Django shell (CPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django bash
+
+shell-gpu: ## Open Django shell (GPU)
+	@echo "🐚 Opening Django shell (GPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django bash
+
+django-shell-cpu: ## Open Django Python shell (CPU)
+	@echo "🐍 Opening Django Python shell (CPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django python core/manage.py shell
+
+django-shell-gpu: ## Open Django Python shell (GPU)
+	@echo "🐍 Opening Django Python shell (GPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django python core/manage.py shell
+
+# ================================================
+# Maintenance Commands
+# ================================================
+
+clean-cpu: ## Clean CPU environment
+	@echo "🧹 Cleaning CPU environment..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) down -v --remove-orphans
+	@docker system prune -f
+	@echo "✅ CPU environment cleaned"
+
+clean-gpu: ## Clean GPU environment
+	@echo "🧹 Cleaning GPU environment..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) down -v --remove-orphans
+	@docker system prune -f
+	@echo "✅ GPU environment cleaned"
+
+backup-cpu: ## Backup CPU data
+	@echo "💾 Creating CPU backup..."
+	@mkdir -p backups
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django tar czf - /app/data | cat > backups/cpu-backup-$(shell date +%Y%m%d-%H%M%S).tar.gz
+	@echo "✅ CPU backup created in backups/ directory"
+
+backup-gpu: ## Backup GPU data
+	@echo "💾 Creating GPU backup..."
+	@mkdir -p backups
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django tar czf - /app/data | cat > backups/gpu-backup-$(shell date +%Y%m%d-%H%M%S).tar.gz
+	@echo "✅ GPU backup created in backups/ directory"
+
+# ================================================
+# Development Commands
+# ================================================
+
+test-cpu: ## Run tests (CPU)
+	@echo "🧪 Running tests (CPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django python manage.py test
+	@echo "✅ Tests completed"
+
+test-gpu: ## Run tests (GPU)
+	@echo "🧪 Running tests (GPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django python manage.py test
+	@echo "✅ Tests completed"
+
+collectstatic-cpu: ## Collect static files (CPU)
+	@echo "📦 Collecting static files (CPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django python manage.py collectstatic --noinput
+	@echo "✅ Static files collected"
+
+collectstatic-gpu: ## Collect static files (GPU)
+	@echo "📦 Collecting static files (GPU)..."
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django python manage.py collectstatic --noinput
+	@echo "✅ Static files collected"
+
+# ================================================
+# Monitoring Commands
+# ================================================
+
+monitor-cpu: ## Monitor CPU services
+	@echo "📊 Monitoring CPU services (Press Ctrl+C to stop)..."
+	@while true; do \
+		clear; \
+		echo "=== CPU Services Status ==="; \
+		make status-cpu; \
+		echo ""; \
+		echo "=== Resource Usage ==="; \
+		docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" $$($(DOCKER_COMPOSE) -f $(COMPOSE_CPU) ps -q) 2>/dev/null || echo "No containers running"; \
+		sleep 5; \
+	done
+
+monitor-gpu: ## Monitor GPU services
+	@echo "📊 Monitoring GPU services (Press Ctrl+C to stop)..."
+	@while true; do \
+		clear; \
+		echo "=== GPU Services Status ==="; \
+		make status-gpu; \
+		echo ""; \
+		echo "=== Resource Usage ==="; \
+		docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" $$($(DOCKER_COMPOSE) -f $(COMPOSE_GPU) ps -q) 2>/dev/null || echo "No containers running"; \
+		echo ""; \
+		echo "=== GPU Usage ==="; \
+		$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null || echo "GPU info not available"; \
+		sleep 5; \
+	done
+
+# ================================================
+# Quick Start Shortcuts
+# ================================================
+
+quick-cpu: ## Quick start CPU (setup + build + start)
+	@echo "🚀 Quick start CPU version..."
+	@make setup-cpu
+	@make build-cpu
+	@make start-cpu
+	@echo "🎉 CPU version is ready!"
+
+quick-gpu: ## Quick start GPU (setup + build + start)
+	@echo "🚀 Quick start GPU version..."
+	@make setup-gpu
+	@make build-gpu
+	@make start-gpu
+	@echo "🎉 GPU version is ready!"
+
+# ================================================
+# Default shortcuts (use CPU as default)
+# ================================================
+
+setup: setup-cpu ## Setup (default: CPU)
+build: build-cpu ## Build (default: CPU)
+start: start-cpu ## Start (default: CPU)
+stop: stop-cpu ## Stop (default: CPU)
+restart: restart-cpu ## Restart (default: CPU)
+status: status-cpu ## Status (default: CPU)
+logs: logs-cpu ## Logs (default: CPU)
+shell: shell-cpu ## Shell (default: CPU)
+migrate: migrate-cpu ## Migrate (default: CPU)
+clean: clean-cpu ## Clean (default: CPU)
+quick: quick-cpu ## Quick start (default: CPU)

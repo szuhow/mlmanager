@@ -32,18 +32,37 @@ def generate_model_summary(model_type: str, input_shape: Tuple[int, ...] = (1, 2
     is_monai_model = model_type.lower() in ['monai_unet', 'unet']
     
     try:
-        from ml.utils.architecture_registry import get_model_class, get_default_registry
+        from core.apps.ml_manager.utils.architecture_registry import get_model_class, get_default_registry
         
         # Special handling for MONAI UNet - use accurate model
         if is_monai_model:
             try:
-                # Try to import the actual MONAI model creator
-                from ml.utils.monai_utils import get_monai_unet
+                # Try to import the actual MONAI UNet model creator
+                from core.apps.ml_manager.training import monai_models
                 logger.info("Using actual MONAI UNet model for accurate parameter count")
-                model_class = get_monai_unet
+                model_class = monai_models.UNet
             except ImportError:
-                logger.warning("Could not import MONAI UNet directly, continuing with registry lookup")
-                model_class = None
+                logger.warning("Could not import MONAI UNet directly, creating proper fallback")
+                # Create a proper MONAI UNet fallback with actual parameters
+                from monai.networks.nets import UNet as MonaiUNet
+                
+                class MonaiFallbackUNet(nn.Module):
+                    def __init__(self, input_channels=1, output_channels=1, **kwargs):
+                        super().__init__()
+                        # Create actual MONAI UNet with proper parameters
+                        self.model = MonaiUNet(
+                            spatial_dims=2,
+                            in_channels=input_channels,
+                            out_channels=output_channels,
+                            channels=(16, 32, 64, 128, 256),
+                            strides=(2, 2, 2, 2),
+                            num_res_units=2,
+                        )
+                    
+                    def forward(self, x):
+                        return self.model(x)
+                
+                model_class = MonaiFallbackUNet
         else:
             model_class = None
             
@@ -122,9 +141,11 @@ def generate_model_summary(model_type: str, input_shape: Tuple[int, ...] = (1, 2
                     if model_type.lower() == 'monai_unet' or model_type.lower() == 'unet':
                         try:
                             # Try to import actual MONAI UNet model
-                            from ml.utils.monai_utils import get_monai_unet
-                            model_class = get_monai_unet
-                            logger.info("Using actual MONAI UNet implementation for preview")
+                            # from core.apps.ml_manager.utils.monai_utils import get_monai_unet  # Module not found
+                            # model_class = get_monai_unet
+                            # logger.info("Using actual MONAI UNet implementation for preview")
+                            logger.warning("MONAI UNet direct import not available, using fallback")
+                            model_class = None  # Will use fallback below
                         except ImportError:
                             logger.warning("Could not import MONAI UNet, falling back to generic model")
                     

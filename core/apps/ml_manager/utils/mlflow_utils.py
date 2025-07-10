@@ -348,6 +348,118 @@ def initialize_mlflow_connection():
             return False
     return False
 
+def get_available_experiments():
+    """Get list of available MLflow experiments for form choices with caching"""
+    try:
+        # Try to use Django cache if available
+        if DJANGO_AVAILABLE:
+            try:
+                from django.core.cache import cache
+                cached_experiments = cache.get('mlflow_experiments')
+                if cached_experiments:
+                    logger.info("[MLFLOW] Using cached experiments list")
+                    return cached_experiments
+            except ImportError:
+                pass  # Cache not available, continue with direct call
+        
+        # Set up MLflow connection
+        tracking_uri = get_mlflow_tracking_uri()
+        mlflow.set_tracking_uri(tracking_uri)
+        
+        # Get all experiments
+        experiments = mlflow.search_experiments()
+        
+        # Create choices list (experiment_id, experiment_name)
+        choices = []
+        for experiment in experiments:
+            # Skip deleted experiments
+            if experiment.lifecycle_stage != 'deleted':
+                choices.append((experiment.name, experiment.name))
+        
+        # Sort by name for better UX
+        choices.sort(key=lambda x: x[1])
+        
+        # Ensure default experiment exists
+        default_experiment_name = get_mlflow_experiment_name()
+        if not any(choice[0] == default_experiment_name for choice in choices):
+            choices.insert(0, (default_experiment_name, default_experiment_name))
+        
+        # Cache the result for 5 minutes
+        if DJANGO_AVAILABLE:
+            try:
+                from django.core.cache import cache
+                cache.set('mlflow_experiments', choices, 300)  # 5 minutes
+                logger.info("[MLFLOW] Cached experiments list for 5 minutes")
+            except ImportError:
+                pass
+        
+        return choices
+        
+    except Exception as e:
+        logger.error(f"[MLFLOW] Error getting available experiments: {e}")
+        # Return default experiment as fallback
+        default_experiment_name = get_mlflow_experiment_name()
+        return [(default_experiment_name, default_experiment_name)]
+
+def create_mlflow_experiment(experiment_name, description=None):
+    """Create a new MLflow experiment"""
+    try:
+        # Set up MLflow connection
+        tracking_uri = get_mlflow_tracking_uri()
+        mlflow.set_tracking_uri(tracking_uri)
+        
+        # Check if experiment already exists
+        existing_experiment = mlflow.get_experiment_by_name(experiment_name)
+        if existing_experiment:
+            logger.warning(f"[MLFLOW] Experiment '{experiment_name}' already exists")
+            return existing_experiment.experiment_id
+        
+        # Create new experiment
+        if DJANGO_AVAILABLE:
+            from django.conf import settings
+            artifact_location = getattr(settings, 'MLFLOW_ARTIFACT_ROOT', './data/mlflow')
+        else:
+            artifact_location = os.getenv('MLFLOW_ARTIFACT_ROOT', './data/mlflow')
+        
+        # Add experiment name to artifact path for organization
+        experiment_artifact_path = os.path.join(str(artifact_location), experiment_name.replace(' ', '_').replace('/', '_'))
+        
+        experiment_id = mlflow.create_experiment(
+            name=experiment_name,
+            artifact_location=experiment_artifact_path
+        )
+        
+        # Set experiment description if provided
+        if description:
+            try:
+                from mlflow.tracking import MlflowClient
+                client = MlflowClient()
+                client.update_experiment(experiment_id, name=experiment_name, new_name=experiment_name)
+                # Note: MLflow doesn't have direct description field, but we could add it as a tag
+                mlflow.set_experiment(experiment_name)
+                with mlflow.start_run() as run:
+                    mlflow.set_tag("experiment_description", description)
+                    mlflow.end_run()
+            except Exception as e:
+                logger.warning(f"[MLFLOW] Could not set experiment description: {e}")
+        
+        logger.info(f"[MLFLOW] Created new experiment '{experiment_name}' with ID {experiment_id}")
+        
+        # Clear cache so new experiment shows up immediately
+        if DJANGO_AVAILABLE:
+            try:
+                from django.core.cache import cache
+                cache.delete('mlflow_experiments')
+                logger.info("[MLFLOW] Cleared experiments cache after creating new experiment")
+            except ImportError:
+                pass
+        
+        return experiment_id
+        
+    except Exception as e:
+        logger.error(f"[MLFLOW] Error creating experiment '{experiment_name}': {e}")
+        return None
+
 def log_training_artifacts_to_mlflow(artifacts_dir, run_id=None):
     """
     Ensure all training artifacts are logged to MLflow properly
