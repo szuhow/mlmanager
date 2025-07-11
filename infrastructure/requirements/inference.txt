@@ -7,11 +7,12 @@ psycopg2-binary>=2.9.0
 python-dotenv>=1.0.1,<2.0.0
 dj-database-url>=2.1.0
 
-# Minimal ML libraries for inference
-# torch, torchvision - installed separately (no torchaudio needed for inference)
+# ML libraries for inference
+# torch, torchvision - installed separately via PyTorch CPU index (no torchaudio needed for inference)
+opencv-python-headless>=4.8.0,<5.0.0
 Pillow>=10.0.0,<11.0.0
 numpy>=1.24.0,<2.0.0
-opencv-python-headless>=4.8.0,<5.0.0
+monai>=1.3.0,<2.0.0
 
 # Basic utilities
 requests>=2.31.0

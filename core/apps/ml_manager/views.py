@@ -5,7 +5,7 @@ from django.urls import reverse_lazy, reverse
 from django.contrib import messages
 from django.db import models
 from django.core.files import File
-from django.http import JsonResponse, HttpResponse
+from django.http import JsonResponse, HttpResponse, HttpResponseRedirect
 from django.utils.http import http_date
 from .forms import TrainingForm, InferenceForm, EnhancedInferenceForm, TrainingTemplateForm
 from .models import MLModel, Prediction, TrainingTemplate
@@ -467,8 +467,8 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                     alt_model_dir = model_dir.replace('/app/core/', '', 1)
                     base_paths.append(os.path.join(alt_model_dir, 'predictions'))
             
-            # PRIORITY 2: Search organized structure by model unique identifier
-            if self.object.unique_identifier:
+            # PRIORITY 2: Search organized structure by MLflow run ID and unique identifier
+            if self.object.mlflow_run_id or self.object.unique_identifier:
                 organized_bases = [
                     'data/models/organized',
                     '/app/data/models/organized',
@@ -477,19 +477,31 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                 
                 for org_base in organized_bases:
                     if os.path.exists(org_base):
-                        # Look for directories containing the unique identifier
+                        # Look for directories containing the MLflow run ID or unique identifier
                         try:
                             for root, dirs, files in os.walk(org_base):
                                 for dir_name in dirs:
-                                    # Exact match first
-                                    if self.object.unique_identifier in dir_name:
+                                    # Search by MLflow run ID (both full and short)
+                                    if self.object.mlflow_run_id:
+                                        if self.object.mlflow_run_id in dir_name:
+                                            dir_path = os.path.join(root, dir_name)
+                                            base_paths.append(os.path.join(dir_path, 'predictions'))
+                                            continue
+                                        # Also try short MLflow run ID (first 8 chars)
+                                        elif len(self.object.mlflow_run_id) > 8:
+                                            short_id = self.object.mlflow_run_id[:8]
+                                            if short_id in dir_name:
+                                                dir_path = os.path.join(root, dir_name)
+                                                base_paths.append(os.path.join(dir_path, 'predictions'))
+                                                continue
+                                    
+                                    # Search by unique identifier (exact match first)
+                                    if self.object.unique_identifier and self.object.unique_identifier in dir_name:
                                         dir_path = os.path.join(root, dir_name)
-                                        # Add only predictions path - simplified
                                         base_paths.append(os.path.join(dir_path, 'predictions'))
                                     else:
                                         # Fallback: Pattern match for timestamp differences
-                                        # Extract model prefix and suffix for fuzzy matching
-                                        if '_' in self.object.unique_identifier:
+                                        if self.object.unique_identifier and '_' in self.object.unique_identifier:
                                             parts = self.object.unique_identifier.split('_')
                                             if len(parts) >= 3:
                                                 # Pattern: model_family_timestamp_mlflow_uuid
@@ -2319,88 +2331,67 @@ class GeneralInferenceView(LoginRequiredMixin, FormView):
                 )
                 os.makedirs(inference_output_dir, exist_ok=True)
                 
-                # Run enhanced inference
+                # Run enhanced inference - DELEGATE TO CELERY WORKER
                 logger.info(f"Starting enhanced inference for {uploaded_file.name} using model {model.name}")
                 
-                # Import and run enhanced inference
-                import sys
-                sys.path.append(os.path.join(settings.BASE_DIR, '..', 'ml'))
-                from core.apps.ml_manager.utils.enhanced_inference import run_enhanced_inference
+                # Use MLPredictionService to delegate to Celery worker
+                from .services.prediction_service import MLPredictionService
                 
-                inference_config = inference_result.inference_config.copy()
-                inference_config['model_type'] = getattr(model, 'model_type', 'unet')
+                prediction_service = MLPredictionService(model.id)
                 
-                # Determine device to use - respect force_cpu option
-                force_cpu = form.cleaned_data.get('force_cpu', False)
-                device = "cpu" if force_cpu or not torch.cuda.is_available() else "cuda"
+                # Prepare inference parameters for Celery task
+                inference_params = {
+                    'threshold': form.cleaned_data.get('threshold', 0.5),
+                    'resolution': form.cleaned_data.get('resolution', 512),
+                    'confidence_threshold': form.cleaned_data.get('confidence_threshold', 0.5),
+                    'min_component_size': form.cleaned_data.get('min_component_size', 100),
+                    'morphology_kernel_size': form.cleaned_data.get('morphology_kernel_size', 3),
+                    'apply_opening': form.cleaned_data.get('apply_opening', True),
+                    'apply_closing': form.cleaned_data.get('apply_closing', True),
+                    'apply_dilation': form.cleaned_data.get('apply_dilation', False),
+                    'apply_erosion': form.cleaned_data.get('apply_erosion', False),
+                    'fill_holes': form.cleaned_data.get('fill_holes', True),
+                    'smooth_boundaries': form.cleaned_data.get('smooth_boundaries', False),
+                    'remove_border_objects': form.cleaned_data.get('remove_border_objects', False),
+                    'min_area_ratio': form.cleaned_data.get('min_area_ratio', 0.0),
+                    'max_area_ratio': form.cleaned_data.get('max_area_ratio', 1.0),
+                    'min_solidity': form.cleaned_data.get('min_solidity', 0.0),
+                    'min_eccentricity': form.cleaned_data.get('min_eccentricity', 0.0),
+                    'max_eccentricity': form.cleaned_data.get('max_eccentricity', 1.0),
+                    'use_adaptive_threshold': form.cleaned_data.get('use_adaptive_threshold', False),
+                    'use_tta': form.cleaned_data.get('use_tta', False),
+                    'tta_flip_horizontal': form.cleaned_data.get('tta_flip_horizontal', True),
+                    'tta_flip_vertical': form.cleaned_data.get('tta_flip_vertical', True),
+                    'tta_rotate_90': form.cleaned_data.get('tta_rotate_90', True),
+                    'tta_scale': form.cleaned_data.get('tta_scale', False),
+                    'model_type': getattr(model, 'model_type', 'unet'),
+                    'force_cpu': form.cleaned_data.get('force_cpu', False),
+                    'weights_path': model_weights_path,
+                    'output_dir': inference_output_dir,
+                    'inference_result_id': inference_result.id,
+                }
                 
-                logger.info(f"Using device: {device} (force_cpu={force_cpu}, CUDA available={torch.cuda.is_available()})")
+                # Start asynchronous inference task
+                task_result = prediction_service.predict_async(uploaded_file, inference_params)
                 
-                results = run_enhanced_inference(
-                    model_path=model_weights_path,
-                    input_image_path=inference_result.input_image.path,
-                    output_dir=inference_output_dir,
-                    config=inference_config,
-                    device=device
+                # Update inference result with task ID
+                inference_result.task_id = task_result['task_id']
+                inference_result.status = 'processing'
+                inference_result.save()
+                
+                logger.info(f"Inference task queued with ID: {task_result['task_id']}")
+                
+                # Return success immediately (inference runs in background)
+                messages.success(
+                    self.request, 
+                    f'Inference started successfully! Task ID: {task_result["task_id"]}. '
+                    f'You can check the results in the Inference Results section.'
                 )
                 
-                if results['status'] == 'completed':
-                    # Update inference result with actual results
-                    inference_result.processing_time = results['processing_time']
-                    inference_result.detected_objects_count = results['detected_objects_count']
-                    inference_result.total_area_pixels = results['total_area_pixels']
-                    inference_result.confidence_scores = results['confidence_scores']
-                    inference_result.status = 'completed'
-                    
-                    # Save output file paths if available
-                    if 'output_files' in results and results['output_files']:
-                        # Save overlay image to the model's output_overlay field
-                        if 'overlay' in results['output_files']:
-                            overlay_path = results['output_files']['overlay']
-                            # Convert absolute path to relative path for Django
-                            relative_overlay_path = os.path.relpath(overlay_path, settings.MEDIA_ROOT)
-                            inference_result.output_overlay.name = relative_overlay_path
-                        
-                        # Save mask image to the model's output_mask field  
-                        if 'segmentation_mask' in results['output_files']:
-                            mask_path = results['output_files']['segmentation_mask']
-                            relative_mask_path = os.path.relpath(mask_path, settings.MEDIA_ROOT)
-                            inference_result.output_mask.name = relative_mask_path
-                    
-                    inference_result.save()
-                    
-                    logger.info(f"Enhanced inference completed in {results['processing_time']:.2f}s for {uploaded_file.name}")
-                    
-                    messages.success(
-                        self.request, 
-                        f'Inference completed successfully in {results["processing_time"]:.2f}s! '
-                        f'Found {results["detected_objects_count"]} objects.'
-                    )
-                else:
-                    # Handle failed inference with better error reporting
-                    inference_result.status = 'failed'
-                    
-                    # Get error message
-                    user_error = results.get('error_message', 'Unknown error')
-                    technical_error = results.get('technical_error', user_error)
-                    
-                    # Store both errors
-                    inference_result.error_message = user_error
-                    # Store technical details in JSON config for debugging
-                    inference_result.inference_config['technical_error'] = technical_error
-                    inference_result.save()
-                    
-                    # Show user-friendly message
-                    messages.error(self.request, f'Inference failed: {user_error}')
-                    
-                    # For CUDA errors, suggest using CPU
-                    if 'cuda' in technical_error.lower() or 'nvidia' in technical_error.lower():
-                        messages.warning(self.request, 'Try selecting "Force CPU" in the advanced options.')
-                    
-                    return self.form_invalid(form)
-                
-                # Redirect to inference results view
-                return redirect('ml_manager:inference-result', pk=inference_result.pk)
+                return HttpResponseRedirect(
+                    reverse('ml_manager:inference-result', 
+                           kwargs={'pk': inference_result.id})
+                )
                 
             except Exception as e:
                 logger.error(f"Enhanced inference failed: {str(e)}")
@@ -2863,6 +2854,10 @@ def get_training_log(request, model_id):
             else:
                 model_dir_paths.append(os.path.abspath(model.model_directory))
             
+            # Try adding /app/core prefix for container paths
+            if not model.model_directory.startswith('/app/core/'):
+                model_dir_paths.append(f'/app/core/{model.model_directory.lstrip("/")}')
+            
             # Try without /app/core prefix (logs saved outside core directory)
             if model.model_directory.startswith('/app/core/'):
                 stripped_path = model.model_directory.replace('/app/core/', '', 1)
@@ -2923,6 +2918,56 @@ def get_training_log(request, model_id):
                         logger.warning(f"Could not list directory contents: {e}")
             else:
                 logger.warning(f"❌ Model directory not found in any of the attempted paths: {model_dir_paths}")
+                # If we can't find the model directory but have MLflow run ID, search for it
+                if model.mlflow_run_id and not log_lines:
+                    logger.info(f"🔍 Model directory not found, searching for MLflow run ID: {model.mlflow_run_id}")
+                    # Create search patterns for both full and short MLflow run ID
+                    mlflow_search_patterns = [model.mlflow_run_id]
+                    if len(model.mlflow_run_id) > 8:
+                        # Add first 8 characters pattern (commonly used in folder names)
+                        short_id = model.mlflow_run_id[:8]
+                        mlflow_search_patterns.append(short_id)
+                        logger.info(f"🔍 Also searching for short MLflow run ID: {short_id}")
+                    
+                    organized_bases = [
+                        '/app/core/data/models/organized',
+                        'data/models/organized',
+                        '/app/data/models/organized'
+                    ]
+                    
+                    for base in organized_bases:
+                        if os.path.exists(base):
+                            logger.info(f"🔍 Searching in {base} for MLflow run ID patterns...")
+                            for root, dirs, files in os.walk(base):
+                                for dir_name in dirs:
+                                    # Check if any of our MLflow patterns match
+                                    for pattern in mlflow_search_patterns:
+                                        if pattern in dir_name:
+                                            potential_dir = os.path.join(root, dir_name)
+                                            logs_path = os.path.join(potential_dir, 'logs', 'training.log')
+                                            logger.info(f"🔍 Testing MLflow pattern '{pattern}' in directory: {dir_name}")
+                                            if os.path.exists(logs_path):
+                                                try:
+                                                    with open(logs_path, 'r', encoding='utf-8') as f:
+                                                        log_lines = f.read().splitlines()
+                                                        log_sources.append(f"MLflow run ID search: {logs_path}")
+                                                        logger.info(f"✅ Found logs via MLflow run ID search: {len(log_lines)} lines")
+                                                        # Update model directory
+                                                        try:
+                                                            model.model_directory = potential_dir
+                                                            model.save(update_fields=['model_directory'])
+                                                            logger.info(f"💾 Updated model_directory: {potential_dir}")
+                                                        except Exception as e:
+                                                            logger.warning(f"Could not update model_directory: {e}")
+                                                        break
+                                                except Exception as e:
+                                                    logger.warning(f"Could not read log {logs_path}: {e}")
+                                    if log_lines:
+                                        break
+                                if log_lines:
+                                    break
+                            if log_lines:
+                                break
         
         # 1.5. If model_directory not set, try to find it in organized structure
         elif not model.model_directory:
@@ -2930,9 +2975,11 @@ def get_training_log(request, model_id):
             
             # Search in multiple potential organized bases
             organized_bases = [
-                'data/models/organized',
-                '/app/data/models/organized',
-                os.path.join(os.getcwd(), 'data/models/organized')
+                '/app/core/data/models/organized',  # Primary location (absolute from container root)
+                'data/models/organized',            # Relative from working directory
+                '/app/data/models/organized',       # Alternative absolute path
+                os.path.join(os.getcwd(), 'data/models/organized'),  # Relative from current dir
+                os.path.join('/app/core', 'data/models/organized')   # Explicit core path
             ]
             
             found_directory = None
@@ -2941,6 +2988,17 @@ def get_training_log(request, model_id):
                     logger.info(f"🔍 Searching organized base: {organized_base}")
                     # Search for model directory using various patterns
                     search_patterns = []
+                    if model.mlflow_run_id:
+                        # Most reliable: search for MLflow run ID directly
+                        search_patterns.append(f"*{model.mlflow_run_id}*")
+                        # Also search for short MLflow run ID (first 8 chars)
+                        if len(model.mlflow_run_id) > 8:
+                            short_id = model.mlflow_run_id[:8]
+                            search_patterns.append(f"*{short_id}*")
+                            logger.info(f"🔍 Searching for full MLflow run ID: {model.mlflow_run_id} and short: {short_id}")
+                        else:
+                            logger.info(f"🔍 Searching for MLflow run ID: {model.mlflow_run_id}")
+                    
                     if model.unique_identifier:
                         search_patterns.append(f"*{model.unique_identifier}*")
                         
@@ -2961,18 +3019,24 @@ def get_training_log(request, model_id):
                         search_patterns.append(f"*{clean_name}*")
                     search_patterns.append(f"*model_{model_id}*")
                     
+                    logger.info(f"🔍 Search patterns: {search_patterns}")
+                    
                     for root, dirs, files in os.walk(organized_base):
                         for dir_name in dirs:
+                            # Check if this directory matches any of our patterns
+                            matches = False
                             for pattern in search_patterns:
                                 import fnmatch
                                 if fnmatch.fnmatch(dir_name.lower(), pattern.lower()):
                                     potential_dir = os.path.join(root, dir_name)
                                     logs_path = os.path.join(potential_dir, 'logs', 'training.log')
+                                    logger.info(f"🔍 Testing directory: {dir_name} -> {logs_path}")
                                     if os.path.exists(logs_path):
                                         found_directory = potential_dir
                                         logger.info(f"✅ Found model directory: {found_directory}")
+                                        matches = True
                                         break
-                            if found_directory:
+                            if matches and found_directory:
                                 break
                         if found_directory:
                             break
@@ -3015,11 +3079,16 @@ def get_training_log(request, model_id):
         
         # Skip global log loading to avoid mixing different models' logs
         
-        # 3. Final fallback to model's training_logs field
-        if len(log_lines) <= 4 and model.training_logs:  # Only if we just have status messages
-            log_lines = model.training_logs.splitlines()
-            log_sources.append("Database field")
-            logger.info(f"Using database training_logs field with {len(log_lines)} lines")
+        # If no model-specific logs found, return helpful status messages
+        if not log_lines:
+            logger.warning(f"❌ No model-specific logs found for model {model_id}")
+            log_lines = [
+                f"[INFO] No model-specific training logs found for model {model_id}",
+                f"[INFO] Expected log location: {model.model_directory}/logs/training.log" if model.model_directory else "[INFO] Model directory not set",
+                f"[INFO] Please check if training has started and logs are being written",
+                f"[INFO] If training is in progress, logs should appear shortly"
+            ]
+            log_sources.append("Status message - no logs found")
         
         # Apply filtering
         if log_type != 'all':
@@ -5706,21 +5775,123 @@ def get_realtime_logs(request, model_id):
         last_timestamp = request.GET.get('since', '')
         lines_limit = int(request.GET.get('lines', 50))
         
-        # Find log file path
+        # Find log file path using enhanced search logic (same as get_training_log)
         log_path = None
+        
+        # 1. Try model directory paths if set
         if model.model_directory:
-            model_dir_paths = [
-                model.model_directory,
-                model.model_directory.replace('/app/core/', '', 1) if model.model_directory.startswith('/app/core/') else None,
-                f'/app/{model.model_directory.lstrip("/")}' if not model.model_directory.startswith('/app/') else None,
-                os.path.join(os.getcwd(), model.model_directory.lstrip('/'))
+            model_dir_paths = []
+            
+            # Try original path
+            if os.path.isabs(model.model_directory):
+                model_dir_paths.append(model.model_directory)
+            else:
+                model_dir_paths.append(os.path.abspath(model.model_directory))
+            
+            # Try adding /app/core prefix for container paths
+            if not model.model_directory.startswith('/app/core/'):
+                model_dir_paths.append(f'/app/core/{model.model_directory.lstrip("/")}')
+            
+            # Try without /app/core prefix
+            if model.model_directory.startswith('/app/core/'):
+                stripped_path = model.model_directory.replace('/app/core/', '', 1)
+                model_dir_paths.append(os.path.abspath(stripped_path))
+                model_dir_paths.append(f'/app/{stripped_path}')
+            
+            # Try with /app prefix if not already there
+            if not model.model_directory.startswith('/app/'):
+                model_dir_paths.append(f'/app/{model.model_directory.lstrip("/")}')
+            
+            # Try relative to current working directory
+            model_dir_paths.append(os.path.join(os.getcwd(), model.model_directory.lstrip('/')))
+            
+            for model_dir in model_dir_paths:
+                if os.path.exists(model_dir):
+                    potential_log = os.path.join(model_dir, 'logs', 'training.log')
+                    if os.path.exists(potential_log):
+                        log_path = potential_log
+                        break
+        
+        # 2. If no log found and we have MLflow run ID, search organized structure
+        if not log_path and model.mlflow_run_id:
+            # Create search patterns for both full and short MLflow run ID
+            mlflow_search_patterns = [model.mlflow_run_id]
+            if len(model.mlflow_run_id) > 8:
+                # Add first 8 characters pattern (commonly used in folder names)
+                short_id = model.mlflow_run_id[:8]
+                mlflow_search_patterns.append(short_id)
+            
+            organized_bases = [
+                '/app/core/data/models/organized',
+                'data/models/organized',
+                '/app/data/models/organized'
             ]
             
-            for model_dir in filter(None, model_dir_paths):
-                potential_log = os.path.join(model_dir, 'logs', 'training.log')
-                if os.path.exists(potential_log):
-                    log_path = potential_log
-                    break
+            for base in organized_bases:
+                if os.path.exists(base):
+                    for root, dirs, files in os.walk(base):
+                        for dir_name in dirs:
+                            # Check if any of our MLflow patterns match
+                            for pattern in mlflow_search_patterns:
+                                if pattern in dir_name:
+                                    potential_dir = os.path.join(root, dir_name)
+                                    potential_log = os.path.join(potential_dir, 'logs', 'training.log')
+                                    if os.path.exists(potential_log):
+                                        log_path = potential_log
+                                        # Update model directory for future requests
+                                        try:
+                                            model.model_directory = potential_dir
+                                            model.save(update_fields=['model_directory'])
+                                        except Exception as e:
+                                            logger.warning(f"Could not update model_directory: {e}")
+                                        break
+                            if log_path:
+                                break
+                        if log_path:
+                            break
+                    if log_path:
+                        break
+        
+        # 3. If still no log found, search by patterns (fallback)
+        if not log_path:
+            organized_bases = [
+                '/app/core/data/models/organized',
+                'data/models/organized', 
+                '/app/data/models/organized'
+            ]
+            
+            for base in organized_bases:
+                if os.path.exists(base):
+                    search_patterns = []
+                    if model.mlflow_run_id:
+                        search_patterns.append(f"*{model.mlflow_run_id}*")
+                        # Also search for short MLflow run ID (first 8 chars)
+                        if len(model.mlflow_run_id) > 8:
+                            short_id = model.mlflow_run_id[:8]
+                            search_patterns.append(f"*{short_id}*")
+                    if model.unique_identifier:
+                        search_patterns.append(f"*{model.unique_identifier}*")
+                    if model.name:
+                        clean_name = model.name.replace(" ", "_").replace("(", "").replace(")", "").lower()
+                        search_patterns.append(f"*{clean_name}*")
+                    search_patterns.append(f"*model_{model_id}*")
+                    
+                    for root, dirs, files in os.walk(base):
+                        for dir_name in dirs:
+                            for pattern in search_patterns:
+                                import fnmatch
+                                if fnmatch.fnmatch(dir_name.lower(), pattern.lower()):
+                                    potential_dir = os.path.join(root, dir_name)
+                                    potential_log = os.path.join(potential_dir, 'logs', 'training.log')
+                                    if os.path.exists(potential_log):
+                                        log_path = potential_log
+                                        break
+                            if log_path:
+                                break
+                        if log_path:
+                            break
+                    if log_path:
+                        break
         
         if not log_path or not os.path.exists(log_path):
             return JsonResponse({

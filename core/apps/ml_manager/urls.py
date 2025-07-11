@@ -37,7 +37,6 @@ urlpatterns = [
     
     # Training log URL
     path('model/<int:model_id>/logs/', views.get_training_log, name='model-training-log'),
-    path('model/<int:pk>/logs/', views.ModelLogsView.as_view(), name='model-logs'),
     path('model/<int:model_id>/logs/realtime/', views.get_realtime_logs, name='model-realtime-logs'),
     
     # Training progress URL

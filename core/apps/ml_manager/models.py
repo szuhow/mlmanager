@@ -598,6 +598,7 @@ class InferenceResult(models.Model):
         ('failed', 'Failed'),
     ]
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='processing')
+    task_id = models.CharField(max_length=100, blank=True, null=True, help_text="Celery task ID for asynchronous processing")
     error_message = models.TextField(blank=True, help_text="Error message if inference failed")
     
     class Meta:

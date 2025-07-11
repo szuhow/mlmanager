@@ -27,10 +27,10 @@ WORKDIR /app
 COPY infrastructure/requirements/inference.txt /app/requirements/inference.txt
 
 # Install inference dependencies (lighter than training)
+# Install PyTorch first with specific versions to avoid circular import issues
 RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements/inference.txt && \
-    pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir opencv-python-headless Pillow numpy && \
     pip cache purge
 
 # Copy application code

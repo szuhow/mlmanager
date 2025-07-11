@@ -18,6 +18,11 @@ COMPOSE_GPU = infrastructure/docker-compose/docker-compose.gpu.yml
 ENV_CPU = infrastructure/env/.env.cpu
 ENV_GPU = infrastructure/env/.env.gpu
 
+# Dataset URLs (hardcoded examples - replace with your actual URLs)
+ARCADE_DATASET_URL = https://drive.google.com/file/d/1ABC123DEF456GHI789JKL/view
+CORONARY_DATASET_URL = https://drive.google.com/drive/folders/1uUSasFHxscLwRrBU2Wbnc3PPgjuSasPr?usp=drive_link
+CADICA_DATASET_URL = https://drive.google.com/file/d/1CADICA123456789ABCDEF/view
+
 # ================================================
 # Help
 # ================================================
@@ -37,6 +42,16 @@ help: ## Show this help message
 	@echo "  make build-gpu      # Build GPU containers"
 	@echo "  make start-gpu      # Start GPU services"
 	@echo "  make status-gpu     # Check GPU status"
+	@echo ""
+	@echo "📥 Dataset Management:"
+	@echo "  make setup-datasets         # Setup datasets directory and dependencies"
+	@echo "  make download-dataset        # Download from Google Drive URL"
+	@echo "  make download-arcade         # Download ARCADE dataset (hardcoded URL)"
+	@echo "  make download-coronary-example # Download coronary dataset (hardcoded URL)"
+	@echo "  make download-cadica         # Download CADICA dataset (hardcoded URL)"
+	@echo "  make download-all-datasets   # Download all predefined datasets"
+	@echo "  make list-datasets           # List all downloaded datasets"
+	@echo "  Example: make download-dataset URL=https://drive.google.com/file/d/1ABC.../view"
 	@echo ""
 	@echo "Available commands:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -272,6 +287,118 @@ backup-gpu: ## Backup GPU data
 	@mkdir -p backups
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django tar czf - /app/core/data | cat > backups/gpu-backup-$(shell date +%Y%m%d-%H%M%S).tar.gz
 	@echo "✅ GPU backup created in backups/ directory"
+
+# ================================================
+# Dataset Management Commands
+# ================================================
+
+download-dataset: ## Download dataset from Google Drive URL
+	@echo "📥 Dataset Download Tool"
+	@echo "Usage: make download-dataset URL=<google_drive_url> [NAME=<dataset_name>]"
+	@echo "Example: make download-dataset URL=https://drive.google.com/file/d/1ABC123.../view NAME=arcade_dataset"
+	@if [ -z "$(URL)" ]; then \
+		echo "❌ Error: URL parameter is required"; \
+		echo "   Example: make download-dataset URL=https://drive.google.com/file/d/1ABC123.../view"; \
+		exit 1; \
+	fi
+	@echo "🔍 Downloading dataset from: $(URL)"
+	@if [ -n "$(NAME)" ]; then \
+		echo "📝 Using custom name: $(NAME)"; \
+		python3 infrastructure/scripts/download_dataset.py "$(URL)" --name "$(NAME)"; \
+	else \
+		python3 infrastructure/scripts/download_dataset.py "$(URL)"; \
+	fi
+	@echo "✅ Dataset download completed"
+
+list-datasets: ## List all downloaded datasets
+	@echo "📋 Available Datasets:"
+	@python3 scripts/download_dataset.py --list
+
+install-dataset-deps: ## Install dataset download dependencies
+	@echo "📦 Installing dataset download dependencies..."
+	@pip3 install requests tqdm
+	@echo "✅ Dependencies installed (wget/curl are used for downloading)"
+
+# Example dataset downloads
+download-arcade: ## Download ARCADE dataset (hardcoded URL)
+	@echo "📥 Downloading ARCADE Challenge Dataset..."
+	@echo "🔗 Using hardcoded URL: $(ARCADE_DATASET_URL)"
+	@if [ "$(ARCADE_DATASET_URL)" = "https://drive.google.com/file/d/1ABC123DEF456GHI789JKL/view" ]; then \
+		echo "⚠️  This is a placeholder URL - please update ARCADE_DATASET_URL in Makefile"; \
+		echo "   Visit: https://arcade.grand-challenge.org/ to get the real URL"; \
+		exit 1; \
+	fi
+	@python3 scripts/download_dataset.py "$(ARCADE_DATASET_URL)" --name "arcade"
+
+download-coronary-example: ## Download coronary dataset (hardcoded URL)
+	@echo "📥 Downloading coronary dataset..."
+	@echo "🔗 Using hardcoded URL: $(CORONARY_DATASET_URL)"
+	@if [ "$(CORONARY_DATASET_URL)" = "https://drive.google.com/file/d/1XYZ789ABC123DEF456GHI/view" ]; then \
+		echo "⚠️  This is a placeholder URL - please update CORONARY_DATASET_URL in Makefile"; \
+		exit 1; \
+	fi
+	@python3 scripts/download_dataset.py "$(CORONARY_DATASET_URL)" --name "coronary_example"
+
+download-cadica: ## Download CADICA dataset (hardcoded URL)
+	@echo "📥 Downloading CADICA dataset..."
+	@echo "🔗 Using hardcoded URL: $(CADICA_DATASET_URL)"
+	@if [ "$(CADICA_DATASET_URL)" = "https://drive.google.com/file/d/1CADICA123456789ABCDEF/view" ]; then \
+		echo "⚠️  This is a placeholder URL - please update CADICA_DATASET_URL in Makefile"; \
+		exit 1; \
+	fi
+	@python3 scripts/download_dataset.py "$(CADICA_DATASET_URL)" --name "cadica"
+
+download-all-datasets: ## Download all hardcoded datasets
+	@echo "📥 Downloading all predefined datasets..."
+	@echo "🚀 This will download: ARCADE, Coronary Example, and CADICA datasets"
+	@make download-arcade
+	@make download-coronary-example
+	@make download-cadica
+	@echo "✅ All datasets downloaded successfully"
+
+setup-datasets: ## Setup datasets directory and install dependencies
+	@echo "📁 Setting up datasets directory..."
+	@mkdir -p core/data/datasets
+	@make install-dataset-deps
+	@echo "✅ Datasets setup completed"
+	@echo "📖 Usage:"
+	@echo "   make download-dataset URL=<google_drive_url> [NAME=<name>]"
+	@echo "   make list-datasets"
+
+cleanup-datasets: ## Clean up downloaded datasets
+	@echo "🧹 Cleaning up datasets..."
+	@echo "⚠️  This will remove ALL datasets in core/data/datasets/"
+	@read -p "Are you sure? [y/N] " -n 1 -r; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		echo ""; \
+		echo "🗑️  Removing datasets..."; \
+		rm -rf core/data/datasets/*; \
+		echo "✅ Datasets cleaned up"; \
+	else \
+		echo ""; \
+		echo "❌ Cleanup cancelled"; \
+	fi
+
+update-dataset-urls: ## Show how to update hardcoded dataset URLs
+	@echo "🔧 Updating Dataset URLs"
+	@echo "========================"
+	@echo ""
+	@echo "To update hardcoded dataset URLs, edit the following variables in Makefile:"
+	@echo ""
+	@echo "ARCADE_DATASET_URL = $(ARCADE_DATASET_URL)"
+	@echo "CORONARY_DATASET_URL = $(CORONARY_DATASET_URL)"
+	@echo "CADICA_DATASET_URL = $(CADICA_DATASET_URL)"
+	@echo ""
+	@echo "📝 Example URLs format:"
+	@echo "  File:   https://drive.google.com/file/d/FILE_ID/view"
+	@echo "  Folder: https://drive.google.com/drive/folders/FOLDER_ID"
+	@echo "  Direct: https://drive.google.com/uc?id=FILE_ID"
+	@echo ""
+	@echo "💡 After updating URLs, you can use:"
+	@echo "  make download-arcade"
+	@echo "  make download-coronary-example"
+	@echo "  make download-cadica"
+	@echo "  make download-all-datasets"
 
 # ================================================
 # Development Commands

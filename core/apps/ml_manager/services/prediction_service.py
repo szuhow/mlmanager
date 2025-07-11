@@ -4,10 +4,13 @@ ML prediction services with Celery integration.
 
 import os
 import tempfile
+import logging
 from pathlib import Path
 from PIL import Image
 from django.core.files.base import ContentFile
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 from ..models import MLModel, Prediction
 
@@ -162,6 +165,67 @@ class MLPredictionService:
                 except:
                     pass
             
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def predict_async(self, image_file, inference_params=None):
+        """
+        Run prediction on an image using Celery with full inference parameters.
+        
+        Args:
+            image_file: Uploaded image file
+            inference_params: Dict with all inference configuration parameters
+        
+        Returns:
+            dict: Task information
+        """
+        try:
+            # Import Celery task
+            from ..tasks.tasks import run_inference_task
+            
+            # Save uploaded image temporarily
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+                for chunk in image_file.chunks():
+                    temp_file.write(chunk)
+                temp_image_path = temp_file.name
+            
+            # Use provided inference parameters or create defaults
+            if inference_params is None:
+                inference_params = {
+                    'model_type': self.model.model_type,
+                    'output_dir': str(settings.CORE_DATA_DIR / 'inference_results'),
+                    'threshold': 0.5,
+                    'weights_path': self.model.model_weights_path if self.model.model_weights_path else None
+                }
+            
+            # Ensure model_type is set
+            inference_params['model_type'] = inference_params.get('model_type', self.model.model_type)
+            
+            # Start inference task asynchronously
+            task = run_inference_task.delay(
+                self.model.id, 
+                temp_image_path, 
+                inference_params
+            )
+            
+            return {
+                'success': True,
+                'task_id': task.id,
+                'model_id': self.model.id,
+                'status': 'queued',
+                'temp_image_path': temp_image_path
+            }
+            
+        except Exception as e:
+            # Cleanup on error
+            if 'temp_image_path' in locals():
+                try:
+                    os.unlink(temp_image_path)
+                except:
+                    pass
+            logger.error(f"Failed to start async prediction: {str(e)}")
             return {
                 'success': False,
                 'error': str(e)

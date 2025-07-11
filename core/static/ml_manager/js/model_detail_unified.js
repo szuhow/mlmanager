@@ -822,15 +822,12 @@ class ModelDetailManager {
             }).join('');
             
             logsContent.innerHTML = formattedLogs;
-        } else if (typeof data === 'string' && data.trim()) {
-            // Fallback for plain text logs
-            const formattedLogs = data.split('\n').map(line => 
-                line.trim() ? `<div class="log-line">${this.escapeHtml(line)}</div>` : '<br>'
-            ).join('');
-            
-            logsContent.innerHTML = formattedLogs || '<p class="text-muted">No logs available yet.</p>';
+        } else if (data.status === 'error') {
+            // Handle error case
+            logsContent.innerHTML = `<p class="text-danger">Error loading logs: ${this.escapeHtml(data.message || 'Unknown error')}</p>`;
         } else {
-            logsContent.innerHTML = '<p class="text-muted">No logs available yet.</p>';
+            // No logs available
+            logsContent.innerHTML = '<p class="text-muted">No training logs available yet. Logs will appear once training starts.</p>';
         }
         
         // Auto-scroll to bottom

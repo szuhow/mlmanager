@@ -5,6 +5,7 @@ import os
 import sys
 import logging
 import platform
+import glob
 from pathlib import Path
 from typing import Dict, Any, Optional, Union
 import torch
@@ -1299,6 +1300,58 @@ def finalize_mlflow_run(run_id: Optional[str], success: bool = True, final_metri
         except:
             pass
 
+def find_model_weights_path(model_id: int) -> str:
+    """
+    Find the actual model weights path for a given model ID.
+    Checks MLflow artifacts first, then fallback paths.
+    """
+    from core.apps.ml_manager.models import MLModel
+    from pathlib import Path
+    import glob
+    import os
+    
+    try:
+        model = MLModel.objects.get(id=model_id)
+        
+        # First check if model has a specific weights path
+        if model.model_weights_path and os.path.exists(model.model_weights_path):
+            return model.model_weights_path
+        
+        # Check MLflow artifacts directory
+        if model.mlflow_run_id:
+            mlflow_path = Path(settings.CORE_DATA_DIR) / "mlflow" / model.mlflow_run_id / "artifacts"
+            if mlflow_path.exists():
+                # Look for model files in various patterns
+                patterns = [
+                    str(mlflow_path / "**" / "*.pth"),
+                    str(mlflow_path / "**" / "*.pt"),
+                    str(mlflow_path / "**" / "model.pkl"),
+                ]
+                
+                for pattern in patterns:
+                    matches = glob.glob(pattern, recursive=True)
+                    if matches:
+                        # Prefer best model checkpoints
+                        best_matches = [m for m in matches if 'best_model' in m.lower()]
+                        if best_matches:
+                            return max(best_matches, key=os.path.getctime)
+                        # Otherwise return most recent
+                        return max(matches, key=os.path.getctime)
+        
+        # Fallback to models directory
+        model_dir = Path(settings.CORE_DATA_DIR) / 'models' / str(model_id)
+        if model_dir.exists():
+            model_files = list(model_dir.glob('*.pth'))
+            if model_files:
+                return str(max(model_files, key=os.path.getctime))
+        
+        raise FileNotFoundError(f"No model weights found for model ID {model_id}")
+        
+    except Exception as e:
+        logger.error(f"Error finding model weights path for model {model_id}: {e}")
+        raise
+
+
 def run_inference_direct(model_id: int, image_path: str, inference_params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Run inference directly using functions from train.py
@@ -1320,8 +1373,17 @@ def run_inference_direct(model_id: int, image_path: str, inference_params: Dict[
             get_default_model_config
         )
         
-        # Get model path from inference_params or construct it
-        model_path = inference_params.get('model_path', str(Path(settings.CORE_DATA_DIR) / 'models' / f'model_{model_id}'))
+        # Get model path - either from params or find it automatically
+        model_path = inference_params.get('model_path')
+        if not model_path:
+            model_path = find_model_weights_path(model_id)
+            logger.info(f"Found model weights at: {model_path}")
+        
+        # Verify the model file exists
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        
+        logger.info(f"Using model path: {model_path}")
         
         # Run inference using the train.py function directly
         start_time = datetime.now()
@@ -1329,7 +1391,7 @@ def run_inference_direct(model_id: int, image_path: str, inference_params: Dict[
             model_path=model_path,
             input_path=image_path,
             output_dir=inference_params.get('output_dir', str(Path(settings.CORE_DATA_DIR) / 'inference_results')),
-            device=inference_params.get('device', 'cuda'),
+            device=inference_params.get('device', 'cpu'),  # Use CPU for inference worker
             weights_path=inference_params.get('weights_path'),
             model_type=inference_params.get('model_type', 'unet'),
             crop_size=inference_params.get('crop_size', 128),
@@ -1572,12 +1634,25 @@ def run_inference_task(self, model_id: int, image_path: str, inference_params: D
     """
     logger.info(f"Starting inference task for model ID: {model_id}")
     
+    # Get inference_result_id from params to update status
+    inference_result_id = inference_params.get('inference_result_id')
+    
     try:
         # Import Django models
-        from core.apps.ml_manager.models import MLModel
+        from core.apps.ml_manager.models import MLModel, InferenceResult
         
         # Get the model instance
         model = MLModel.objects.get(id=model_id)
+        
+        # Update InferenceResult status if provided
+        inference_result = None
+        if inference_result_id:
+            try:
+                inference_result = InferenceResult.objects.get(id=inference_result_id)
+                inference_result.status = 'processing'
+                inference_result.save()
+            except InferenceResult.DoesNotExist:
+                logger.warning(f"InferenceResult {inference_result_id} not found")
         
         # Direct inference function call
         result = run_inference_direct(
@@ -1588,6 +1663,22 @@ def run_inference_task(self, model_id: int, image_path: str, inference_params: D
         
         if result['success']:
             logger.info(f"Inference completed successfully for model ID: {model_id}")
+            
+            # Update InferenceResult with results
+            if inference_result:
+                inference_result.status = 'completed'
+                inference_result.processing_time = result.get('processing_time', 0.0)
+                inference_result.detected_objects_count = result.get('detected_objects_count', 0)
+                inference_result.total_area_pixels = result.get('total_area_pixels', 0)
+                inference_result.confidence_scores = result.get('confidence_scores', [])
+                
+                # Save result images if provided
+                if result.get('output_mask_path'):
+                    # TODO: Copy result files to InferenceResult fields
+                    pass
+                
+                inference_result.save()
+            
             return {
                 'success': True,
                 'model_id': model_id,
@@ -1598,6 +1689,12 @@ def run_inference_task(self, model_id: int, image_path: str, inference_params: D
         else:
             error_message = result.get('error', 'Unknown error')
             logger.error(f"Inference failed for model ID: {model_id}: {error_message}")
+            
+            # Update InferenceResult with error
+            if inference_result:
+                inference_result.status = 'failed'
+                inference_result.error_message = error_message
+                inference_result.save()
             
             # Update state and fail the task properly
             self.update_state(
@@ -1615,6 +1712,17 @@ def run_inference_task(self, model_id: int, image_path: str, inference_params: D
     except Exception as e:
         logger.error(f"Inference task failed with exception: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
+        
+        # Update InferenceResult with error
+        if inference_result_id:
+            try:
+                from core.apps.ml_manager.models import InferenceResult
+                inference_result = InferenceResult.objects.get(id=inference_result_id)
+                inference_result.status = 'failed'
+                inference_result.error_message = str(e)
+                inference_result.save()
+            except Exception as save_error:
+                logger.error(f"Failed to update InferenceResult status: {save_error}")
         
         # Update state and re-raise exception to mark task as FAILURE
         self.update_state(

@@ -36,33 +36,27 @@ def generate_model_summary(model_type: str, input_shape: Tuple[int, ...] = (1, 2
         
         # Special handling for MONAI UNet - use accurate model
         if is_monai_model:
-            try:
-                # Try to import the actual MONAI UNet model creator
-                from core.apps.ml_manager.training import monai_models
-                logger.info("Using actual MONAI UNet model for accurate parameter count")
-                model_class = monai_models.UNet
-            except ImportError:
-                logger.warning("Could not import MONAI UNet directly, creating proper fallback")
-                # Create a proper MONAI UNet fallback with actual parameters
-                from monai.networks.nets import UNet as MonaiUNet
+            logger.debug("Creating MONAI UNet model for parameter count")
+            # Create a proper MONAI UNet with actual parameters
+            from monai.networks.nets import UNet as MonaiUNet
+            
+            class MonaiFallbackUNet(nn.Module):
+                def __init__(self, input_channels=1, output_channels=1, **kwargs):
+                    super().__init__()
+                    # Create actual MONAI UNet with proper parameters
+                    self.model = MonaiUNet(
+                        spatial_dims=2,
+                        in_channels=input_channels,
+                        out_channels=output_channels,
+                        channels=(16, 32, 64, 128, 256),
+                        strides=(2, 2, 2, 2),
+                        num_res_units=2,
+                    )
                 
-                class MonaiFallbackUNet(nn.Module):
-                    def __init__(self, input_channels=1, output_channels=1, **kwargs):
-                        super().__init__()
-                        # Create actual MONAI UNet with proper parameters
-                        self.model = MonaiUNet(
-                            spatial_dims=2,
-                            in_channels=input_channels,
-                            out_channels=output_channels,
-                            channels=(16, 32, 64, 128, 256),
-                            strides=(2, 2, 2, 2),
-                            num_res_units=2,
-                        )
-                    
-                    def forward(self, x):
-                        return self.model(x)
-                
-                model_class = MonaiFallbackUNet
+                def forward(self, x):
+                    return self.model(x)
+            
+            model_class = MonaiFallbackUNet
         else:
             model_class = None
             
