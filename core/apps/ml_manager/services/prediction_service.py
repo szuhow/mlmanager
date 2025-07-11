@@ -42,7 +42,7 @@ class MLPredictionService:
             # Prepare inference parameters
             inference_params = {
                 'model_type': self.model.model_type,
-                'output_dir': str(Path(settings.BASE_DIR) / 'data' / 'inference_results'),
+                'output_dir': str(settings.CORE_DATA_DIR / 'inference_results'),
                 'threshold': 0.5,
                 'weights_path': self.model.model_weights_path if self.model.model_weights_path else None
             }
@@ -106,7 +106,7 @@ class MLPredictionService:
                 '--mode=predict',
                 f'--model-id={self.model.id}',
                 f'--input-path={temp_image_path}',
-                f'--output-dir={Path(settings.BASE_DIR) / "data" / "inference_results"}',
+                f'--output-dir={settings.CORE_DATA_DIR / "inference_results"}',
                 f'--model-type={self.model.model_type}',
                 '--threshold=0.5',
             ]
@@ -172,7 +172,7 @@ class MLPredictionService:
         if self.model.model_weights_path:
             return self.model.model_weights_path
         
-        model_dir = Path(settings.BASE_DIR) / 'data' / 'models' / str(self.model.id)
+        model_dir = settings.CORE_DATA_DIR / 'models' / str(self.model.id)
         model_files = list(model_dir.glob('*.pth'))
         
         if not model_files:

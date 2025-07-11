@@ -5,6 +5,9 @@ import logging
 # Create logger for this module
 logger = logging.getLogger(__name__)
 
+# Global flag to prevent duplicate initialization
+_MLFLOW_INITIALIZED = False
+
 # Try to import Django settings, fall back to environment variables
 try:
     from django.conf import settings
@@ -50,14 +53,15 @@ def setup_mlflow():
         experiment_name = get_mlflow_experiment_name()
         experiment = mlflow.get_experiment_by_name(experiment_name)
         if experiment is None:
+            # Use działającą konfigurację z GitHub: /mlflow
             if DJANGO_AVAILABLE:
                 try:
                     from django.conf import settings
-                    artifact_location = settings.MLFLOW_ARTIFACT_ROOT
+                    artifact_location = getattr(settings, 'MLFLOW_ARTIFACT_ROOT', '/app/core/data/mlflow')
                 except:
-                    artifact_location = os.getenv('MLFLOW_ARTIFACT_ROOT', './mlruns')
+                    artifact_location = os.getenv('MLFLOW_ARTIFACT_ROOT', '/app/core/data/mlflow')
             else:
-                artifact_location = os.getenv('MLFLOW_ARTIFACT_ROOT', './mlruns')
+                artifact_location = os.getenv('MLFLOW_ARTIFACT_ROOT', '/app/core/data/mlflow')
             mlflow.create_experiment(
                 experiment_name,
                 artifact_location=artifact_location
@@ -78,11 +82,12 @@ def setup_mlflow_experiment(experiment_name=None):
     
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
+        # Use standardowy MLflow wzorzec: /app/core/data/mlflow jako root
         if DJANGO_AVAILABLE:
             from django.conf import settings
-            artifact_location = settings.MLFLOW_ARTIFACT_ROOT
+            artifact_location = getattr(settings, 'MLFLOW_ARTIFACT_ROOT', '/app/core/data/mlflow')
         else:
-            artifact_location = os.getenv('MLFLOW_ARTIFACT_ROOT', './mlruns')
+            artifact_location = os.getenv('MLFLOW_ARTIFACT_ROOT', '/app/core/data/mlflow')
         experiment_id = mlflow.create_experiment(
             experiment_name,
             artifact_location=artifact_location
@@ -315,6 +320,12 @@ def generate_mlflow_ui_url(run_id=None, experiment_name=None):
 
 def initialize_mlflow_connection():
     """Initialize MLflow connection for Django app startup"""
+    global _MLFLOW_INITIALIZED
+    
+    # Prevent duplicate initialization
+    if _MLFLOW_INITIALIZED:
+        return True
+        
     if DJANGO_AVAILABLE:
         try:
             from django.conf import settings
@@ -331,7 +342,8 @@ def initialize_mlflow_connection():
             experiment_name = get_mlflow_experiment_name()
             experiment = mlflow.get_experiment_by_name(experiment_name)
             if experiment is None:
-                artifact_location = getattr(settings, 'MLFLOW_ARTIFACT_ROOT', './data/mlflow')
+                # Użyj działającej konfiguracji z GitHub: /app/core/data/mlflow
+                artifact_location = getattr(settings, 'MLFLOW_ARTIFACT_ROOT', '/app/core/data/mlflow')
                 experiment_id = mlflow.create_experiment(
                     experiment_name,
                     artifact_location=str(artifact_location)
@@ -341,6 +353,7 @@ def initialize_mlflow_connection():
                 mlflow.set_experiment(experiment_name)
                 logger.info(f"[MLFLOW] Using existing experiment '{experiment_name}'")
             
+            _MLFLOW_INITIALIZED = True
             return True
             
         except Exception as e:
@@ -417,16 +430,14 @@ def create_mlflow_experiment(experiment_name, description=None):
         # Create new experiment
         if DJANGO_AVAILABLE:
             from django.conf import settings
-            artifact_location = getattr(settings, 'MLFLOW_ARTIFACT_ROOT', './data/mlflow')
+            artifact_location = getattr(settings, 'MLFLOW_ARTIFACT_ROOT', '/app/core/data/mlflow')
         else:
-            artifact_location = os.getenv('MLFLOW_ARTIFACT_ROOT', './data/mlflow')
+            artifact_location = os.getenv('MLFLOW_ARTIFACT_ROOT', '/app/core/data/mlflow')
         
-        # Add experiment name to artifact path for organization
-        experiment_artifact_path = os.path.join(str(artifact_location), experiment_name.replace(' ', '_').replace('/', '_'))
-        
+        # Używając działającej konfiguracji z GitHub
         experiment_id = mlflow.create_experiment(
             name=experiment_name,
-            artifact_location=experiment_artifact_path
+            artifact_location=str(artifact_location)
         )
         
         # Set experiment description if provided

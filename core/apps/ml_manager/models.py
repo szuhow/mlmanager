@@ -204,7 +204,7 @@ class MLModel(models.Model):
                         logger.warning(f"Could not delete MLflow run {self.mlflow_run_id}: {e}")
                     
                     # Add MLflow artifacts directory to cleanup
-                    mlflow_artifacts_path = os.path.join(settings.BASE_DIR, 'data', 'mlflow', self.mlflow_run_id)
+                    mlflow_artifacts_path = os.path.join(settings.CORE_DATA_DIR, 'mlflow', self.mlflow_run_id)
                     if os.path.exists(mlflow_artifacts_path):
                         cleanup_paths.append(mlflow_artifacts_path)
                 

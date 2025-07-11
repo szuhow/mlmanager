@@ -1,0 +1,41 @@
+# Training Worker GPU - Full ML capabilities for model training with GPU support
+FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
+
+# Install system dependencies needed for training
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    libpq-dev \
+    libffi-dev \
+    libopencv-dev \
+    python3-opencv \
+    git \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Set work directory
+WORKDIR /app
+
+# Copy and install Python dependencies for training
+COPY infrastructure/requirements/training.txt /app/requirements/training.txt
+
+# Install training dependencies with GPU support
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements/training.txt && \
+    pip install --no-cache-dir monai[all] mlflow scikit-learn matplotlib seaborn opencv-python-headless && \
+    pip cache purge
+
+# Copy application code
+COPY core/ /app/core/
+COPY infrastructure/env/ /app/infrastructure/env/
+
+# Ensure core/data directories exist
+RUN mkdir -p /app/core/data/{logs,media,models,training_results,checkpoints,temp}
+
+# Default command for training worker
+CMD ["celery", "-A", "core.config", "worker", "--loglevel=info", "--concurrency=1", "--queues=training"]

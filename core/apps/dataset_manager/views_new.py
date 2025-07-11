@@ -146,7 +146,7 @@ def dataset_upload(request):
             
             # Create directory for this dataset
             dataset_dir = f'datasets/{dataset.id}_{dataset.name}'
-            os.makedirs(os.path.join(settings.BASE_DIR, 'data', dataset_dir), exist_ok=True)
+            os.makedirs(os.path.join(settings.CORE_DATA_DIR, dataset_dir), exist_ok=True)
             
             # Save the original file
             file_path = os.path.join(dataset_dir, uploaded_file.name)
@@ -164,7 +164,7 @@ def dataset_upload(request):
                 import zipfile
                 import tarfile
                 
-                full_path = os.path.join(settings.BASE_DIR, 'data', saved_path)
+                full_path = os.path.join(settings.CORE_DATA_DIR, saved_path)
                 sample_count = 0
                 
                 if uploaded_file.name.endswith('.zip'):

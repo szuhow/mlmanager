@@ -1,0 +1,42 @@
+FROM python:3.10-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    libpq-dev \
+    libffi-dev \
+    libopencv-dev \
+    python3-opencv \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser
+
+WORKDIR /app
+
+# Copy requirements and install Python dependencies
+COPY infrastructure/requirements/default.txt /app/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    pip cache purge
+
+# Copy core application code
+COPY core/config/ /app/core/config/
+COPY core/apps/ /app/core/apps/
+COPY core/manage.py /app/core/
+COPY infrastructure/env/ /app/infrastructure/env/
+
+# Create necessary directories and set ownership
+RUN mkdir -p /app/core/data/logs && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+WORKDIR /app/core
+
+# Default command for default worker
+CMD ["celery", "-A", "core.config.celery", "worker", "--loglevel=info", "--queues=default", "--hostname=default-worker@%h"]

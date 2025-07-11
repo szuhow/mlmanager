@@ -613,18 +613,15 @@ class ModelDetailManager {
     updateProgressBars(progress) {
         if (!progress) return;
         
-        // Handle both percentage and progress_percent formats from backend
-        const progressPercent = progress.percentage !== undefined ? progress.percentage : progress.progress_percent;
-        
-        if (this.elements.progressBar && progressPercent !== undefined) {
-            this.elements.progressBar.style.width = progressPercent + '%';
-            this.elements.progressBar.textContent = `Epoch ${progress.current_epoch || 0}/${progress.total_epochs || 0} (${(progressPercent || 0).toFixed(1)}%)`;
-            this.elements.progressBar.setAttribute('aria-valuenow', progress.current_epoch || 0);
+        if (this.elements.progressBar) {
+            this.elements.progressBar.style.width = progress.percentage + '%';
+            this.elements.progressBar.textContent = `Epoch ${progress.current_epoch}/${progress.total_epochs} (${progress.percentage.toFixed(1)}%)`;
+            this.elements.progressBar.setAttribute('aria-valuenow', progress.current_epoch);
         }
         
         if (this.elements.batchProgressBar && progress.batch_progress_percentage !== undefined) {
             this.elements.batchProgressBar.style.width = progress.batch_progress_percentage + '%';
-            this.elements.batchProgressBar.setAttribute('aria-valuenow', progress.current_batch || 0);
+            this.elements.batchProgressBar.setAttribute('aria-valuenow', progress.current_batch);
         }
     }
     

@@ -1,0 +1,10 @@
+FROM ghcr.io/mlflow/mlflow:v2.12.1
+
+# Install psycopg2 for PostgreSQL support
+USER root
+RUN pip install psycopg2-binary
+
+# Switch back to mlflow user
+USER 1000
+
+# Keep original entrypoint and cmd from base image

@@ -1,4 +1,5 @@
 {% extends "ml_manager/base.html" %}
+{% load static %}
 
 {% block title %}Start Training - ML Manager{% endblock %}
 
@@ -630,6 +631,73 @@
     body:not(.page-loaded) .training-container {
         opacity: 1 !important;
         pointer-events: auto !important;
+    }
+    
+    /* Real-time Logs Enhancement */
+    .log-line {
+        margin-bottom: 2px;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    
+    .log-timestamp {
+        color: #666;
+        font-weight: bold;
+        margin-right: 8px;
+    }
+    
+    .log-level {
+        font-weight: bold;
+        padding: 1px 4px;
+        border-radius: 2px;
+        margin-right: 8px;
+        font-size: 10px;
+    }
+    
+    .log-level-info {
+        background-color: #d1ecf1;
+        color: #0c5460;
+    }
+    
+    .log-level-warning {
+        background-color: #fff3cd;
+        color: #856404;
+    }
+    
+    .log-level-error {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+    
+    .log-level-debug {
+        background-color: #e2e3e5;
+        color: #383d41;
+    }
+    
+    .log-message {
+        color: #333;
+    }
+    
+    .polling-status {
+        font-weight: bold;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 11px;
+    }
+    
+    .polling-status.active {
+        background-color: #d4edda;
+        color: #155724;
+    }
+    
+    .polling-status.stopped {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+    
+    .polling-status.error {
+        background-color: #fff3cd;
+        color: #856404;
     }
 </style>
 {% endblock %}
@@ -2220,6 +2288,17 @@
                         <button class="btn btn-info btn-sm" id="refresh-progress-btn">
                             <i class="fas fa-sync-alt"></i> Refresh Now
                         </button>
+                        <small class="text-muted ms-2">
+                            Status: <span id="polling-status-indicator" class="polling-status">Stopped</span>
+                        </small>
+                    </div>
+                </div>
+                
+                <!-- Real-time Training Logs -->
+                <div id="training-logs-container" class="mt-4" style="display: none;">
+                    <h5><i class="fas fa-scroll"></i> Training Logs (Real-time)</h5>
+                    <div id="training-logs-content" class="logs-container">
+                        <!-- Logs will be added dynamically -->
                     </div>
                 </div>
                 
@@ -2267,6 +2346,9 @@
         </div>
     </div>
 </div>
+
+<!-- Include Smart Polling Manager -->
+<script src="{% static 'ml_manager/js/smart_polling.js' %}"></script>
 
 <script>
 // EMERGENCY: Immediately enable interactions in case of JavaScript errors
@@ -3499,9 +3581,58 @@ function downloadPreprocessingImage() {
     }
 }
 
-// Training Progress Monitoring
+// Training Progress Monitoring with Smart Polling
 let trainingProgressInterval = null;
 let currentModelId = null;
+let smartPollingManager = null;
+
+function initializeSmartPolling() {
+    if (smartPollingManager) {
+        smartPollingManager.stop();
+    }
+    
+    // Look for model ID in URL or form data
+    const urlParams = new URLSearchParams(window.location.search);
+    currentModelId = urlParams.get('model_id') || findLatestModelId();
+    
+    if (!currentModelId) {
+        console.log('No model ID found, will check for latest model');
+        setTimeout(() => {
+            checkLatestModel();
+        }, 2000);
+        return;
+    }
+    
+    // Initialize SmartPollingManager with both data and logs
+    const baseUrl = `/ml/model/${currentModelId}/progress/`;
+    const logsUrl = `/ml/model/${currentModelId}/logs/realtime/`;
+    
+    smartPollingManager = new SmartPollingManager({
+        baseUrl: baseUrl,
+        logsUrl: logsUrl,
+        minInterval: 2000,  // 2 seconds minimum
+        maxInterval: 15000, // 15 seconds maximum
+        onUpdate: (data) => {
+            console.log('Training data update received:', data);
+            updateTrainingProgressDisplay(data);
+        },
+        onLogsUpdate: (logsData) => {
+            console.log('Logs update received:', logsData);
+            updateTrainingLogsDisplay(logsData);
+        },
+        onError: (error) => {
+            console.error('Smart polling error:', error);
+            handlePollingError(error);
+        },
+        onStatusChange: (status) => {
+            console.log('Polling status changed:', status);
+            updatePollingStatusDisplay(status);
+        }
+    });
+    
+    smartPollingManager.start();
+    console.log('Smart polling initialized for model:', currentModelId);
+}
 
 function updateMetricLabels(lossFunction) {
     const trainingLabel = document.getElementById('training-metric-label');
@@ -3577,43 +3708,8 @@ function updateMetricLabels(lossFunction) {
 }
 
 function startTrainingProgressMonitoring() {
-    console.log('Starting training progress monitoring...');
-    
-    // Look for model ID in URL or form data
-    const urlParams = new URLSearchParams(window.location.search);
-    currentModelId = urlParams.get('model_id') || findLatestModelId();
-    
-    if (!currentModelId) {
-        console.log('No model ID found, will check for latest model');
-        // Try to get latest model ID from server
-        setTimeout(() => {
-            checkLatestModel();
-        }, 2000); // Reduced from 5000 to 2000
-        return;
-    }
-    
-    // Start monitoring immediately with faster initial updates
-    updateTrainingProgress();
-    
-    // Set up interval for updates - start with 1 second, then adjust
-    let updateInterval = 1000; // Start with 1 second for fast response
-    trainingProgressInterval = setInterval(() => {
-        updateTrainingProgress();
-        
-        // After first few successful updates, slow down to 2 seconds
-        if (updateInterval === 1000) {
-            setTimeout(() => {
-                if (trainingProgressInterval) {
-                    clearInterval(trainingProgressInterval);
-                    updateInterval = 2000;
-                    trainingProgressInterval = setInterval(updateTrainingProgress, updateInterval);
-                    console.log('Switched to normal update interval:', updateInterval);
-                }
-            }, 10000); // Switch after 10 seconds
-        }
-    }, updateInterval);
-    
-    console.log('Progress monitoring started with fast interval:', updateInterval);
+    console.log('Starting smart training progress monitoring...');
+    initializeSmartPolling();
     
     // Set up stop button
     const stopBtn = document.getElementById('stop-training-btn');
@@ -3624,7 +3720,11 @@ function startTrainingProgressMonitoring() {
     // Set up refresh button
     const refreshBtn = document.getElementById('refresh-progress-btn');
     if (refreshBtn) {
-        refreshBtn.addEventListener('click', updateTrainingProgress);
+        refreshBtn.addEventListener('click', () => {
+            if (smartPollingManager) {
+                smartPollingManager.forcePoll();
+            }
+        });
     }
 }
 
@@ -3642,13 +3742,121 @@ function checkLatestModel() {
         if (data.model_id) {
             currentModelId = data.model_id;
             console.log('Found latest model ID:', currentModelId);
-            updateTrainingProgress();
-            trainingProgressInterval = setInterval(updateTrainingProgress, 2000);
+            initializeSmartPolling();
         }
     })
     .catch(error => {
         console.error('Error checking latest model:', error);
     });
+}
+
+// Smart Polling callback functions
+function updateTrainingProgressDisplay(data) {
+    // This replaces the old updateTrainingProgress function
+    // Update the UI with training progress data
+    if (data.status) {
+        updateStatus(data.status);
+    }
+    
+    if (data.progress !== undefined) {
+        updateProgressBar(data.progress);
+    }
+    
+    if (data.metrics) {
+        updateMetrics(data.metrics);
+    }
+    
+    if (data.epochs_info) {
+        updateEpochsInfo(data.epochs_info);
+    }
+    
+    console.log('Training progress updated:', data);
+}
+
+function updateTrainingLogsDisplay(logsData) {
+    // Handle real-time log updates
+    if (!logsData.logs || logsData.logs.length === 0) {
+        return;
+    }
+    
+    const logsContainer = document.getElementById('training-logs-container');
+    const logsContent = document.getElementById('training-logs-content');
+    
+    if (!logsContent) {
+        console.warn('Logs container not found, logs update skipped');
+        return;
+    }
+    
+    // Show logs container if hidden
+    if (logsContainer) {
+        logsContainer.style.display = 'block';
+    }
+    
+    // Append new logs
+    logsData.logs.forEach(logEntry => {
+        const logLine = document.createElement('div');
+        logLine.className = 'log-line';
+        
+        const timestamp = new Date(logEntry.timestamp).toLocaleTimeString();
+        logLine.innerHTML = `
+            <span class="log-timestamp">[${timestamp}]</span>
+            <span class="log-level log-level-${logEntry.level.toLowerCase()}">${logEntry.level}</span>
+            <span class="log-message">${logEntry.message}</span>
+        `;
+        
+        logsContent.appendChild(logLine);
+    });
+    
+    // Auto-scroll to bottom
+    logsContent.scrollTop = logsContent.scrollHeight;
+    
+    // Limit logs to prevent memory issues (keep last 1000 lines)
+    const logLines = logsContent.children;
+    while (logLines.length > 1000) {
+        logsContent.removeChild(logLines[0]);
+    }
+    
+    console.log(`Added ${logsData.logs.length} new log entries`);
+}
+
+function handlePollingError(error) {
+    console.error('Smart polling error:', error);
+    
+    if (error.type === 'max_errors_reached') {
+        showErrorMessage('Connection lost. Please refresh the page to resume monitoring.');
+    } else if (error.type === 'fetch_error') {
+        console.warn(`Polling error ${error.count}/3:`, error.error.message);
+    }
+}
+
+function updatePollingStatusDisplay(status) {
+    const statusIndicator = document.getElementById('polling-status-indicator');
+    if (statusIndicator) {
+        statusIndicator.textContent = status.status === 'active' ? 
+            `Monitoring (${(status.interval / 1000).toFixed(1)}s)` : 
+            'Stopped';
+        statusIndicator.className = `polling-status ${status.status}`;
+    }
+}
+
+function showErrorMessage(message) {
+    // Create or update error message display
+    let errorDiv = document.getElementById('polling-error-message');
+    if (!errorDiv) {
+        errorDiv = document.createElement('div');
+        errorDiv.id = 'polling-error-message';
+        errorDiv.className = 'alert alert-warning';
+        errorDiv.style.position = 'fixed';
+        errorDiv.style.top = '20px';
+        errorDiv.style.right = '20px';
+        errorDiv.style.zIndex = '9999';
+        document.body.appendChild(errorDiv);
+    }
+    
+    errorDiv.innerHTML = `
+        <strong>Monitoring Issue:</strong> ${message}
+        <button type="button" class="btn-close float-end" onclick="this.parentElement.remove()"></button>
+    `;
 }
 
 function updateTrainingProgress() {
@@ -3873,10 +4081,18 @@ function stopTraining() {
 }
 
 function stopTrainingProgressMonitoring() {
+    // Stop smart polling manager
+    if (smartPollingManager) {
+        smartPollingManager.stop();
+        smartPollingManager = null;
+        console.log('Smart polling stopped');
+    }
+    
+    // Legacy cleanup for old interval-based polling
     if (trainingProgressInterval) {
         clearInterval(trainingProgressInterval);
         trainingProgressInterval = null;
-        console.log('Training progress monitoring stopped');
+        console.log('Legacy training progress monitoring stopped');
     }
 }
 
@@ -4053,7 +4269,7 @@ function formatNumber(num) {
                style="max-width: 90vw; max-height: 80vh; width: auto; height: auto; object-fit: contain;"
                ondragstart="return false;"
                onload="console.log('Preprocessing image loaded successfully')"
-               onerror="console.error('Failed to load preprocessing image:', this.src)">
+               onerror="console.error('Failed to load preprocessing image:', this.src || 'empty src')">>
         </div>
       </div>
       <div class="modal-footer">

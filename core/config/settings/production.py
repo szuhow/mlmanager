@@ -90,11 +90,11 @@ MLFLOW_EXPERIMENT_NAME = get_env_variable('MLFLOW_EXPERIMENT_NAME', 'coronary-ex
 MLFLOW_UI_URL = get_env_variable('MLFLOW_UI_URL', 'http://mlflow:5000')
 
 # Artifact storage for production
-BASE_MLRUNS_DIR = BASE_DIR / 'data' / 'artifacts'
+BASE_MLRUNS_DIR = CORE_DATA_DIR / 'artifacts'
 MLFLOW_ARTIFACT_ROOT = get_env_variable('MLFLOW_ARTIFACT_ROOT', str(BASE_MLRUNS_DIR))
 
 # Organized models storage for production
-BASE_ORGANIZED_MODELS_DIR = BASE_DIR / 'data' / 'models' / 'organized'
+BASE_ORGANIZED_MODELS_DIR = CORE_DATA_DIR / 'models' / 'organized'
 
 # Production static files configuration
 STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
@@ -103,14 +103,14 @@ STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesSto
 DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'
 
 # Production logging configuration
-LOGGING['handlers']['file']['filename'] = BASE_DIR / 'data' / 'logs' / 'production.log'
+LOGGING['handlers']['file']['filename'] = CORE_DATA_DIR / 'logs' / 'production.log'
 LOGGING['loggers']['django']['level'] = 'WARNING'
 LOGGING['loggers']['core.apps.ml_manager']['level'] = 'INFO'
 
 # Add error logging handler for production
 LOGGING['handlers']['error_file'] = {
     'class': 'logging.FileHandler',
-    'filename': BASE_DIR / 'data' / 'logs' / 'errors.log',
+    'filename': CORE_DATA_DIR / 'logs' / 'errors.log',
     'level': 'ERROR',
     'formatter': 'verbose',
 }

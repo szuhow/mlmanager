@@ -1,4 +1,5 @@
 from django import forms
+from django.conf import settings
 from pathlib import Path
 import importlib.util
 import inspect
@@ -1130,7 +1131,7 @@ class EnhancedInferenceForm(forms.Form):
         try:
             # Look for checkpoints in MLflow directory
             if model.mlflow_run_id:
-                mlflow_path = f"data/mlflow/{model.mlflow_run_id}/artifacts"
+                mlflow_path = str(Path(settings.CORE_DATA_DIR) / "mlflow" / model.mlflow_run_id / "artifacts")
                 if os.path.exists(mlflow_path):
                     # Look for model files
                     patterns = [
@@ -1156,7 +1157,7 @@ class EnhancedInferenceForm(forms.Form):
             
             # Also look in model's data directory if it exists
             if hasattr(model, 'data_path') and model.data_path:
-                model_dir = os.path.join("data", "models", str(model.id))
+                model_dir = str(Path(settings.CORE_DATA_DIR) / "models" / str(model.id))
                 if os.path.exists(model_dir):
                     for root, dirs, files in os.walk(model_dir):
                         for file in files:

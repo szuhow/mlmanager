@@ -9,21 +9,30 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional, Callable
 from dataclasses import dataclass
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
 # Global registry instance
 _DEFAULT_REGISTRY = None
+_REGISTRY_INITIALIZED = False
 
 def _register_builtin_architectures(registry: 'ModelArchitectureRegistry') -> None:
     """Register built-in architectures to the registry"""
+    global _REGISTRY_INITIALIZED
+    
+    # Prevent multiple initialization
+    if _REGISTRY_INITIALIZED:
+        return
+        
     try:
         import sys
         import importlib.util
         from pathlib import Path
         
-        project_root = Path(__file__).parent.parent.parent
-        unet_path = project_root / "ml" / "training" / "models" / "unet" / "unet_model.py"
+        # Get correct path: we're in core/apps/ml_manager/utils/, UNet is in core/apps/ml_manager/training/models/unet/
+        project_root = Path(__file__).parent.parent  # Go up to ml_manager/
+        unet_path = project_root / "training" / "models" / "unet" / "unet_model.py"
         
         # Try to import the UNet model
         unet_module = None
@@ -124,6 +133,9 @@ def _register_builtin_architectures(registry: 'ModelArchitectureRegistry') -> No
             
     except Exception as e:
         logger.error(f"Failed to register architectures: {e}")
+    finally:
+        # Mark as initialized to prevent duplicate registration
+        _REGISTRY_INITIALIZED = True
 
 
 def _register_resunet_models(registry: 'ModelArchitectureRegistry') -> None:
@@ -245,9 +257,9 @@ def initialize_registry() -> 'ModelArchitectureRegistry':
     
     registry = ModelArchitectureRegistry()
     
-    # Add discovery paths
-    project_root = Path(__file__).parent.parent.parent
-    ml_models_path = project_root / "ml" / "training" / "models"
+    # Add discovery paths - we're in core/apps/ml_manager/utils/, training is in core/apps/ml_manager/training/
+    project_root = Path(__file__).parent.parent  # Go up to ml_manager/
+    ml_models_path = project_root / "training" / "models"
     
     if ml_models_path.exists():
         registry.add_discovery_path(ml_models_path)
@@ -470,6 +482,10 @@ def setup_default_architectures():
     """Set up default architectures - DEPRECATED, now handled in initialize_registry"""
     # This function is kept for backward compatibility but should not be used
     logger.warning("setup_default_architectures() is deprecated - use initialize_registry() instead")
+    
+    from pathlib import Path
+    base_dir = Path(__file__).parent.parent  # Go up to ml_manager/
+    
     pass
     
     # Manual registration for known architectures
@@ -581,8 +597,8 @@ def setup_default_architectures():
             )
         
         # Register Residual U-Net models from the correct path
-        # ResUNet models are in ml/training/models/, not ml/utils/resunet/
-        training_models_path = base_dir.parent / 'training' / 'models' / 'resunet_model.py'
+        # ResUNet models are in training/models/, inside ml_manager
+        training_models_path = base_dir / 'training' / 'models' / 'resunet_model.py'
         if training_models_path.exists():
             # Import the models to register them properly
             try:
@@ -815,7 +831,7 @@ def setup_default_architectures():
         
         # Register classification models
         try:
-            classification_models_path = base_dir.parent / 'training' / 'models' / 'classification_models.py'
+            classification_models_path = base_dir / 'training' / 'models' / 'classification_models.py'
             if classification_models_path.exists():
                 import sys
                 import importlib.util

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Union
 import torch
 import traceback
+from django.conf import settings
 from datetime import datetime
 import threading
 import time
@@ -1031,10 +1032,44 @@ def initialize_mlflow_tracking(model_id: int, training_params: Dict[str, Any]) -
         logger.info(f"Using MLflow experiment: {experiment_name}")
         mlflow.set_experiment(experiment_name)  # Use specified experiment
         
-        # Start new MLflow run with custom name from training parameters
+        # Start new MLflow run with custom name and artifact path
         run_name = training_params.get('name', f'Training-{model_id}')
+        
+        # Start MLflow run first to get run_id
         run = mlflow.start_run(run_name=run_name)
         run_id = run.info.run_id
+        
+        # Get experiment ID for tracking (but MLflow uses only run_id in path)
+        experiment = mlflow.get_experiment_by_name(experiment_name)
+        experiment_id = experiment.experiment_id if experiment else "0"
+        
+        # MLflow faktycznie używa struktury: /mlflow/{run_id}/artifacts (bez experiment_id)
+        mlflow_artifact_path = f"/mlflow/{run_id}/artifacts"
+        
+        # Set up model directory to use MLflow structure
+        try:
+            from core.apps.ml_manager.models import MLModel
+            model = MLModel.objects.get(id=model_id)
+            
+            # Set tags for tracking
+            mlflow.set_tag('mlflow_artifact_path', mlflow_artifact_path)
+            mlflow.set_tag('experiment_id', experiment_id)
+            mlflow.set_tag('run_id', run_id)
+            
+            # Set environment variable for the training script to use MLflow structure
+            os.environ['MLFLOW_ARTIFACT_PATH'] = mlflow_artifact_path
+            os.environ['MLFLOW_RUN_ID'] = run_id
+            os.environ['MLFLOW_EXPERIMENT_ID'] = experiment_id
+            
+            logger.info(f"[MLFLOW] MLflow artifact path for run {run_id}: {mlflow_artifact_path}")
+            
+            # Update model directory if needed to reference MLflow structure
+            if model.model_directory:
+                mlflow.set_tag('original_model_directory', model.model_directory)
+                os.environ['MODEL_DIRECTORY'] = model.model_directory
+                
+        except Exception as e:
+            logger.error(f"Error setting up MLflow artifact path: {e}")
         
         # Also set the run name as a tag for better visibility
         mlflow.set_tag('mlflow.runName', run_name)
@@ -1135,23 +1170,58 @@ def log_initial_training_artifacts(model_dir: str):
     try:
         model_path = Path(model_dir)
         
+        # Get model directory from environment variable set by initialize_mlflow_tracking
+        model_directory = os.environ.get('MODEL_DIRECTORY')
+        
+        # Define helper function for logging artifacts to MLflow structure
+        def log_artifact_dual(artifact_path: str, artifact_type: str = None):
+            """Log artifact to MLflow (/mlflow/{experiment_id}/{run_id}/artifacts) and optionally to model directory"""
+            try:
+                # Log to MLflow - artefakty będą w /mlflow/{experiment_id}/{run_id}/artifacts
+                if artifact_type:
+                    mlflow.log_artifact(str(artifact_path), artifact_path=artifact_type)
+                    logger.debug(f"Logged artifact to MLflow: {artifact_path} -> {artifact_type}")
+                else:
+                    mlflow.log_artifact(str(artifact_path))
+                    logger.debug(f"Logged artifact to MLflow: {artifact_path}")
+                
+                # Optionally also copy to model directory for local access (if needed)
+                if model_directory:
+                    model_artifacts_dir = os.path.join(model_directory, 'artifacts')
+                    os.makedirs(model_artifacts_dir, exist_ok=True)
+                    
+                    if artifact_type:
+                        dest_dir = os.path.join(model_artifacts_dir, artifact_type)
+                        os.makedirs(dest_dir, exist_ok=True)
+                        dest_path = os.path.join(dest_dir, os.path.basename(artifact_path))
+                    else:
+                        dest_path = os.path.join(model_artifacts_dir, os.path.basename(artifact_path))
+                    
+                    import shutil
+                    shutil.copy2(artifact_path, dest_path)
+                    logger.debug(f"Copied artifact to model directory: {dest_path}")
+                    
+            except Exception as e:
+                logger.warning(f"Failed to log artifact {artifact_path}: {e}")
+        
         # Log training configuration if exists
         config_files = list(model_path.glob('**/training_config*.json'))
         for config_file in config_files:
-            mlflow.log_artifact(str(config_file), "config")
+            log_artifact_dual(str(config_file), "config")
             logger.info(f"Logged initial training config: {config_file.name}")
         
         # Log setup logs if exist
         setup_logs = list(model_path.glob('**/setup*.log'))
         for log_file in setup_logs:
-            mlflow.log_artifact(str(log_file), "logs")
+            log_artifact_dual(str(log_file), "logs")
             logger.info(f"Logged setup log: {log_file.name}")
             
         # Create and log training metadata
         metadata = {
             'training_initialized_at': datetime.now().isoformat(),
             'model_directory': str(model_path),
-            'artifacts_logged': True
+            'artifacts_logged': True,
+            'dual_storage_enabled': bool(model_directory)
         }
         
         metadata_file = model_path / 'training_metadata.json'
@@ -1159,8 +1229,8 @@ def log_initial_training_artifacts(model_dir: str):
             import json
             json.dump(metadata, f, indent=2)
             
-        mlflow.log_artifact(str(metadata_file), "metadata")
-        logger.info("Logged initial training metadata")
+        log_artifact_dual(str(metadata_file), "metadata")
+        logger.info("Logged initial training metadata with dual storage")
         
     except Exception as e:
         logger.warning(f"Failed to log initial training artifacts: {e}")
@@ -1251,14 +1321,14 @@ def run_inference_direct(model_id: int, image_path: str, inference_params: Dict[
         )
         
         # Get model path from inference_params or construct it
-        model_path = inference_params.get('model_path', f'data/models/model_{model_id}')
+        model_path = inference_params.get('model_path', str(Path(settings.CORE_DATA_DIR) / 'models' / f'model_{model_id}'))
         
         # Run inference using the train.py function directly
         start_time = datetime.now()
         result = run_inference(
             model_path=model_path,
             input_path=image_path,
-            output_dir=inference_params.get('output_dir', 'data/inference_results'),
+            output_dir=inference_params.get('output_dir', str(Path(settings.CORE_DATA_DIR) / 'inference_results')),
             device=inference_params.get('device', 'cuda'),
             weights_path=inference_params.get('weights_path'),
             model_type=inference_params.get('model_type', 'unet'),
@@ -1285,7 +1355,7 @@ def run_inference_direct(model_id: int, image_path: str, inference_params: Dict[
             'traceback': traceback.format_exc()
         }
 
-@shared_task(bind=True, name='ml_manager.train_model')
+@shared_task(bind=True, name='ml_manager.train_model', queue='training')
 def train_model_task(self, model_id: int, training_params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Celery task to train a ML model using direct Python calls
@@ -1299,6 +1369,8 @@ def train_model_task(self, model_id: int, training_params: Dict[str, Any]) -> Di
         # Get the model instance
         model = MLModel.objects.get(id=model_id)
         model.status = 'loading'
+        # Store Celery task ID in training_logs for reference
+        model.training_logs = f"Task ID: {self.request.id}\n"
         model.save()
         
         # Set up training stop flag
@@ -1448,9 +1520,9 @@ def train_model_task(self, model_id: int, training_params: Dict[str, Any]) -> Di
             # Save only specific fields to preserve mlflow_run_id and training_data_info
             model.save(update_fields=['status'])
             
-            # Update state but do not fail the task
+            # Update state and fail the task properly
             self.update_state(
-                state='PROGRESS',
+                state='FAILURE',
                 meta={
                     'model_id': model_id,
                     'status': 'failed',
@@ -1458,13 +1530,9 @@ def train_model_task(self, model_id: int, training_params: Dict[str, Any]) -> Di
                 }
             )
             
-            # Return error result but don't raise exception
-            return {
-                'success': False,
-                'error': error_message,
-                'model_id': model_id,
-                'exc_type': 'TrainingFailedError'  # Add explicit exception type
-            }
+            # Raise exception to mark task as FAILURE in Celery
+            from celery.exceptions import Ignore
+            raise Exception(f"Training failed for model {model_id}: {error_message}")
             
     except Exception as e:
         logger.error(f"Training task failed with exception: {str(e)}")
@@ -1483,15 +1551,21 @@ def train_model_task(self, model_id: int, training_params: Dict[str, Any]) -> Di
             logger.error(f"Failed to save model status: {save_error}")
             pass
         
-        return {
-            'success': False,
-            'model_id': model_id,
-            'status': 'failed',
-            'error': str(e),
-            'exc_type': type(e).__name__  # Add proper exception type
-        }
+        # Update state and re-raise exception to mark task as FAILURE
+        self.update_state(
+            state='FAILURE',
+            meta={
+                'model_id': model_id,
+                'status': 'failed',
+                'error': str(e),
+                'exc_type': type(e).__name__
+            }
+        )
+        
+        # Re-raise the exception to mark task as FAILURE in Celery
+        raise
 
-@shared_task(bind=True, name='ml_manager.run_inference')
+@shared_task(bind=True, name='ml_manager.run_inference', queue='inference')
 def run_inference_task(self, model_id: int, image_path: str, inference_params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Celery task to run inference on a model using direct Python calls
@@ -1522,25 +1596,40 @@ def run_inference_task(self, model_id: int, image_path: str, inference_params: D
                 'confidence_score': result.get('confidence_score', 0.0)
             }
         else:
-            logger.error(f"Inference failed for model ID: {model_id}: {result.get('error', 'Unknown error')}")
-            return {
-                'success': False,
-                'model_id': model_id,
-                'status': 'failed',
-                'error': result.get('error', 'Unknown error')
-            }
+            error_message = result.get('error', 'Unknown error')
+            logger.error(f"Inference failed for model ID: {model_id}: {error_message}")
+            
+            # Update state and fail the task properly
+            self.update_state(
+                state='FAILURE',
+                meta={
+                    'model_id': model_id,
+                    'status': 'failed',
+                    'error': error_message
+                }
+            )
+            
+            # Raise exception to mark task as FAILURE in Celery
+            raise Exception(f"Inference failed for model {model_id}: {error_message}")
             
     except Exception as e:
         logger.error(f"Inference task failed with exception: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
-        return {
-            'success': False,
-            'model_id': model_id,
-            'status': 'failed',
-            'error': str(e)
-        }
+        
+        # Update state and re-raise exception to mark task as FAILURE
+        self.update_state(
+            state='FAILURE',
+            meta={
+                'model_id': model_id,
+                'status': 'failed',
+                'error': str(e)
+            }
+        )
+        
+        # Re-raise the exception to mark task as FAILURE in Celery
+        raise
 
-@shared_task(bind=True, name='ml_manager.stop_training')
+@shared_task(bind=True, name='ml_manager.stop_training', queue='training')
 def stop_training_task(self, model_id: int) -> Dict[str, Any]:
     """
     Celery task to stop training process with proper cleanup
@@ -1626,7 +1715,7 @@ def kill_training_processes(model_id: int) -> int:
     
     return killed_count
 
-@shared_task(name='ml_manager.cleanup_failed_trainings')
+@shared_task(name='ml_manager.cleanup_failed_trainings', queue='default')
 def cleanup_failed_trainings():
     """
     Periodic task to clean up failed or stuck training processes with proper resource cleanup
@@ -1734,7 +1823,7 @@ def cleanup_orphaned_training_processes() -> int:
     
     return killed_count
 
-@shared_task(name='ml_manager.system_health_check')
+@shared_task(name='ml_manager.system_health_check', queue='default')
 def system_health_check():
     """
     Periodic task to check system health and training process status
@@ -1806,7 +1895,7 @@ def system_health_check():
         return {'error': str(e)}
 
 
-@shared_task(name='ml_manager.sync_mlflow_data')
+@shared_task(name='ml_manager.sync_mlflow_data', queue='default')
 def sync_mlflow_data_task():
     """Periodic task to synchronize MLflow data with database"""
     try:

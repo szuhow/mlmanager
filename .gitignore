@@ -161,12 +161,21 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Data directory - exclude all except specific files
-data/*
-!data/datasets/
-data/datasets/*
-!data/datasets/coronary_dataset.py
-core/data/*
+# Data directory - preserve structure but ignore contents
+core/data/**/*
+!core/data/
+!core/data/*/
+!core/data/*/*/
+!core/data/*/*/*/
+!core/data/*/*/*/*/
+
+# Keep specific important files
+!core/data/datasets/coronary_dataset.py
+!core/data/**/README.md
+!core/data/**/.gitkeep
+
+# Keep empty directories by ensuring .gitkeep files
+# But still ignore actual data files
 .vscode/
 # add .DS_Store to ignore list
 .DS_Store

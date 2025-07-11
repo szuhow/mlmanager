@@ -1,0 +1,33 @@
+# Minimal requirements for default worker
+# Only essential dependencies for basic Celery tasks and system monitoring
+
+# Core Django and REST framework
+Django>=4.2.11,<5.0.0
+djangorestframework>=3.14.0,<4.0.0
+python-dotenv>=1.0.1,<2.0.0
+
+# Database
+psycopg2-binary>=2.9.0
+dj-database-url>=2.1.0
+
+# Celery and Redis (minimal)
+celery[redis]>=5.3.0
+redis>=4.5.0
+
+# System monitoring
+psutil>=5.9.0,<6.0.0
+
+# Basic utilities
+requests>=2.31.0
+tqdm>=4.67.1,<5.0.0
+
+# MLflow for model management and logging
+mlflow>=2.19.0,<3.0.0
+
+# Image processing (needed by Django modules)
+opencv-python-headless>=4.8.0,<5.0.0
+numpy>=1.24.0,<2.0.0
+Pillow>=10.0.0,<11.0.0
+
+# ML Framework (CPU only, lightweight for basic tasks)
+# torch, torchvision will be installed separately in Dockerfile

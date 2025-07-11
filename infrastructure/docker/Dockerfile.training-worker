@@ -1,0 +1,50 @@
+# Training Worker - Full ML capabilities for model training
+FROM python:3.10-slim
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
+
+# Install system dependencies needed for training
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    libpq-dev \
+    libffi-dev \
+    libopencv-dev \
+    python3-opencv \
+    git \
+    sudo \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser
+
+# Set work directory
+WORKDIR /app
+
+# Copy and install Python dependencies for training
+COPY infrastructure/requirements/training.txt /app/requirements/training.txt
+
+# Install training dependencies with optimizations
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements/training.txt && \
+    pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir monai[all] mlflow scikit-learn matplotlib seaborn opencv-python-headless && \
+    pip cache purge
+
+# Copy application code
+COPY core/ /app/core/
+COPY infrastructure/env/ /app/infrastructure/env/
+
+# Ensure core/data directories exist and set proper ownership
+RUN mkdir -p /app/core/data/{logs,media,models,training_results,checkpoints,temp} && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Default command for training worker
+CMD ["celery", "-A", "core.config", "worker", "--loglevel=info", "--concurrency=1", "--queues=training", "--hostname=training-worker@%h"]

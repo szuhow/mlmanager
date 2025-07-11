@@ -54,14 +54,14 @@ help: ## Show this help message
 
 setup-cpu: ## Setup CPU environment
 	@echo "⚙️  Setting up CPU environment..."
-	@mkdir -p data/logs data/media data/static data/models
+	@mkdir -p core/data/logs core/data/media core/data/static core/data/models core/data/mlflow
 	@cp $(ENV_CPU) .env
 	@echo "✅ CPU environment setup complete"
 	@echo "📝 You can edit .env file to customize settings"
 
 setup-gpu: ## Setup GPU environment  
 	@echo "⚙️  Setting up GPU environment..."
-	@mkdir -p data/logs data/media data/static data/models
+	@mkdir -p core/data/logs core/data/media core/data/static core/data/models core/data/mlflow
 	@cp $(ENV_GPU) .env
 	@echo "✅ GPU environment setup complete"
 	@echo "📝 You can edit .env file to customize settings"
@@ -152,10 +152,14 @@ status-gpu: ## Check GPU services status
 	@curl -s http://localhost:8000/health/ >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
 	@echo -n "  Flower: "
 	@curl -s http://localhost:5555 >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
+	@echo -n "  MLflow: "
+	@curl -s http://localhost:5000 >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
 	@echo -n "  Redis:  "
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec redis redis-cli ping >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
 	@echo -n "  DB:     "
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec db pg_isready -U postgres >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
+	@echo -n "  GPU:    "
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null && echo "✅ OK" || echo "❌ Failed"
 
 logs-cpu: ## Show CPU services logs
 	@echo "📝 CPU Services Logs:"
@@ -171,11 +175,23 @@ logs-django-cpu: ## Show CPU Django logs only
 logs-django-gpu: ## Show GPU Django logs only
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) logs -f django
 
-logs-celery-cpu: ## Show CPU Celery logs only
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) logs -f celery-worker
+logs-training-cpu: ## Show CPU Training Worker logs
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) logs -f training-worker
 
-logs-celery-gpu: ## Show GPU Celery logs only
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) logs -f celery-worker
+logs-training-gpu: ## Show GPU Training Worker logs
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) logs -f training-worker
+
+logs-inference-cpu: ## Show CPU Inference Worker logs
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) logs -f inference-worker
+
+logs-inference-gpu: ## Show GPU Inference Worker logs
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) logs -f inference-worker
+
+logs-default-cpu: ## Show CPU Default Worker logs
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) logs -f default-worker
+
+logs-default-gpu: ## Show GPU Default Worker logs
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) logs -f default-worker
 
 # ================================================
 # Database Commands
@@ -248,13 +264,13 @@ clean-gpu: ## Clean GPU environment
 backup-cpu: ## Backup CPU data
 	@echo "💾 Creating CPU backup..."
 	@mkdir -p backups
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django tar czf - /app/data | cat > backups/cpu-backup-$(shell date +%Y%m%d-%H%M%S).tar.gz
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django tar czf - /app/core/data | cat > backups/cpu-backup-$(shell date +%Y%m%d-%H%M%S).tar.gz
 	@echo "✅ CPU backup created in backups/ directory"
 
 backup-gpu: ## Backup GPU data
 	@echo "💾 Creating GPU backup..."
 	@mkdir -p backups
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django tar czf - /app/data | cat > backups/gpu-backup-$(shell date +%Y%m%d-%H%M%S).tar.gz
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django tar czf - /app/core/data | cat > backups/gpu-backup-$(shell date +%Y%m%d-%H%M%S).tar.gz
 	@echo "✅ GPU backup created in backups/ directory"
 
 # ================================================
@@ -263,22 +279,22 @@ backup-gpu: ## Backup GPU data
 
 test-cpu: ## Run tests (CPU)
 	@echo "🧪 Running tests (CPU)..."
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django python manage.py test
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django python core/manage.py test
 	@echo "✅ Tests completed"
 
 test-gpu: ## Run tests (GPU)
 	@echo "🧪 Running tests (GPU)..."
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django python manage.py test
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django python core/manage.py test
 	@echo "✅ Tests completed"
 
 collectstatic-cpu: ## Collect static files (CPU)
 	@echo "📦 Collecting static files (CPU)..."
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django python manage.py collectstatic --noinput
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) exec django python core/manage.py collectstatic --noinput
 	@echo "✅ Static files collected"
 
 collectstatic-gpu: ## Collect static files (GPU)
 	@echo "📦 Collecting static files (GPU)..."
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django python manage.py collectstatic --noinput
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) exec django python core/manage.py collectstatic --noinput
 	@echo "✅ Static files collected"
 
 # ================================================

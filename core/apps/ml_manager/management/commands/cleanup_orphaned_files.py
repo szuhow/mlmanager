@@ -32,7 +32,7 @@ class Command(BaseCommand):
         self.stdout.write(f"📊 Found {len(active_runs)} active MLflow runs in database")
         
         # Scan MLflow directory for all runs
-        mlflow_dir = os.path.join(settings.BASE_DIR, 'data', 'mlflow')
+        mlflow_dir = os.path.join(settings.CORE_DATA_DIR, 'mlflow')
         if not os.path.exists(mlflow_dir):
             self.stdout.write(self.style.WARNING("❌ MLflow directory not found"))
             return

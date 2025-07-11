@@ -60,8 +60,11 @@ try:
     from django.conf import settings
     BASE_DIR = settings.BASE_DIR
 except ImportError:
-    # Fallback for when Django isn't available
+    # Fallback for when Django isn't available  
     BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+
+# Use core/data directory for all data storage (keep data contained within core)
+CORE_DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
 
 # Global flag for graceful shutdown
 STOP_TRAINING = threading.Event()
@@ -86,14 +89,21 @@ def setup_signal_handlers():
     except Exception as e:
         logging.error(f"[SIGNAL] Error setting up signal handlers: {e}")
 
+# --- Prevent duplicate logging ---
+_TRAIN_MODULE_INITIALIZED = False
+
 # --- Minimal initial logging setup for startup messages only ---
-os.makedirs(os.path.join(BASE_DIR, 'data', 'logs'), exist_ok=True)
+if not _TRAIN_MODULE_INITIALIZED:
+    # Create data directory structure within core
+    logging.info("Setting up core data directory structure using CORE_DATA_DIR - {}".format(CORE_DATA_DIR))
+    os.makedirs(os.path.join(CORE_DATA_DIR, 'logs'), exist_ok=True)
+    _TRAIN_MODULE_INITIALIZED = True
 
 # Create a startup logger that will be replaced with model-specific logging later
 startup_logger = logging.getLogger('startup')
 startup_logger.setLevel(logging.INFO)
 if not startup_logger.handlers:
-    startup_handler = logging.FileHandler(os.path.join(BASE_DIR, 'data', 'logs', 'training.log'), mode='a')
+    startup_handler = logging.FileHandler(os.path.join(CORE_DATA_DIR, 'logs', 'training.log'), mode='a')
     startup_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s [STARTUP] %(message)s'))
     startup_logger.addHandler(startup_handler)
     startup_logger.propagate = False
@@ -123,6 +133,69 @@ import uuid
 from datetime import datetime
 from torchvision import transforms as tv_transforms  # added for ARCADE transforms
 from torch.utils.data import DataLoader as TorchDataLoader  # ARCADE DataLoader
+import shutil
+
+def log_artifact_to_model_directory(artifact_path: str, model_directory: str = None, artifact_type: str = None):
+    """
+    Log artifact primarily to MLflow with optional local copy to model directory.
+    
+    MLflow is the primary artifact storage system. The model directory copy is for 
+    immediate local access and debugging purposes only.
+    
+    Args:
+        artifact_path: Path to the artifact file to log
+        model_directory: Optional model directory path for local copy
+        artifact_type: Optional artifact type/subfolder name for MLflow organization
+    """
+    # Add debug logging
+    logging.info(f"[ARTIFACT_DEBUG] Called with artifact_path={artifact_path}, model_directory={model_directory}, artifact_type={artifact_type}")
+    
+    try:
+        # PRIMARY: Log to MLflow - this is the main storage
+        if not os.path.exists(artifact_path):
+            logging.warning(f"[MLFLOW] Artifact file not found for MLflow logging: {artifact_path}")
+            return
+            
+        if artifact_type:
+            mlflow.log_artifact(artifact_path, artifact_path=artifact_type)
+            logging.info(f"[MLFLOW] ✅ Logged artifact to MLflow: {artifact_type}/{os.path.basename(artifact_path)}")
+        else:
+            mlflow.log_artifact(artifact_path)
+            logging.info(f"[MLFLOW] ✅ Logged artifact to MLflow: {os.path.basename(artifact_path)}")
+        
+        # SECONDARY: Optional local copy to model directory for immediate access
+        if model_directory:
+            logging.info(f"[LOCAL_DEBUG] Attempting local copy to model_directory: {model_directory}")
+            try:
+                # Create artifacts directory in model folder
+                model_artifacts_dir = os.path.join(model_directory, 'artifacts')
+                os.makedirs(model_artifacts_dir, exist_ok=True)
+                logging.info(f"[LOCAL_DEBUG] Created artifacts directory: {model_artifacts_dir}")
+                
+                # Construct destination path
+                if artifact_type:
+                    # Create subfolder structure in model artifacts directory
+                    dest_dir = os.path.join(model_artifacts_dir, artifact_type)
+                    os.makedirs(dest_dir, exist_ok=True)
+                    dest_path = os.path.join(dest_dir, os.path.basename(artifact_path))
+                else:
+                    dest_path = os.path.join(model_artifacts_dir, os.path.basename(artifact_path))
+                
+                logging.info(f"[LOCAL_DEBUG] Destination path: {dest_path}")
+                
+                # Copy the artifact locally
+                shutil.copy2(artifact_path, dest_path)
+                logging.info(f"[LOCAL] ✅ Copied artifact to model directory: {dest_path}")
+                
+            except Exception as local_error:
+                logging.warning(f"[LOCAL] Failed to copy artifact to model directory: {local_error}")
+                # Continue - local copy failure doesn't affect MLflow logging
+        else:
+            logging.info(f"[LOCAL_DEBUG] Skipping local copy - model_directory is None")
+            
+    except Exception as e:
+        logging.error(f"[MLFLOW] Failed to log artifact to MLflow: {artifact_path} - {e}")
+        raise  # Re-raise since MLflow logging is critical
 
 # === Early Django Setup ===
 # Setup Django early to avoid import issues with training_callback
@@ -547,7 +620,7 @@ else:
 logger = logging.getLogger(__name__)
 
 # Utility functions moved to top to avoid NameError
-def create_organized_model_directory(model_id=None, model_family="UNet-Coronary", version="1.0.0", mlflow_run_id=None):
+def create_organized_model_directory(model_id=None, model_family="UNET", version="1.0.0", mlflow_run_id=None):
     """Create an organized directory structure for model storage"""
     
     # Generate unique identifier
@@ -564,10 +637,9 @@ def create_organized_model_directory(model_id=None, model_family="UNet-Coronary"
     date_str = datetime.now().strftime("%Y/%m")
     family_str = model_family.replace(" ", "_").lower()
     
-    # Use BASE_DIR to ensure consistent path resolution
+    # Use CORE_DATA_DIR to ensure consistent path resolution within core
     model_dir = os.path.join(
-        BASE_DIR,
-        "data",
+        CORE_DATA_DIR,
         "models",
         "organized", 
         date_str,
@@ -942,7 +1014,7 @@ def create_model_from_registry(model_type, device, task_type=None, **model_kwarg
         logger.error(f"Failed to create model '{model_type}': {e}")
         raise ValueError(f"Model creation failed for '{model_type}': {e}")
 
-def save_enhanced_model_metadata(model_dir, model_id, unique_id, args, model_info, training_metrics, model_family="UNet-Coronary", arch_info=None):
+def save_enhanced_model_metadata(model_dir, model_id, unique_id, args, model_info, training_metrics, model_family="UNET", arch_info=None):
     """Save comprehensive model metadata"""
     # Ensure model directories exist when we actually need them
     ensure_model_directories(model_dir)
@@ -1335,6 +1407,9 @@ def get_monai_transforms(params, for_training=True, dataset_type=None):
     transforms.append(ToTensord(keys=["image", "label"]))
     return Compose(transforms)
 
+
+
+
 def save_model_summary(model, model_dir=None):
     if model_dir:
         # Ensure model directories exist when we actually need them
@@ -1542,7 +1617,7 @@ def save_sample_predictions(model, val_loader, device, epoch, model_dir=None, cl
                     os.makedirs(pred_dir, exist_ok=True)
                     filename = os.path.join(pred_dir, f'predictions_epoch_{epoch+1:03d}.png')
                 else:
-                    fallback_dir = os.path.join(BASE_DIR, 'data', 'models', 'artifacts', 'predictions')
+                    fallback_dir = os.path.join(CORE_DATA_DIR, 'models', 'artifacts', 'predictions')
                     os.makedirs(fallback_dir, exist_ok=True)
                     filename = os.path.join(fallback_dir, f'predictions_epoch_{epoch+1:03d}.png')
                 
@@ -1700,7 +1775,7 @@ def save_sample_predictions(model, val_loader, device, epoch, model_dir=None, cl
                 filename = os.path.join(pred_dir, f'predictions_epoch_{epoch+1:03d}.png')
             else:
                 # Fallback directory
-                fallback_dir = os.path.join(BASE_DIR, 'data', 'models', 'artifacts', 'predictions')
+                fallback_dir = os.path.join(CORE_DATA_DIR, 'models', 'artifacts', 'predictions')
                 os.makedirs(fallback_dir, exist_ok=True)
                 filename = os.path.join(fallback_dir, f'predictions_epoch_{epoch+1:03d}.png')
             
@@ -1765,7 +1840,7 @@ def save_sample_predictions(model, val_loader, device, epoch, model_dir=None, cl
                     os.makedirs(pred_dir, exist_ok=True)
                     fallback_filename = os.path.join(pred_dir, f'predictions_epoch_{epoch+1:03d}_error.png')
                 else:
-                    fallback_dir = os.path.join(BASE_DIR, 'data', 'models', 'artifacts', 'predictions')
+                    fallback_dir = os.path.join(CORE_DATA_DIR, 'models', 'artifacts', 'predictions')
                     os.makedirs(fallback_dir, exist_ok=True)
                     fallback_filename = os.path.join(fallback_dir, f'predictions_epoch_{epoch+1:03d}_error.png')
                 
@@ -2175,7 +2250,7 @@ def parse_args():
     parser.add_argument('--save-training-template', action='store_true', help='Save a training config template and exit')
     parser.add_argument('--mode', choices=['train', 'predict'], required=False, help="Mode to run in: train or predict")
     # Model parameters
-    parser.add_argument('--model-family', type=str, default='UNet-Coronary', help='Model family name for registry and organization')
+    parser.add_argument('--model-family', type=str, default=None, help='Model family name for registry and organization (auto-derived from model-type if not set)')
     parser.add_argument('--model-type', type=str, default='unet', help='Model type/architecture')
     # Training parameters
     parser.add_argument('--batch-size', type=int, default=32, help='Batch size for training')
@@ -2644,7 +2719,11 @@ def train_model(args):
     
     # Fallback to creating model directory if not set
     if not model_dir:
-        model_family = getattr(args, 'model_family', 'UNet-Coronary')
+        # Use model_type as model_family if not explicitly set
+        model_family = getattr(args, 'model_family', None)
+        if not model_family:
+            model_family = getattr(args, 'model_type', 'unet').upper().replace('_', '-')
+        
         mlflow_run_id = getattr(args, 'mlflow_run_id', None)
         model_dir, unique_id = create_organized_model_directory(
             model_id=args.model_id, 
@@ -2669,16 +2748,26 @@ def train_model(args):
                 model_obj = MLModel.objects.get(id=args.model_id)
                 # Save absolute path that works both in container and local environments
                 absolute_model_dir = os.path.abspath(model_dir)
+                # Extract the actual folder name from the path to use as unique_identifier
+                actual_folder_name = os.path.basename(absolute_model_dir)
+                
+                startup_logger.info(f"[SETUP] Before update - model_directory: {model_obj.model_directory}")
+                startup_logger.info(f"[SETUP] Before update - unique_identifier: {model_obj.unique_identifier}")
+                
                 model_obj.model_directory = absolute_model_dir
-                model_obj.unique_identifier = unique_id if 'unique_id' in locals() else None
+                model_obj.unique_identifier = actual_folder_name
                 model_obj.save(update_fields=['model_directory', 'unique_identifier'])
+                
+                startup_logger.info(f"[SETUP] After update - model_directory: {model_obj.model_directory}")
+                startup_logger.info(f"[SETUP] After update - unique_identifier: {model_obj.unique_identifier}")
                 startup_logger.info(f"[SETUP] Saved model directory to database: {absolute_model_dir}")
+                startup_logger.info(f"[SETUP] Updated unique_identifier to match folder name: {actual_folder_name}")
             except Exception as e:
                 startup_logger.warning(f"[SETUP] Could not save model directory to database: {e}")
     
     # Set up logging to both model-specific and global locations
     model_log_path = os.path.join(model_dir, 'logs', 'training.log')
-    global_log_path = os.path.join(BASE_DIR, 'data', 'logs', 'training.log')  # Use BASE_DIR/data/logs for global
+    global_log_path = os.path.join(CORE_DATA_DIR, 'logs', 'training.log')  # Use CORE_DATA_DIR for global logs
     
     # Ensure both log directories exist
     os.makedirs(os.path.dirname(model_log_path), exist_ok=True)
@@ -2771,6 +2860,20 @@ def train_model(args):
         try:
             mlflow.start_run(run_id=args.mlflow_run_id)
             logger.info(f"[MLFLOW] Connected to existing run {args.mlflow_run_id} from Celery task")
+            
+            # Enable MLflow autologging for system metrics and other automated logging
+            try:
+                mlflow.autolog(
+                    log_models=False,  # We handle model logging manually
+                    log_datasets=False,  # We handle dataset info manually
+                    disable=False,
+                    exclusive=False,
+                    log_traces=False
+                )
+                logger.info("[MLFLOW] Autologging enabled")
+            except Exception as autolog_error:
+                logger.warning(f"[MLFLOW] Failed to enable autologging: {autolog_error}")
+                
         except Exception as e:
             logger.error(f"[MLFLOW] Failed to connect to run {args.mlflow_run_id}: {e}")
             logger.error("[MLFLOW] Train.py cannot create new runs - run must be created by Celery task")
@@ -2829,7 +2932,19 @@ def train_model(args):
         # Handle device selection based on args.device parameter
         if hasattr(args, 'device') and args.device:
             if args.device == 'auto':
-                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                # Auto-detect best available device: MPS > CUDA > CPU
+                if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+                    device = torch.device("mps")
+                elif torch.cuda.is_available():
+                    device = torch.device("cuda")
+                else:
+                    device = torch.device("cpu")
+            elif args.device == 'mps':
+                if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+                    device = torch.device("mps")
+                else:
+                    logger.warning("MPS requested but not available, falling back to CPU")
+                    device = torch.device("cpu")
             elif args.device == 'cuda':
                 if torch.cuda.is_available():
                     device = torch.device("cuda")
@@ -2840,7 +2955,12 @@ def train_model(args):
                 device = torch.device(args.device)  # cpu or specific device
         else:
             # Fallback to auto-detection if no device specified
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+                device = torch.device("mps")
+            elif torch.cuda.is_available():
+                device = torch.device("cuda")
+            else:
+                device = torch.device("cpu")
             
         logger.info(f"[TRAINING] Using device: {device}")
         
@@ -3278,10 +3398,11 @@ def train_model(args):
         # Model directory was already created during logging setup
         # Save and log model architecture summary
         summary_file = save_model_summary(model, model_dir=model_dir)
-        mlflow.log_artifact(summary_file)
+        log_artifact_to_model_directory(summary_file, model_dir, "model_summary")
+        
         # Save and log training configuration
         config_file = save_config(args, model_dir=model_dir)
-        mlflow.log_artifact(config_file)
+        log_artifact_to_model_directory(config_file, model_dir, "training_config")
 
         # --- VALIDATE MODEL CONFIGURATION WITH DETECTED CLASSES ---
         # Get model output channels to validate against detected classes
@@ -4162,8 +4283,8 @@ def train_model(args):
                         )
                         
                         if pred_file and os.path.exists(pred_file):
-                            # Log prediction samples to MLflow
-                            mlflow.log_artifact(pred_file, artifact_path=f"predictions/epoch_{epoch+1:03d}")
+                            # Log prediction samples to MLflow and model directory
+                            log_artifact_to_model_directory(pred_file, model_dir, f"predictions/epoch_{epoch+1:03d}")
                             logger.info(f"[SAMPLE_GENERATION] Successfully generated and logged samples for epoch {epoch+1}: {pred_file}")
                             
                             # Clear the generation flag if it was callback-requested
@@ -4192,8 +4313,8 @@ def train_model(args):
                     )
                     
                     if pred_file and os.path.exists(pred_file):
-                        # Log prediction samples to MLflow
-                        mlflow.log_artifact(pred_file, artifact_path=f"predictions/epoch_{epoch+1:03d}")
+                        # Log prediction samples to MLflow and model directory
+                        log_artifact_to_model_directory(pred_file, model_dir, f"predictions/epoch_{epoch+1:03d}")
                         logger.info(f"[SAMPLE_GENERATION] Fallback: Successfully generated and logged samples for epoch {epoch+1}: {pred_file}")
                     else:
                         logger.warning(f"[SAMPLE_GENERATION] Fallback: Failed to generate samples for epoch {epoch+1}")
@@ -4252,7 +4373,7 @@ def train_model(args):
                         pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir, class_info=class_info, threshold=threshold)
                         if pred_file and os.path.exists(pred_file):
                             epoch_artifacts['predictions'] = pred_file
-                            mlflow.log_artifact(pred_file, artifact_path=f"predictions/epoch_{epoch+1:03d}")
+                            log_artifact_to_model_directory(pred_file, model_dir, f"predictions/epoch_{epoch+1:03d}")
                             logger.info(f"[MLFLOW] Successfully logged prediction samples: {pred_file}")
                         else:
                             logger.warning(f"[MLFLOW] Prediction file was not created or does not exist: {pred_file}")
@@ -4269,7 +4390,7 @@ def train_model(args):
                     if enhanced_curves_file:
                         epoch_artifacts['training_curves'] = enhanced_curves_file
                         # Log training curves with organized path
-                        mlflow.log_artifact(enhanced_curves_file, artifact_path=f"visualizations/training_curves/epoch_{epoch+1:03d}")
+                        log_artifact_to_model_directory(enhanced_curves_file, model_dir, f"visualizations/training_curves/epoch_{epoch+1:03d}")
                     
                     # Save model comparison artifacts
                     comparison_artifacts = save_model_comparison_artifacts(
@@ -4281,7 +4402,7 @@ def train_model(args):
                         for i, artifact in enumerate(comparison_artifacts):
                             epoch_artifacts[f'comparison_{i}'] = artifact
                             # Log comparison artifacts with organized paths
-                            mlflow.log_artifact(artifact, artifact_path=f"visualizations/comparisons/epoch_{epoch+1:03d}")
+                            log_artifact_to_model_directory(artifact, model_dir, f"visualizations/comparisons/epoch_{epoch+1:03d}")
                 
                 # Save current epoch configuration and log it
                 epoch_config = {
@@ -4296,14 +4417,14 @@ def train_model(args):
                 with open(config_file, 'w') as f:
                     json.dump(epoch_config, f, indent=2)
                 epoch_artifacts['config'] = config_file
-                mlflow.log_artifact(config_file, artifact_path=f"config/epoch_{epoch+1:03d}")
+                log_artifact_to_model_directory(config_file, model_dir, f"config/epoch_{epoch+1:03d}")
                 
                 # Prepare metadata for this epoch
                 epoch_metadata = {
                     'learning_rate': optimizer.param_groups[0]['lr'],
                     'batch_size': args.batch_size,
                     'total_batches': len(train_loader),
-                    'model_family': getattr(args, 'model_family', 'UNet-Coronary'),
+                    'model_family': getattr(args, 'model_family', None) or getattr(args, 'model_type', 'unet').upper().replace('_', '-'),
                     'device': str(device),
                     'optimizer': 'Adam',
                     'loss_function': loss_function.__class__.__name__,
@@ -4329,7 +4450,7 @@ def train_model(args):
                 threshold = args.threshold if args.threshold is not None else 0.5
                 pred_file = save_sample_predictions(model, val_loader, device, epoch, model_dir=model_dir, class_info=class_info, threshold=threshold)
                 if pred_file:
-                    mlflow.log_artifact(pred_file, artifact_path=f"predictions/epoch_{epoch+1:03d}")
+                    log_artifact_to_model_directory(pred_file, model_dir, f"predictions/epoch_{epoch+1:03d}")
                     logger.info(f"[MLFLOW] Fallback: Successfully logged prediction samples for epoch {epoch+1}")
                 
                 # Save training curves when we have enough data
@@ -4340,7 +4461,7 @@ def train_model(args):
                         epoch_history, model_dir, epoch
                     )
                     if enhanced_curves_file:
-                        mlflow.log_artifact(enhanced_curves_file)
+                        log_artifact_to_model_directory(enhanced_curves_file, model_dir)
                     
                     comparison_artifacts = save_model_comparison_artifacts(
                         model_dir, 
@@ -4348,12 +4469,12 @@ def train_model(args):
                         epoch
                     )
                     for artifact in comparison_artifacts:
-                        mlflow.log_artifact(artifact)
+                        log_artifact_to_model_directory(artifact, model_dir)
                 else:
                     # Fallback to original training curves
                     training_curves_file = save_training_curves(epoch, metrics, logger, model_dir=model_dir)
                     if training_curves_file:
-                        mlflow.log_artifact(training_curves_file)
+                        log_artifact_to_model_directory(training_curves_file, model_dir)
             
             # Dynamic Learning Rate Adjustment
             if 'lr_scheduler' in locals() and lr_scheduler:
@@ -4433,8 +4554,8 @@ def train_model(args):
                 )
                 
                 # Enhanced MLflow artifact logging for best model
-                mlflow.log_artifact(best_model_path, artifact_path=f"checkpoints/best_model/epoch_{epoch+1:03d}")
-                mlflow.log_artifact(metadata_path, artifact_path=f"checkpoints/best_model/metadata")
+                log_artifact_to_model_directory(best_model_path, model_dir, f"checkpoints/best_model/epoch_{epoch+1:03d}")
+                log_artifact_to_model_directory(metadata_path, model_dir, f"checkpoints/best_model/metadata")
                 
                 # Log current epoch metrics as best model context
                 best_model_context = {
@@ -4453,7 +4574,7 @@ def train_model(args):
                 with open(context_file, 'w') as f:
                     json.dump(best_model_context, f, indent=2, default=str)
                 
-                mlflow.log_artifact(context_file, artifact_path=f"checkpoints/best_model/context")
+                log_artifact_to_model_directory(context_file, model_dir, f"checkpoints/best_model/context")
                 
                 logger.info(f"Saved new best model with val_dice: {val_dice:.4f} at {best_model_path}")
                 logger.info(f"[MLFLOW] Best model artifacts logged to checkpoints/best_model/epoch_{epoch+1:03d}")
@@ -4485,8 +4606,8 @@ def train_model(args):
             torch.save(epoch_checkpoint, epoch_checkpoint_path)
             logger.info(f"[CHECKPOINT] Saved epoch {epoch+1} checkpoint: {epoch_checkpoint_path}")
             
-            # Log to MLflow
-            mlflow.log_artifact(epoch_checkpoint_path, artifact_path=f"checkpoints/epoch_{epoch+1:03d}")
+            # Log to MLflow and model directory
+            log_artifact_to_model_directory(epoch_checkpoint_path, model_dir, f"checkpoints/epoch_{epoch+1:03d}")
             
             # --- ZAPIS ŚCIEŻEK DO WIZUALIZACJI DLA GUI ---
             try:
@@ -4538,7 +4659,7 @@ def train_model(args):
                 model_info = {
                 'architecture': getattr(arch_info, 'display_name', 'MONAI UNet') if arch_info else 'MONAI UNet',
                 'framework': getattr(arch_info, 'framework', 'PyTorch') if arch_info else 'PyTorch',
-                'model_family': getattr(args, 'model_family', 'UNet-Coronary'),
+                'model_family': getattr(args, 'model_family', None) or getattr(args, 'model_type', 'unet').upper().replace('_', '-'),
                 'architecture_key': getattr(arch_info, 'key', 'monai_unet') if arch_info else 'monai_unet',
                 'version': getattr(arch_info, 'version', '1.0.0') if arch_info else '1.0.0',
                 'total_parameters': sum(p.numel() for p in model.parameters()),
@@ -4604,11 +4725,11 @@ def train_model(args):
                             'model_parameters': sum(p.numel() for p in model.parameters())
                         }
                     }, f, indent=2)
-                mlflow.log_artifact(history_file, artifact_path="final_model/training_history")
+                log_artifact_to_model_directory(history_file, final_model_dir, "final_model/training_history")
                 
                 # Log final model state with comprehensive metadata
                 if best_model_path and os.path.exists(best_model_path):
-                    mlflow.log_artifact(best_model_path, artifact_path="final_model/weights")
+                    log_artifact_to_model_directory(best_model_path, final_model_dir, "final_model/weights")
                 
                 # Log complete training configuration
                 final_config = {
@@ -4624,7 +4745,7 @@ def train_model(args):
                 config_file = os.path.join(final_model_dir, "complete_config.json")
                 with open(config_file, 'w') as f:
                     json.dump(final_config, f, indent=2, default=str)
-                mlflow.log_artifact(config_file, artifact_path="final_model/configuration")
+                log_artifact_to_model_directory(config_file, final_model_dir, "final_model/configuration")
                 
                 # Log PyTorch model using MLflow's model logging - with safe signature handling
                 try:
@@ -4743,7 +4864,7 @@ def train_model(args):
                 with MLflowArtifactManager() as artifact_manager:
                     # Collect all training logs
                     log_files = [
-                        os.path.join(BASE_DIR, 'data', 'models', 'artifacts', 'training.log'),
+                        os.path.join(CORE_DATA_DIR, 'models', 'artifacts', 'training.log'),
                         os.path.join(model_dir, 'logs', 'training.log') if 'model_dir' in locals() else None
                     ]
                     log_files = [f for f in log_files if f and os.path.exists(f)]
@@ -4756,7 +4877,7 @@ def train_model(args):
                     
                     # Also log individual log files with organized paths
                     for log_file in log_files:
-                        mlflow.log_artifact(log_file, artifact_path="logs/training")
+                        log_artifact_to_model_directory(log_file, final_model_dir, "logs/training")
                 
                 # Log complete training summary
                 training_summary = {
@@ -4775,12 +4896,12 @@ def train_model(args):
                     }
                 }
                 
-                summary_file = os.path.join(BASE_DIR, 'data', 'models', 'artifacts', 'training_summary.json')
+                summary_file = os.path.join(CORE_DATA_DIR, 'models', 'artifacts', 'training_summary.json')
                 os.makedirs(os.path.dirname(summary_file), exist_ok=True)
                 with open(summary_file, 'w') as f:
                     json.dump(training_summary, f, indent=2, default=str)
                 
-                mlflow.log_artifact(summary_file, artifact_path="summaries/training")
+                log_artifact_to_model_directory(summary_file, final_model_dir, "summaries/training")
                 logger.info("[MLFLOW] Comprehensive training summary logged")
                 
         except Exception as e:
@@ -4796,7 +4917,7 @@ def train_model(args):
                 
                 for log_path in fallback_logs:
                     if os.path.exists(log_path):
-                        mlflow.log_artifact(log_path, artifact_path="logs/training_fallback")
+                        log_artifact_to_model_directory(log_path, final_model_dir, "logs/training_fallback")
                         logger.info(f"[MLFLOW] Fallback logged: {log_path}")
                         
                 # Create and log basic training summary
@@ -4812,7 +4933,7 @@ def train_model(args):
                 with open(fallback_summary_file, 'w') as f:
                     json.dump(basic_summary, f, indent=2)
                 
-                mlflow.log_artifact(fallback_summary_file, artifact_path="summaries/basic")
+                log_artifact_to_model_directory(fallback_summary_file, final_model_dir, "summaries/basic")
                         
             except Exception as fallback_e:
                 logger.warning(f"[MLFLOW] Fallback log artifact also failed: {fallback_e}")
@@ -4821,7 +4942,7 @@ def train_model(args):
         try:
             interactive_plot_file = save_interactive_training_plot(epoch_history, model_dir)
             if interactive_plot_file:
-                mlflow.log_artifact(interactive_plot_file)
+                log_artifact_to_model_directory(interactive_plot_file, final_model_dir)
         except Exception as e:
             logger.warning(f"[MLFLOW] Failed to log interactive plot: {e}")
         if hasattr(args, 'model_id') and args.model_id is not None:
@@ -4836,7 +4957,8 @@ def train_model(args):
                 
                 # Determine model family/type for registry naming and tags
                 model_family = getattr(args, 'model_family', None) or getattr(args, 'model_type', None) or 'generic-model'
-                registry_model_name = f"{model_family}-v{args.model_id}"
+                # Use the same unique_id for consistent naming between artifacts and registry
+                registry_model_name = f"{unique_id}_v1.0.0"
                 registry_tags = {
                     "model_family": model_family,
                     "framework": "PyTorch",
@@ -5026,7 +5148,7 @@ def train_model(args):
                 # Log training log file
                 log_path = os.path.join(model_dir, 'logs', 'training.log')
                 if os.path.exists(log_path):
-                    mlflow.log_artifact(log_path, "logs")
+                    log_artifact_to_model_directory(log_path, model_dir, "logs")
                     logger.info(f"[MLFLOW] Logged training log as artifact")
                 
                 # Log model artifacts from model directory  
@@ -5034,7 +5156,7 @@ def train_model(args):
                 for item in Path(model_dir).rglob('*'):
                     if item.is_file() and item.suffix in ['.pth', '.json', '.txt']:
                         try:
-                            mlflow.log_artifact(str(item), "model_artifacts")
+                            log_artifact_to_model_directory(str(item), model_dir, "model_artifacts")
                             artifact_count += 1
                         except Exception as e:
                             logger.debug(f"Failed to log artifact {item}: {e}")
@@ -5044,7 +5166,7 @@ def train_model(args):
                 # Log final training configuration
                 config_path = os.path.join(model_dir, 'training_config.json')
                 if os.path.exists(config_path):
-                    mlflow.log_artifact(config_path, "config")
+                    log_artifact_to_model_directory(config_path, model_dir, "config")
                     logger.info(f"[MLFLOW] Logged final training configuration")
                 
             except Exception as e:
@@ -5121,7 +5243,7 @@ def train_model(args):
                         # Log training logs as artifact
                         model_log_path = os.path.join(model_dir, 'logs', 'training.log')
                         if os.path.exists(model_log_path):
-                            mlflow.log_artifact(model_log_path, artifact_path="logs")
+                            log_artifact_to_model_directory(model_log_path, model_dir, "logs")
                             logger.info(f"[MLFLOW] Logged training log as artifact: {model_log_path}")
                         
                         # Log config files if they exist
@@ -5130,7 +5252,7 @@ def train_model(args):
                             for config_file in os.listdir(config_dir):
                                 config_path = os.path.join(config_dir, config_file)
                                 if os.path.isfile(config_path):
-                                    mlflow.log_artifact(config_path, artifact_path="configs")
+                                    log_artifact_to_model_directory(config_path, model_dir, "configs")
                         
                         logger.info(f"[MLFLOW] Logged model artifacts from: {model_dir}")
                         
@@ -5370,10 +5492,11 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
             # Enhanced MLflow artifact logging for predictions
             try:
                 if mlflow.active_run():
-                    # Log all prediction outputs with organized structure
-                    mlflow.log_artifact(output_filename, artifact_path="predictions/comparisons")
-                    mlflow.log_artifact(input_only_filename, artifact_path="predictions/inputs")
-                    mlflow.log_artifact(pred_only_filename, artifact_path="predictions/outputs")
+                    # Log all prediction outputs with organized structure - get model_dir from context if available
+                    current_model_dir = globals().get('model_dir') if 'model_dir' in globals() else None
+                    log_artifact_to_model_directory(output_filename, current_model_dir, "predictions/comparisons")
+                    log_artifact_to_model_directory(input_only_filename, current_model_dir, "predictions/inputs")
+                    log_artifact_to_model_directory(pred_only_filename, current_model_dir, "predictions/outputs")
                     
                     # Create and log prediction metadata
                     prediction_metadata = {
@@ -5397,7 +5520,7 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
                     with open(metadata_filename, 'w') as f:
                         json.dump(prediction_metadata, f, indent=2, default=str)
                     
-                    mlflow.log_artifact(metadata_filename, artifact_path="predictions/metadata")
+                    log_artifact_to_model_directory(metadata_filename, current_model_dir, "predictions/metadata")
                     
                     logger.info(f"[MLFLOW] Logged prediction artifacts for {os.path.basename(input_file)}")
                     
@@ -5480,7 +5603,9 @@ def inference_mode(args):
                 json.dump(inference_summary, f, indent=2, default=str)
             
             if args.mlflow_run_id:
-                mlflow.log_artifact(summary_file, artifact_path="inference/summary")
+                # Get model_dir from context if available for inference
+                current_model_dir = globals().get('model_dir') if 'model_dir' in globals() else None
+                log_artifact_to_model_directory(summary_file, current_model_dir, "inference/summary")
             
     finally:
         if args.mlflow_run_id:

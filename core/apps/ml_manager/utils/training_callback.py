@@ -17,13 +17,24 @@ if core_path not in sys.path:
 if ml_path not in sys.path:
     sys.path.append(ml_path)
 
-# Ensure log directory exists
-log_dir = base_dir / 'data' / 'artifacts'
-log_dir.mkdir(parents=True, exist_ok=True)
-log_file = log_dir / 'training.log'
-
 # Set up Django (if not already done)
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.config.settings.development')
+
+# Initialize Django to get settings
+django.setup()
+
+# Import Django settings after setup
+from django.conf import settings
+
+# Use Django settings for core data directory
+core_data_dir = settings.CORE_DATA_DIR
+
+logging.info(f"Base directory: {base_dir}")
+logging.info(f"Core data directory: {core_data_dir}")
+# Ensure log directory exists
+log_dir = core_data_dir / 'artifacts'
+log_dir.mkdir(parents=True, exist_ok=True)
+log_file = log_dir / 'training.log'
 
 # --- Import MLModel with better error handling ---
 try:
@@ -96,8 +107,22 @@ class TrainingCallback:
     
     def set_model_directory(self, model_directory):
         """Store the model directory path in the Django model"""
+        logging.info(f"[CALLBACK] Setting model directory: {model_directory}")
+        logging.info(f"[CALLBACK] Before update - model_directory: {self.model.model_directory}")
+        logging.info(f"[CALLBACK] Before update - unique_identifier: {self.model.unique_identifier}")
+        
         self.model.model_directory = model_directory
-        self.model.save()
+        # Extract the actual folder name from the path to use as unique_identifier
+        if model_directory:
+            actual_folder_name = os.path.basename(model_directory.rstrip('/'))
+            self.model.unique_identifier = actual_folder_name
+            logging.info(f"[CALLBACK] Set model directory: {model_directory}")
+            logging.info(f"[CALLBACK] Updated unique_identifier to match folder name: {actual_folder_name}")
+        
+        self.model.save(update_fields=['model_directory', 'unique_identifier'])
+        
+        logging.info(f"[CALLBACK] After save - model_directory: {self.model.model_directory}")
+        logging.info(f"[CALLBACK] After save - unique_identifier: {self.model.unique_identifier}")
         return True
     
     def on_epoch_start(self, epoch, total_epochs):
@@ -450,8 +475,8 @@ class TrainingCallback:
             # Save training log file if it exists
             log_paths = [
                 log_file,  # Main training log from callback setup
-                base_dir / 'data' / 'logs' / 'training.log',  # Global training log
-                base_dir / 'data' / 'logs' / f'model_{self.model_id}' / f'training_{self.model_id}*.log'  # Model specific logs
+                core_data_dir / 'logs' / 'training.log',  # Global training log
+                core_data_dir / 'logs' / f'model_{self.model_id}' / f'training_{self.model_id}*.log'  # Model specific logs
             ]
             
             for log_path in log_paths:
@@ -475,7 +500,7 @@ class TrainingCallback:
                             logging.warning(f"[CALLBACK] Failed to save log file {log_path} to MLflow: {e}")
             
             # Save model checkpoints directory if it exists
-            checkpoint_dir = base_dir / 'data' / 'models' / f'model_{self.model_id}'
+            checkpoint_dir = core_data_dir / 'models' / f'model_{self.model_id}'
             if checkpoint_dir.exists():
                 try:
                     mlflow.log_artifacts(str(checkpoint_dir), "checkpoints")
@@ -485,7 +510,7 @@ class TrainingCallback:
             
             # Save performance metrics as a JSON file
             if hasattr(self.model, 'performance_metrics') and self.model.performance_metrics:
-                metrics_file = base_dir / 'data' / 'temp' / f'metrics_model_{self.model_id}.json'
+                metrics_file = core_data_dir / 'temp' / f'metrics_model_{self.model_id}.json'
                 metrics_file.parent.mkdir(parents=True, exist_ok=True)
                 
                 import json

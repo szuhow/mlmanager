@@ -36,6 +36,37 @@ class MLflowArtifactManager:
         self.run_id = run_id
         self.temp_dirs = []  # Track temporary directories for cleanup
         
+        # Ensure MLflow is properly configured
+        self._setup_mlflow()
+        
+    def _setup_mlflow(self):
+        """Setup MLflow with proper configuration"""
+        try:
+            # Try to get tracking URI from Django settings first
+            try:
+                from django.conf import settings
+                tracking_uri = getattr(settings, 'MLFLOW_TRACKING_URI', None)
+                artifact_root = getattr(settings, 'MLFLOW_ARTIFACT_ROOT', None)
+            except (ImportError, AttributeError):
+                tracking_uri = None
+                artifact_root = None
+            
+            # Fall back to environment variables
+            if not tracking_uri:
+                tracking_uri = os.environ.get('MLFLOW_TRACKING_URI', 'http://mlflow:5000')
+            if not artifact_root:
+                artifact_root = os.environ.get('MLFLOW_DEFAULT_ARTIFACT_ROOT', '/app/core/data/mlflow')
+            
+            # Set tracking URI
+            mlflow.set_tracking_uri(tracking_uri)
+            logger.info(f"MLflow tracking URI set to: {tracking_uri}")
+            logger.info(f"MLflow artifact root: {artifact_root}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to setup MLflow configuration: {e}")
+            # Use default fallback
+            mlflow.set_tracking_uri('http://mlflow:5000')
+        
     def __enter__(self):
         """Context manager entry"""
         return self

@@ -1,0 +1,56 @@
+# Flower - Minimal monitoring (only Celery monitoring)
+FROM python:3.10-slim
+
+# Environment variables for standalone celery (no Django)
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
+
+# Install minimal system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libffi-dev \
+    libpq-dev \
+    sudo \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser
+
+# Set work directory
+WORKDIR /app
+
+# Create minimal requirements for flower
+COPY infrastructure/requirements/flower.txt /app/requirements/flower.txt
+
+# Install only flower dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements/flower.txt && \
+    pip cache purge
+
+# Copy minimal config for Celery connection (NO apps directory to avoid cv2 imports)
+COPY core/config/celery_standalone.py /app/core/config/
+COPY core/config/__init__.py /app/core/config/
+COPY core/__init__.py /app/core/
+COPY infrastructure/env/ /app/infrastructure/env/
+# Create a minimal celery.py to satisfy __init__.py import
+RUN echo "from .celery_standalone import app" > /app/core/config/celery.py
+# Create empty apps directory structure without actual apps
+RUN mkdir -p /app/core/apps && touch /app/core/apps/__init__.py
+
+# Ensure core/data/logs directory exists and set ownership
+RUN mkdir -p /app/core/data/logs && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Set container type for unified Celery config
+ENV CONTAINER_TYPE=flower
+
+# Expose port
+EXPOSE 5555
+
+# Default command for standalone celery configuration
+CMD ["celery", "-A", "config.celery_standalone", "flower", "--port=5555"]

@@ -459,19 +459,13 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                 if not os.path.isabs(model_dir):
                     model_dir = os.path.abspath(model_dir)
                 
-                # Add prediction paths from model directory
-                base_paths.extend([
-                    os.path.join(model_dir, 'predictions'),
-                    os.path.join(model_dir, 'artifacts'),
-                ])
+                # Add only predictions path from model directory - simplified
+                base_paths.append(os.path.join(model_dir, 'predictions'))
                 
                 # Also try without /app/core prefix if present
                 if '/app/core/' in model_dir:
                     alt_model_dir = model_dir.replace('/app/core/', '', 1)
-                    base_paths.extend([
-                        os.path.join(alt_model_dir, 'predictions'),
-                        os.path.join(alt_model_dir, 'artifacts'),
-                    ])
+                    base_paths.append(os.path.join(alt_model_dir, 'predictions'))
             
             # PRIORITY 2: Search organized structure by model unique identifier
             if self.object.unique_identifier:
@@ -487,34 +481,31 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                         try:
                             for root, dirs, files in os.walk(org_base):
                                 for dir_name in dirs:
+                                    # Exact match first
                                     if self.object.unique_identifier in dir_name:
                                         dir_path = os.path.join(root, dir_name)
-                                        base_paths.extend([
-                                            os.path.join(dir_path, 'predictions'),
-                                            os.path.join(dir_path, 'artifacts'),
-                                        ])
+                                        # Add only predictions path - simplified
+                                        base_paths.append(os.path.join(dir_path, 'predictions'))
+                                    else:
+                                        # Fallback: Pattern match for timestamp differences
+                                        # Extract model prefix and suffix for fuzzy matching
+                                        if '_' in self.object.unique_identifier:
+                                            parts = self.object.unique_identifier.split('_')
+                                            if len(parts) >= 3:
+                                                # Pattern: model_family_timestamp_mlflow_uuid
+                                                model_prefix = parts[0]  # e.g., "unet-coronary"
+                                                model_suffix_parts = parts[2:]  # mlflow_uuid parts
+                                                
+                                                # Check if directory matches the pattern with different timestamp
+                                                if (dir_name.startswith(model_prefix + '_') and 
+                                                    any(suffix in dir_name for suffix in model_suffix_parts)):
+                                                    dir_path = os.path.join(root, dir_name)
+                                                    base_paths.append(os.path.join(dir_path, 'predictions'))
                         except Exception as e:
                             logger.warning(f"Error searching organized structure: {e}")
             
-            # PRIORITY 3: MLflow-based paths (fallback)
-            base_paths.extend([
-                # Direct run ID path (current MLflow structure)
-                os.path.join(settings.BASE_MLRUNS_DIR, run.info.run_id, 'artifacts'),
-                # Legacy experiment-based paths  
-                os.path.join(settings.BASE_MLRUNS_DIR, run.info.experiment_id, run.info.run_id, 'artifacts'),
-                os.path.join(settings.BASE_MLRUNS_DIR, '0', run.info.run_id, 'artifacts'),
-                os.path.join(settings.BASE_MLRUNS_DIR, '1', run.info.run_id, 'artifacts'),
-                os.path.join(settings.BASE_MLRUNS_DIR, str(run.info.experiment_id), run.info.run_id, 'artifacts'),
-                # Fallback to legacy mlruns structure
-                os.path.join('mlruns', run.info.run_id, 'artifacts'),
-                os.path.join('mlruns', run.info.experiment_id, run.info.run_id, 'artifacts'),
-                os.path.join('mlruns', '0', run.info.run_id, 'artifacts'),
-                os.path.join('mlruns', '1', run.info.run_id, 'artifacts'),
-                os.path.join('mlruns', str(run.info.experiment_id), run.info.run_id, 'artifacts'),
-            ])
-            
-            # Filter out None paths
-            base_paths = [path for path in base_paths if path is not None]
+            # Filter out None paths and duplicates
+            base_paths = list(set([path for path in base_paths if path is not None]))
             
             base_search_path = None
             for path in base_paths:
@@ -1268,6 +1259,19 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                 search_patterns = []
                 if self.object.unique_identifier:
                     search_patterns.append(f"*{self.object.unique_identifier}*")
+                    
+                    # Add fallback pattern for timestamp differences
+                    if '_' in self.object.unique_identifier:
+                        parts = self.object.unique_identifier.split('_')
+                        if len(parts) >= 3:
+                            # Pattern: model_family_timestamp_mlflow_uuid
+                            model_prefix = parts[0]  # e.g., "unet-coronary"
+                            model_suffix_parts = parts[2:]  # mlflow_uuid parts
+                            # Add pattern matching prefix and suffix parts
+                            search_patterns.append(f"{model_prefix}_*")
+                            for suffix in model_suffix_parts:
+                                search_patterns.append(f"*{suffix}*")
+                
                 if self.object.name:
                     # Clean model name for directory search
                     clean_name = self.object.name.replace(" ", "_").replace("(", "").replace(")", "").lower()
@@ -2938,6 +2942,19 @@ def get_training_log(request, model_id):
                     search_patterns = []
                     if model.unique_identifier:
                         search_patterns.append(f"*{model.unique_identifier}*")
+                        
+                        # Add fallback pattern for timestamp differences
+                        if '_' in model.unique_identifier:
+                            parts = model.unique_identifier.split('_')
+                            if len(parts) >= 3:
+                                # Pattern: model_family_timestamp_mlflow_uuid
+                                model_prefix = parts[0]  # e.g., "unet-coronary"
+                                model_suffix_parts = parts[2:]  # mlflow_uuid parts
+                                # Add pattern matching prefix and suffix parts
+                                search_patterns.append(f"{model_prefix}_*")
+                                for suffix in model_suffix_parts:
+                                    search_patterns.append(f"*{suffix}*")
+                    
                     if model.name:
                         clean_name = model.name.replace(" ", "_").replace("(", "").replace(")", "").lower()
                         search_patterns.append(f"*{clean_name}*")
@@ -5669,5 +5686,116 @@ def get_model_checkpoints_api(request):
         return JsonResponse({
             'status': 'error',
             'message': f'Failed to get checkpoints: {str(e)}'
+        })
+
+
+@login_required
+def get_realtime_logs(request, model_id):
+    """Real-time log endpoint with smart polling support"""
+    import time
+    import os
+    import hashlib
+    from django.http import JsonResponse, HttpResponse
+    from django.utils.http import http_date
+    
+    try:
+        model = get_object_or_404(MLModel, id=model_id)
+        
+        # Get parameters
+        last_timestamp = request.GET.get('since', '')
+        lines_limit = int(request.GET.get('lines', 50))
+        
+        # Find log file path
+        log_path = None
+        if model.model_directory:
+            model_dir_paths = [
+                model.model_directory,
+                model.model_directory.replace('/app/core/', '', 1) if model.model_directory.startswith('/app/core/') else None,
+                f'/app/{model.model_directory.lstrip("/")}' if not model.model_directory.startswith('/app/') else None,
+                os.path.join(os.getcwd(), model.model_directory.lstrip('/'))
+            ]
+            
+            for model_dir in filter(None, model_dir_paths):
+                potential_log = os.path.join(model_dir, 'logs', 'training.log')
+                if os.path.exists(potential_log):
+                    log_path = potential_log
+                    break
+        
+        if not log_path or not os.path.exists(log_path):
+            return JsonResponse({
+                'status': 'no_logs',
+                'logs': [],
+                'timestamp': int(time.time() * 1000),
+                'model_status': model.status
+            })
+        
+        # Get file modification time and size for ETag generation
+        stat = os.stat(log_path)
+        file_mtime = stat.st_mtime
+        file_size = stat.st_size
+        
+        # Generate ETag based on file mtime and size
+        etag_data = f"{file_mtime}-{file_size}-{model_id}"
+        etag = hashlib.md5(etag_data.encode()).hexdigest()
+        
+        # Check if client has current version (ETag)
+        client_etag = request.headers.get('If-None-Match')
+        if client_etag and client_etag.strip('"') == etag:
+            response = HttpResponse(status=304)  # Not Modified
+            response['ETag'] = f'"{etag}"'
+            return response
+        
+        # Read log file
+        try:
+            with open(log_path, 'r', encoding='utf-8') as f:
+                all_lines = f.read().splitlines()
+        except Exception as e:
+            return JsonResponse({
+                'status': 'error',
+                'message': f'Cannot read log file: {str(e)}',
+                'timestamp': int(time.time() * 1000)
+            })
+        
+        # Filter new lines based on timestamp if provided
+        new_lines = []
+        if last_timestamp and all_lines:
+            try:
+                last_ts = int(last_timestamp)
+                # Find lines added since last timestamp
+                # This is simplified - in practice you'd need to parse log timestamps
+                # For now, return last N lines if file was modified
+                if file_mtime * 1000 > last_ts:
+                    new_lines = all_lines[-lines_limit:] if len(all_lines) > lines_limit else all_lines
+            except (ValueError, TypeError):
+                new_lines = all_lines[-lines_limit:] if len(all_lines) > lines_limit else all_lines
+        else:
+            new_lines = all_lines[-lines_limit:] if len(all_lines) > lines_limit else all_lines
+        
+        # Filter out empty lines
+        new_lines = [line for line in new_lines if line.strip()]
+        
+        response_data = {
+            'status': 'success',
+            'logs': new_lines,
+            'timestamp': int(time.time() * 1000),
+            'file_mtime': int(file_mtime * 1000),
+            'total_lines': len(all_lines),
+            'model_status': model.status,
+            'has_new_data': len(new_lines) > 0
+        }
+        
+        response = JsonResponse(response_data)
+        response['ETag'] = f'"{etag}"'
+        response['Last-Modified'] = http_date(file_mtime)
+        response['Cache-Control'] = 'no-cache'
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in realtime logs for model {model_id}: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e),
+            'timestamp': int(time.time() * 1000)
         })
 

@@ -3,32 +3,48 @@ Worker-specific settings for Celery workers with GPU support.
 Used in docker-compose.worker.yml
 """
 
-from .distributed import *
+from .base import *
 import sys
 
 # Add ML modules to Python path for worker
 sys.path.insert(0, str(BASE_DIR / 'ml'))
 sys.path.insert(0, str(BASE_DIR))
 
-# Override worker settings for GPU worker
-WORKER_SETTINGS.update({
+# Worker settings dictionary
+WORKER_SETTINGS = {
     'worker_type': 'worker',
     'gpu_enabled': True,
     'max_gpu_memory_gb': int(os.environ.get('MAX_GPU_MEMORY_GB', '8')),
     'training_timeout': int(os.environ.get('TRAINING_TIMEOUT', '86400')),  # 24 hours
     'inference_timeout': int(os.environ.get('INFERENCE_TIMEOUT', '300')),   # 5 minutes
     'max_concurrent_gpu_tasks': int(os.environ.get('MAX_CONCURRENT_GPU_TASKS', '1')),
-})
+}
 
-# Disable client features for worker
-CLIENT_SETTINGS.update({
+# Client settings dictionary
+CLIENT_SETTINGS = {
     'enable_training_ui': False,
     'enable_inference_ui': False,
     'enable_preset_management': False,
     'enable_model_management': False,
     'enable_dataset_management': False,
     'enable_experiment_tracking': False,
-})
+}
+
+# Health check settings dictionary
+HEALTH_CHECK_SETTINGS = {
+    'gpu_health_check_interval': 60,
+    'model_loading_timeout': 300,
+    'training_heartbeat_interval': 30,
+}
+
+# Feature flags dictionary
+FEATURE_FLAGS = {
+    'use_modern_training_system': True,
+    'enable_gpu_training': True,
+    'enable_distributed_training': True,
+    'enable_model_checkpointing': True,
+    'enable_automatic_cleanup': True,
+}
 
 # Worker-specific Celery configuration
 CELERY_WORKER_CONCURRENCY = int(os.environ.get('CELERY_WORKER_CONCURRENCY', '1'))
@@ -65,25 +81,50 @@ else:
 
 # Minimal static files for worker
 STATIC_URL = '/static/'
-STATIC_ROOT = '/app/data/staticfiles'
+STATIC_ROOT = '/app/core/data/staticfiles'
 
 # Media files configuration for worker
 MEDIA_URL = '/media/'
-MEDIA_ROOT = '/app/data/media'
+MEDIA_ROOT = '/app/core/data/media'
 
 # Worker-specific paths
-MODELS_DIR = Path('/app/data/models')
-CHECKPOINTS_DIR = Path('/app/data/checkpoints')
-TRAINING_RESULTS_DIR = Path('/app/data/training_results')
-INFERENCE_RESULTS_DIR = Path('/app/data/inference_results')
+MODELS_DIR = Path('/app/core/data/models')
+CHECKPOINTS_DIR = Path('/app/core/data/checkpoints')
+TRAINING_RESULTS_DIR = Path('/app/core/data/training_results')
+INFERENCE_RESULTS_DIR = Path('/app/core/data/inference_results')
 
 # Ensure worker directories exist
 for directory in [MODELS_DIR, CHECKPOINTS_DIR, TRAINING_RESULTS_DIR, INFERENCE_RESULTS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
-# MLflow configuration for worker
+# MLflow configuration for worker - artefakty w strukturze /app/core/data/mlflow
 MLFLOW_TRACKING_URI = os.environ.get('MLFLOW_TRACKING_URI', 'http://mlflow:5000')
-MLFLOW_ARTIFACT_ROOT = '/app/data/mlflow'
+MLFLOW_BACKEND_STORE_URI = os.environ.get('MLFLOW_BACKEND_STORE_URI', 'sqlite:////app/core/data/mlflow/data/mlflow.db')
+
+# MLflow artifact root wskazuje na /app/core/data/mlflow - eksperyment i run ID będą automatycznie dodane
+# Struktura: /app/core/data/mlflow/{experiment_id}/{run_id}/artifacts/
+BASE_ORGANIZED_MODELS_DIR = '/app/core/data/models/organized'  # zachowane dla kompatybilności
+MLFLOW_ARTIFACT_ROOT = os.environ.get('MLFLOW_ARTIFACT_ROOT', '/app/core/data/mlflow')
+MLFLOW_ARTIFACTS_DESTINATION = '/app/core/data/mlflow'
+
+# MLflow system paths (for database and logs)
+MLFLOW_DATA_PATH = os.environ.get('MLFLOW_DATA_PATH', '/app/core/data/mlflow/data') 
+MLFLOW_LOGS_PATH = os.environ.get('MLFLOW_LOGS_PATH', '/app/core/data/mlflow/logs')
+
+# MLflow artifact settings for training workers
+MLFLOW_LOG_ARTIFACTS = True
+MLFLOW_LOG_MODELS = True
+MLFLOW_LOG_PARAMS = True
+MLFLOW_LOG_METRICS = True
+MLFLOW_SERVE_ARTIFACTS = True
+
+# Training-specific artifact structure:
+# /app/core/data/models/organized/{year}/{month}/{model_family}/{model_name}/
+#   ├── artifacts/          <- MLflow artifacts
+#   ├── checkpoints/        <- Model checkpoints  
+#   ├── logs/              <- Training logs
+#   ├── predictions/       <- Sample predictions
+#   └── config/            <- Training configuration
 
 # GPU monitoring settings
 GPU_MONITORING = {
@@ -115,16 +156,30 @@ LOGGING['handlers']['worker_console'] = {
     'stream': 'ext://sys.stdout',
 }
 
-# Try to use file logging, but fall back to console if permissions fail
+# Create log directory and try to use file logging, but fall back to console if permissions fail
+log_dir = '/app/core/data/logs'
 try:
+    os.makedirs(log_dir, exist_ok=True)
     LOGGING['handlers']['worker_file'] = {
         'class': 'logging.FileHandler',
-        'filename': '/app/data/logs/worker.log',
+        'filename': '/app/core/data/logs/worker.log',
         'formatter': 'verbose',
     }
     use_file_logging = True
-except:
+except Exception as e:
     use_file_logging = False
+    print(f"Warning: Could not setup file logging: {e}")
+
+# Override base.py file handler to avoid django.log issues
+try:
+    os.makedirs('/app/core/data/logs', exist_ok=True)
+    LOGGING['handlers']['file'] = {
+        'class': 'logging.StreamHandler',  # Use console instead of file for worker
+        'formatter': 'verbose',
+        'stream': 'ext://sys.stdout',
+    }
+except Exception as e:
+    print(f"Warning: Could not setup logs directory: {e}")
 
 LOGGING['loggers'].update({
     'ml.training.core': {
@@ -159,7 +214,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'core.apps.ml_manager',
-    'core.apps.ml_worker',
+    'core.apps.dataset_manager',
 ]
 
 # Complete middleware stack for worker

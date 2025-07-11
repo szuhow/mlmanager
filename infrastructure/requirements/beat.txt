@@ -1,0 +1,10 @@
+# Minimal requirements for Celery Beat
+Django>=4.2.11,<5.0.0
+djangorestframework>=3.14.0,<4.0.0
+celery[redis]>=5.3.0
+django-celery-beat>=2.5.0
+redis>=4.5.0
+psycopg2-binary>=2.9.0
+python-dotenv>=1.0.1,<2.0.0
+dj-database-url>=2.1.0
+psutil>=5.9.0,<6.0.0

@@ -15,44 +15,57 @@ class MlManagerConfig(AppConfig):
         from django.db import connection
         
         logger = logging.getLogger(__name__)
-        logger.info("🚀 ML Manager app ready() called")
         
-        # Initialize MLflow connection
-        try:
-            from .utils.mlflow_utils import initialize_mlflow_connection
-            success = initialize_mlflow_connection()
-            if success:
-                logger.info("[ML_MANAGER] MLflow connection initialized successfully")
-            else:
-                logger.warning("[ML_MANAGER] MLflow connection initialization skipped or failed")
-        except Exception as e:
-            logger.error(f"[ML_MANAGER] Error initializing MLflow: {e}")
-        
-        # Check environment
+        # Check environment and process type to avoid duplicate logging
         run_main = os.environ.get('RUN_MAIN')
         django_settings = os.environ.get('DJANGO_SETTINGS_MODULE', '')
-        logger.info(f"🔍 Environment check: RUN_MAIN={run_main}, DJANGO_SETTINGS_MODULE={django_settings}")
+        process_type = 'worker' if 'worker' in django_settings else 'django'
         
-        # Run validation in development or if RUN_MAIN is set (main Django process)
-        if run_main or django_settings.endswith('development') or django_settings.endswith('production'):
-            logger.info("✅ Conditions met for running startup validation")
+        # Only log startup in main Django process or when explicitly requested
+        if run_main or (django_settings and not 'worker' in django_settings):
+            logger.info("🚀 ML Manager app ready() called")
+            
+            # Initialize MLflow connection
             try:
-                # Check if database is ready
-                with connection.cursor() as cursor:
-                    cursor.execute("SELECT 1")
-                logger.info("✅ Database connection verified")
-                
-                # Perform startup training status validation
-                self.validate_training_statuses()
-                
-                # Perform MLflow synchronization
-                self.sync_mlflow_on_startup()
-                
+                from .utils.mlflow_utils import initialize_mlflow_connection
+                success = initialize_mlflow_connection()
+                if success:
+                    logger.info("[ML_MANAGER] MLflow connection initialized successfully")
+                else:
+                    logger.warning("[ML_MANAGER] MLflow connection initialization skipped or failed")
             except Exception as e:
-                # Log the error but don't crash the application
-                logger.warning(f"❌ Failed to validate training statuses on startup: {e}")
+                logger.error(f"[ML_MANAGER] Error initializing MLflow: {e}")
+            
+            # Check environment
+            logger.info(f"🔍 Environment check: RUN_MAIN={run_main}, DJANGO_SETTINGS_MODULE={django_settings}")
+            
+            # Run validation in development or if RUN_MAIN is set (main Django process)
+            if run_main or django_settings.endswith('development') or django_settings.endswith('production'):
+                logger.info("✅ Conditions met for running startup validation")
+                try:
+                    # Check if database is ready
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT 1")
+                    logger.info("✅ Database connection verified")
+                    
+                    # Perform startup training status validation
+                    self.validate_training_statuses()
+                    
+                    # Perform MLflow synchronization
+                    self.sync_mlflow_on_startup()
+                    
+                except Exception as e:
+                    # Log the error but don't crash the application
+                    logger.warning(f"❌ Failed to validate training statuses on startup: {e}")
+            else:
+                logger.info("⏭️  Skipping startup validation (not main process)")
         else:
-            logger.info("⏭️  Skipping startup validation (not main process)")
+            # Silent initialization for workers - no duplicate logging
+            try:
+                from .utils.mlflow_utils import initialize_mlflow_connection
+                initialize_mlflow_connection()
+            except Exception:
+                pass  # Silent failure for workers
     
     def validate_training_statuses(self):
         """Check and update orphaned training statuses after container restart"""

@@ -8,6 +8,9 @@ from pathlib import Path
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
+# Core data directory - all data should be contained within core module
+CORE_DATA_DIR = BASE_DIR / "data"
+
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-dev-key-change-in-production')
 
@@ -78,7 +81,7 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'data' / 'db.sqlite3',
+            'NAME': CORE_DATA_DIR / 'db.sqlite3',
         }
     }
 
@@ -145,18 +148,38 @@ STATICFILES_DIRS = [
 
 # Media files
 MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'data' / 'media'
+MEDIA_ROOT = CORE_DATA_DIR / 'media'
 
 # Base organized models directory
-BASE_ORGANIZED_MODELS_DIR = BASE_DIR / 'data' / 'models' / 'organized'
+BASE_ORGANIZED_MODELS_DIR = CORE_DATA_DIR / 'models' / 'organized'
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# MLflow configuration
-MLFLOW_TRACKING_URI = os.environ.get('MLFLOW_TRACKING_URI', 'http://localhost:5000')
-BASE_MLRUNS_DIR = BASE_DIR / 'data' / 'mlflow'
-MLFLOW_ARTIFACT_ROOT = os.environ.get('MLFLOW_ARTIFACT_ROOT', str(BASE_MLRUNS_DIR))
+# MLflow configuration with standardized artifact paths (zgodnie z GitHub)
+MLFLOW_TRACKING_URI = os.environ.get('MLFLOW_TRACKING_URI', 'http://mlflow:5000')
+MLFLOW_BACKEND_STORE_URI = os.environ.get('MLFLOW_BACKEND_STORE_URI', 'sqlite:////mlflow/data/mlflow.db')
+
+# MLflow paths for container environment  
+BASE_MLRUNS_DIR = CORE_DATA_DIR / 'mlflow'
+BASE_ORGANIZED_MODELS_DIR = CORE_DATA_DIR / 'models' / 'organized'
+
+# MLflow artifact root - zgodnie z działającą komendą (bez /artifacts)
+MLFLOW_ARTIFACT_ROOT = os.environ.get('MLFLOW_ARTIFACT_ROOT', '/app/core/data/mlflow')
+MLFLOW_ARTIFACTS_DESTINATION = '/app/core/data/mlflow'
+
+# MLflow system paths
+MLFLOW_DATA_PATH = os.environ.get('MLFLOW_DATA_PATH', '/app/core/data/mlflow/data')
+MLFLOW_LOGS_PATH = os.environ.get('MLFLOW_LOGS_PATH', '/app/core/data/mlflow/logs')
+
+# MLflow artifact logging settings
+MLFLOW_LOG_ARTIFACTS = True
+MLFLOW_LOG_MODELS = True
+MLFLOW_LOG_PARAMS = True
+MLFLOW_LOG_METRICS = True
+
+# Model artifacts should be stored in: 
+# /app/core/data/models/organized/{year}/{month}/{model_family}/{model_name}/artifacts/
 
 # REST Framework Configuration
 REST_FRAMEWORK = {
@@ -201,7 +224,7 @@ LOGGING = {
         'file': {
             'level': os.environ.get('LOG_LEVEL', 'INFO'),
             'class': 'logging.FileHandler',
-            'filename': BASE_DIR / 'data' / 'logs' / 'django.log',
+            'filename': CORE_DATA_DIR / 'logs' / 'django.log',
             'formatter': 'verbose',
         },
         'console': {

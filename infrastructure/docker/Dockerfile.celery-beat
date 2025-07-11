@@ -1,0 +1,53 @@
+# Celery Beat - Minimal scheduler (no ML libraries needed)
+FROM python:3.10-slim
+
+# Environment variables for standalone celery (no Django)
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
+
+# Install minimal system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    libffi-dev \
+    sudo \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser
+
+# Set work directory
+WORKDIR /app
+
+# Create minimal requirements for beat
+COPY infrastructure/requirements/beat.txt /app/requirements/beat.txt
+
+# Install only essential dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements/beat.txt && \
+    pip cache purge
+
+# Copy minimal config for Celery standalone (NO Django components)
+COPY core/config/celery_standalone.py /app/core/config/
+COPY core/config/__init__.py /app/core/config/
+COPY core/__init__.py /app/core/
+COPY infrastructure/env/ /app/infrastructure/env/
+# Create empty apps directory structure without actual apps
+RUN mkdir -p /app/core/apps && touch /app/core/apps/__init__.py
+# Create a minimal celery.py to satisfy __init__.py import
+RUN echo "from .celery_standalone import app" > /app/core/config/celery.py
+
+# Ensure core/data/logs directory exists and set ownership
+RUN mkdir -p /app/core/data/logs && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Set container type for unified Celery config
+ENV CONTAINER_TYPE=beat
+
+# Default command for unified celery configuration
+CMD ["celery", "-A", "config.celery", "beat", "--loglevel=info"]

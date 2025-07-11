@@ -31,6 +31,8 @@ SETTINGS_MODULES = {
     'prod': 'core.config.settings.production',
     'testing': 'core.config.settings.testing',
     'test': 'core.config.settings.testing',
+    'beat': 'core.config.settings.beat',
+    'flower': 'core.config.settings.flower',
 }
 
 # Get the appropriate settings module

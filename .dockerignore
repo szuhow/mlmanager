@@ -1,0 +1,126 @@
+# Ignore unnecessary files to reduce build context and image size
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Large data directories that shouldn't be in the image
+core/data/models/
+core/data/datasets/
+core/data/temp/
+core/data/logs/*.log
+core/data/media/predictions/
+core/data/mlflow/
+
+# Node.js (if any)
+node_modules/
+npm-debug.log
+
+# Documentation
+README.md
+docs/
+*.md
+
+# Tests
+tests/
+test_*.py
+*_test.py
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Backup files
+*.bak
+*.backup
+*.tmp
+
+# Large binary files
+*.tar.gz
+*.zip
+*.rar
+
+# Static files (will be collected inside container)
+core/static/
+core/staticfiles/
+
+# Database files
+*.db
+*.sqlite3
+
+# Logs
+*.log
+
+# Media files
+media/
+
+# Environment files (sensitive data)
+.env
+.env.*
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# MLflow
+mlruns/
+
+# Monitoring and metrics
+prometheus/
+grafana/
+
+# Scripts not needed in container
+scripts/
+quick-start.sh
+Makefile
+
+# Infrastructure files not needed in app container
+infrastructure/monitoring/
+infrastructure/backup/
+infrastructure/ci-cd/

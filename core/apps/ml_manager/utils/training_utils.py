@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Callable, Optional
 import json
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +183,7 @@ class TrainingController:
             cmd.extend(['--early-stopping-metric', config['early_stopping_metric']])
             
         # Output directories
-        output_dir = Path('data/models') / str(self.model.id)
+        output_dir = Path(settings.CORE_DATA_DIR) / 'models' / str(self.model.id)
         cmd.extend(['--output-dir', str(output_dir)])
         
         # MLflow tracking
@@ -393,7 +394,7 @@ class TrainingController:
     
     def _find_best_model_path(self) -> Optional[str]:
         """Find the path to the best saved model."""
-        model_dir = Path('data/models') / str(self.model.id)
+        model_dir = Path(settings.CORE_DATA_DIR) / 'models' / str(self.model.id)
         
         # Look for best model files
         best_model_patterns = [
@@ -425,7 +426,7 @@ class TrainingController:
         
         # Create stop file for the training script to detect
         try:
-            output_dir = Path('data/models') / str(self.model.id)
+            output_dir = Path(settings.CORE_DATA_DIR) / 'models' / str(self.model.id)
             output_dir.mkdir(parents=True, exist_ok=True)
             stop_file = output_dir / 'stop_training.flag'
             stop_file.touch()
@@ -701,7 +702,7 @@ def debug_training_config(config: Dict[str, Any], model_id: int) -> Dict[str, An
         debug_info['warnings'].append(f"Very low learning rate ({lr}) may slow convergence")
     
     # Check output directory
-    output_dir = Path('data/models') / str(model_id)
+    output_dir = Path(settings.CORE_DATA_DIR) / 'models' / str(model_id)
     if not output_dir.parent.exists():
         debug_info['warnings'].append(f"Output directory parent does not exist: {output_dir.parent}")
     

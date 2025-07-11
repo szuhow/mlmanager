@@ -2,6 +2,30 @@
 Device detection and management utilities for ML training.
 """
 
+def detect_mps_availability():
+    """
+    Detect if MPS (Metal Performance Shaders) is available for Apple Silicon.
+    Returns a tuple of (is_available, device_info)
+    """
+    try:
+        import torch
+        mps_available = torch.backends.mps.is_available() and torch.backends.mps.is_built()
+        device_info = {}
+        
+        if mps_available:
+            device_info = {
+                'device_type': 'mps',
+                'device_name': 'Apple Silicon GPU',
+                'backend_built': torch.backends.mps.is_built(),
+            }
+        
+        return mps_available, device_info
+    except (ImportError, AttributeError):
+        # PyTorch not available or MPS not supported
+        return False, {'error': 'MPS not available'}
+    except Exception as e:
+        return False, {'error': str(e)}
+
 def detect_cuda_availability():
     """
     Detect if CUDA is available for PyTorch operations.
@@ -35,8 +59,14 @@ def get_device_choices():
     """
     choices = [('cpu', 'CPU')]
     
-    cuda_available, device_info = detect_cuda_availability()
+    # Check for MPS (Apple Silicon) first
+    mps_available, mps_info = detect_mps_availability()
+    if mps_available:
+        device_label = f"MPS - {mps_info.get('device_name', 'Apple Silicon GPU')}"
+        choices.append(('mps', device_label))
     
+    # Check for CUDA
+    cuda_available, device_info = detect_cuda_availability()
     if cuda_available and device_info.get('device_count', 0) > 0:
         device_name = device_info.get('device_name', 'CUDA Device')
         memory_gb = None
@@ -65,20 +95,37 @@ def get_device_choices():
 def get_default_device():
     """
     Get the default device for training.
-    Returns 'cuda' if available, otherwise 'cpu'.
+    Returns 'mps' if available on Apple Silicon, 'cuda' if available, otherwise 'cpu'.
     """
+    mps_available, _ = detect_mps_availability()
+    if mps_available:
+        return 'mps'
+    
     cuda_available, _ = detect_cuda_availability()
-    return 'cuda' if cuda_available else 'cpu'
+    if cuda_available:
+        return 'cuda'
+    
+    return 'cpu'
 
 def get_device_info_for_display():
     """
     Get device information for display in the UI.
     Returns a formatted string with device details.
     """
-    cuda_available, device_info = detect_cuda_availability()
-    
     info_lines = []
     
+    # Check MPS first
+    mps_available, mps_info = detect_mps_availability()
+    if mps_available:
+        info_lines.append("✅ MPS Available (Apple Silicon)")
+        if mps_info.get('device_name'):
+            info_lines.append(f"🎯 GPU: {mps_info['device_name']}")
+    else:
+        if 'error' not in mps_info or 'MPS not available' not in mps_info.get('error', ''):
+            info_lines.append("❌ MPS Not Available")
+    
+    # Check CUDA
+    cuda_available, device_info = detect_cuda_availability()
     if cuda_available:
         info_lines.append("✅ CUDA Available")
         if device_info.get('device_count'):

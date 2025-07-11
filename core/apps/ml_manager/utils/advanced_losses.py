@@ -430,6 +430,7 @@ def create_advanced_loss(loss_type: str, **kwargs) -> nn.Module:
         - 'stable_bce': StableBCELoss
     """
     loss_functions = {
+        'dice': SoftDiceLoss,  # Podstawowy dice loss jako alias do SoftDiceLoss
         'tversky': TverskyLoss,
         'focal': FocalLoss,
         'combo_dice_bce': ComboDiceBCELoss,

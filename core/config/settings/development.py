@@ -75,7 +75,7 @@ ALLOWED_HOSTS = [
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'data' / 'db.sqlite3',
+        'NAME': CORE_DATA_DIR / 'db.sqlite3',
     }
 }
 
@@ -107,11 +107,11 @@ MLFLOW_UI_URL = os.environ.get('MLFLOW_UI_URL', 'http://localhost:5000')
 MLFLOW_ENABLED = True
 
 # Artifact storage for development
-BASE_MLRUNS_DIR = BASE_DIR / 'data' / 'mlflow'
+BASE_MLRUNS_DIR = CORE_DATA_DIR / 'mlflow'
 MLFLOW_ARTIFACT_ROOT = os.environ.get('MLFLOW_ARTIFACT_ROOT', str(BASE_MLRUNS_DIR))
 
 # Organized models storage for development
-BASE_ORGANIZED_MODELS_DIR = BASE_DIR / 'data' / 'models' / 'organized'
+BASE_ORGANIZED_MODELS_DIR = CORE_DATA_DIR / 'models' / 'organized'
 
 # Development-specific caching (use in-memory cache for better performance)
 CACHES = {

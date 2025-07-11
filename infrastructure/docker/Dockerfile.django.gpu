@@ -39,7 +39,7 @@ RUN pip install celery[redis] flower
 COPY . /app/
 
 # Create necessary directories
-RUN mkdir -p /app/data/logs /app/data/media /app/data/static /app/data/models
+RUN mkdir -p /app/core/data/logs /app/core/data/media /app/core/data/static /app/core/data/models
 
 # Set permissions
 RUN chmod +x /app/core/manage.py

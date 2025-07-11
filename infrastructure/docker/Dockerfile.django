@@ -17,7 +17,11 @@ RUN apt-get update && apt-get install -y \
     python3-opencv \
     git \
     curl \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser
 
 # Set work directory
 WORKDIR /app
@@ -41,11 +45,18 @@ RUN pip install celery[redis] flower
 # Copy project
 COPY . /app/
 
-# Create necessary directories
-RUN mkdir -p /app/data/logs /app/data/media /app/data/static /app/data/models
+# Create necessary directories and set ownership
+RUN mkdir -p /app/core/data/logs /app/core/data/media /app/core/data/static /app/core/data/models \
+    /app/core/staticfiles /app/core/static && \
+    chown -R appuser:appuser /app && \
+    chmod -R 755 /app/core/staticfiles && \
+    rm -rf /app/core/staticfiles/*
 
 # Set permissions
 RUN chmod +x /app/core/manage.py
+
+# Switch to non-root user
+USER appuser
 
 # Expose port
 EXPOSE 8000

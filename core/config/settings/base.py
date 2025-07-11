@@ -9,6 +9,9 @@ import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 
+# Core data directory - all data should be contained within core module
+CORE_DATA_DIR = BASE_DIR / "core" / "data"
+
 # Environment detection
 def get_env_variable(var_name, default=None):
     """Get environment variable or return default."""
@@ -89,14 +92,14 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'data' / 'staticfiles'
+STATIC_ROOT = CORE_DATA_DIR / 'staticfiles'
 STATICFILES_DIRS = [
     BASE_DIR / 'core' / 'static',  # Source files remain in core
 ]
 
 # Media files (User uploads)
 MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'data' / 'media'
+MEDIA_ROOT = CORE_DATA_DIR / 'media'
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -165,7 +168,7 @@ LOGGING = {
         },
         'file': {
             'class': 'logging.FileHandler',
-            'filename': BASE_DIR / 'data' / 'logs' / 'django.log',
+            'filename': CORE_DATA_DIR / 'logs' / 'django.log',
             'formatter': 'verbose',
         },
     },
