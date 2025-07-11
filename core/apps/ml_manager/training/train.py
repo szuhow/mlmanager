@@ -2889,10 +2889,16 @@ def train_model(args):
     try:
         from core.apps.ml_manager.utils.system_monitor import SystemMonitor
         system_monitor = SystemMonitor(log_interval=30, enable_gpu=True)  # Log every 30 seconds
-        system_monitor.start_monitoring()
-        logger.info("[MONITORING] System monitoring started - logging to MLflow every 30 seconds")
+        
+        # Check if system monitor is enabled
+        if system_monitor.enabled:
+            system_monitor.start_monitoring()
+            logger.info("[MONITORING] ✅ System monitoring started - logging to MLflow every 30 seconds")
+        else:
+            logger.warning("[MONITORING] ⚠️ System monitoring disabled (psutil not available)")
+            system_monitor = None
     except Exception as e:
-        logger.warning(f"[MONITORING] Failed to start system monitoring: {e}")
+        logger.warning(f"[MONITORING] ❌ Failed to start system monitoring: {e}")
         system_monitor = None
 
     # Parameters are already logged by Celery task, just update training status
@@ -4182,16 +4188,47 @@ def train_model(args):
                 mlflow.log_metric('total_epochs', args.epochs, step=epoch+1)
                 mlflow.log_metric('learning_rate', current_lr, step=epoch+1)
                 
-                # 2. System metrics
-                import psutil
-                cpu_percent = psutil.cpu_percent()
-                memory = psutil.virtual_memory()
-                disk = psutil.disk_usage('.')
-                
-                mlflow.log_metric('system_cpu_percent', cpu_percent, step=epoch+1)
-                mlflow.log_metric('system_memory_percent', memory.percent, step=epoch+1)
-                mlflow.log_metric('system_memory_used_gb', memory.used / (1024**3), step=epoch+1)
-                mlflow.log_metric('system_disk_percent', disk.percent, step=epoch+1)
+                # 2. System metrics using SystemMonitor for comprehensive metrics
+                if system_monitor and system_monitor.enabled:
+                    try:
+                        system_metrics = system_monitor.get_system_metrics()
+                        if system_metrics:
+                            logger.info(f"[SYSTEM_METRICS] Logging {len(system_metrics)} system metrics to MLflow")
+                            for metric_name, metric_value in system_metrics.items():
+                                mlflow.log_metric(metric_name, metric_value, step=epoch+1)
+                        else:
+                            logger.warning("[SYSTEM_METRICS] No system metrics returned from SystemMonitor")
+                    except Exception as e:
+                        logger.warning(f"[SYSTEM_METRICS] Failed to log system metrics: {e}")
+                        # Fallback to basic system metrics
+                        try:
+                            import psutil
+                            cpu_percent = psutil.cpu_percent()
+                            memory = psutil.virtual_memory()
+                            disk = psutil.disk_usage('.')
+                            
+                            mlflow.log_metric('system_cpu_percent', cpu_percent, step=epoch+1)
+                            mlflow.log_metric('system_memory_percent', memory.percent, step=epoch+1)
+                            mlflow.log_metric('system_memory_used_gb', memory.used / (1024**3), step=epoch+1)
+                            mlflow.log_metric('system_disk_percent', disk.percent, step=epoch+1)
+                            logger.info("[SYSTEM_METRICS] Used fallback basic system metrics")
+                        except Exception as fallback_e:
+                            logger.warning(f"[SYSTEM_METRICS] Failed to log even basic system metrics: {fallback_e}")
+                else:
+                    # Fallback to basic system metrics when system_monitor is not available
+                    try:
+                        import psutil
+                        cpu_percent = psutil.cpu_percent()
+                        memory = psutil.virtual_memory()
+                        disk = psutil.disk_usage('.')
+                        
+                        mlflow.log_metric('system_cpu_percent', cpu_percent, step=epoch+1)
+                        mlflow.log_metric('system_memory_percent', memory.percent, step=epoch+1)
+                        mlflow.log_metric('system_memory_used_gb', memory.used / (1024**3), step=epoch+1)
+                        mlflow.log_metric('system_disk_percent', disk.percent, step=epoch+1)
+                        logger.info("[SYSTEM_METRICS] Used basic system metrics (SystemMonitor not available)")
+                    except Exception as e:
+                        logger.warning(f"[SYSTEM_METRICS] Failed to log basic system metrics: {e}")
                 
                 # 3. Model metrics
                 total_params = sum(p.numel() for p in model.parameters())

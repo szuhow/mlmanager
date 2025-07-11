@@ -90,7 +90,7 @@ class SystemMonitor:
         
         # CPU metrics with improved naming
         try:
-            metrics['system_cpu_usage_percent'] = psutil.cpu_percent(interval=1)
+            metrics['system_cpu_usage_percent'] = psutil.cpu_percent(interval=0.1)  # Non-blocking with short interval
             metrics['system_cpu_core_count'] = psutil.cpu_count()
             metrics['system_cpu_logical_count'] = psutil.cpu_count(logical=True)
             
@@ -126,6 +126,16 @@ class SystemMonitor:
                 metrics['system_disk_write_ops'] = disk_io.write_count
         except Exception as e:
             logger.warning(f"Failed to get disk I/O metrics: {e}")
+        
+        # Disk usage metrics
+        try:
+            disk_usage = psutil.disk_usage('/')
+            metrics['system_disk_usage_percent'] = (disk_usage.used / disk_usage.total) * 100
+            metrics['system_disk_free_gb'] = disk_usage.free / (1024**3)
+            metrics['system_disk_used_gb'] = disk_usage.used / (1024**3)
+            metrics['system_disk_total_gb'] = disk_usage.total / (1024**3)
+        except Exception as e:
+            logger.warning(f"Failed to get disk usage metrics: {e}")
         
         # Network I/O metrics with improved naming
         try:
@@ -164,9 +174,13 @@ class SystemMonitor:
         
         # GPU metrics
         if self.enable_gpu:
-            gpu_metrics = self.get_gpu_metrics()
-            metrics.update(gpu_metrics)
+            try:
+                gpu_metrics = self.get_gpu_metrics()
+                metrics.update(gpu_metrics)
+            except Exception as e:
+                logger.warning(f"Failed to get GPU metrics: {e}")
         
+        logger.debug(f"SystemMonitor collected {len(metrics)} metrics")
         return metrics
     
     def get_gpu_metrics(self) -> Dict[str, float]:

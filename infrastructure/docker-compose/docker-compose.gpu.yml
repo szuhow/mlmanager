@@ -1,0 +1,149 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: coronary_experiments
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  django:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.django
+    volumes:
+      - ../..:/app
+      - ../../core/data:/app/core/data
+      - ../../core:/app/core
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - db
+      - mlflow
+    env_file:
+      - ../env/.env.cpu
+    restart: unless-stopped
+    working_dir: /app
+    shm_size: 1gb  # Reduced memory usage
+    environment:
+      - PYTHONPATH=/app:/app/core
+      - DJANGO_SETTINGS_MODULE=core.config.settings.container
+    cpus: 1.0  # Limit CPU usage
+    mem_limit: 2g  # Limit memory usage
+    command: >
+      sh -c "
+        cd core &&
+        python manage.py migrate &&
+        python manage.py collectstatic --noinput &&
+        python manage.py runserver 0.0.0.0:8000
+      "
+
+  celery-worker:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.django
+    volumes:
+      - ../..:/app
+      - ../../core/data:/app/core/data
+      - ../../core:/app/core
+    depends_on:
+      - redis
+      - db
+    env_file:
+      - ../env/.env.cpu
+    restart: unless-stopped
+    working_dir: /app
+    shm_size: 1gb  # Reduced memory usage
+    environment:
+      - PYTHONPATH=/app:/app/core
+      - DJANGO_SETTINGS_MODULE=core.config.settings.container
+    cpus: 1.0  # Limit CPU usage
+    mem_limit: 2g  # Limit memory usage
+    command: celery -A core.config worker --loglevel=info --concurrency=1 --prefetch-multiplier=1
+
+  celery-beat:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.celery-beat
+    volumes:
+      - ../../core/data:/app/core/data
+    depends_on:
+      - redis
+      - db
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CONTAINER_TYPE=beat
+      - CELERY_LOADER=celery.loaders.app.AppLoader
+      - PYTHONPATH=/app:/app/core
+      - DJANGO_SETTINGS_MODULE=core.config.settings.container
+    restart: unless-stopped
+    working_dir: /app
+    cpus: 0.5  # Limit CPU usage
+    mem_limit: 512m  # Limit memory usage
+    command: bash -c "mkdir -p /app/core/data/logs && cd /app && celery --app=core.config.celery_standalone:app beat --loglevel=info"
+
+  flower:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.flower
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - PYTHONPATH=/app:/app/core
+      - DJANGO_SETTINGS_MODULE=core.config.settings.container
+    restart: unless-stopped
+    working_dir: /app
+    cpus: 0.5  # Limit CPU usage
+    mem_limit: 512m  # Limit memory usage
+    command: bash -c "mkdir -p /app/core/data/logs && cd /app && celery --app=core.config.celery_standalone:app flower --port=5555"
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.12.1
+    container_name: mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=http://0.0.0.0:5000
+      - MLFLOW_ARTIFACT_ROOT=/mlflow/artifacts
+      - MLFLOW_BACKEND_STORE_URI=sqlite:////mlflow/data/mlflow.db
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=/mlflow/artifacts
+      - MLFLOW_SERVE_ARTIFACTS=true
+    ports:
+      - "5000:5000"
+    volumes:
+      - ../../core/data/mlflow/artifacts:/mlflow/artifacts
+      - ../../core/data/mlflow/data:/mlflow/data
+      - ../../core/data/logs:/mlflow/logs
+    cpus: 1.0  # Limit CPU usage
+    mem_limit: 1g  # Limit memory usage
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlflow/data/mlflow.db
+      --artifacts-destination /mlflow/artifacts
+      --serve-artifacts
+      --host 0.0.0.0
+      --port 5000
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  postgres_data:

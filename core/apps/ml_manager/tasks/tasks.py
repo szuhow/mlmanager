@@ -996,7 +996,7 @@ def initialize_mlflow_tracking(model_id: int, training_params: Dict[str, Any]) -
             
             try:
                 # Try to resume the existing run
-                mlflow.start_run(run_id=existing_run_id)
+                mlflow.start_run(run_id=existing_run_id, log_system_metrics=True)
                 logger.info(f"Resumed existing MLflow run: {existing_run_id}")
                 return existing_run_id
             except Exception as e:
@@ -1036,7 +1036,7 @@ def initialize_mlflow_tracking(model_id: int, training_params: Dict[str, Any]) -
         run_name = training_params.get('name', f'Training-{model_id}')
         
         # Start MLflow run first to get run_id
-        run = mlflow.start_run(run_name=run_name)
+        run = mlflow.start_run(run_name=run_name, log_system_metrics=True)
         run_id = run.info.run_id
         
         # Get experiment ID for tracking (but MLflow uses only run_id in path)
