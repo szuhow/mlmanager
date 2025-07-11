@@ -286,6 +286,9 @@ class ModelDetailManager {
     }
     
     handleSuccessfulUpdate(data) {
+        console.log('ModelDetailManager: handleSuccessfulUpdate called with data:', data);
+        console.log('ModelDetailManager: MLflow run ID in response:', data.mlflow_run_id);
+        
         // Check for status changes 
         const currentModelStatus = data.model_status;
         const modelElement = document.querySelector('[data-model-status]');
@@ -331,6 +334,9 @@ class ModelDetailManager {
         // Update metrics
         this.updateMetrics(data.metrics, data.progress);
         
+        // Update MLflow run ID if it has changed
+        this.updateMLflowRunId(data.mlflow_run_id);
+        
         // Update last update time
         this.updateLastUpdateTime();
         
@@ -353,6 +359,132 @@ class ModelDetailManager {
                     location.reload();
                 }, 2000);
             }, 1000);
+        }
+    }
+    
+    updateMLflowRunId(newRunId) {
+        if (!newRunId) return;
+        
+        console.log('ModelDetailManager: Attempting to update MLflow run ID to:', newRunId);
+        
+        // Find the MLflow run ID display element using multiple approaches
+        let mlflowRunIdElement = null;
+        
+        // Approach 1: Find by dt text content and get next dd element
+        const dtElements = document.querySelectorAll('dt');
+        for (const dt of dtElements) {
+            if (dt.textContent.trim().includes('MLflow Run ID')) {
+                mlflowRunIdElement = dt.nextElementSibling;
+                console.log('ModelDetailManager: Found MLflow element via dt search');
+                break;
+            }
+        }
+        
+        // Approach 2: Look for specific patterns in the HTML structure
+        if (!mlflowRunIdElement) {
+            const dlElements = document.querySelectorAll('dl dd');
+            for (let i = 0; i < dlElements.length; i++) {
+                const prevElement = dlElements[i].previousElementSibling;
+                if (prevElement && prevElement.tagName === 'DT' && 
+                    prevElement.textContent.trim().includes('MLflow Run ID')) {
+                    mlflowRunIdElement = dlElements[i];
+                    console.log('ModelDetailManager: Found MLflow element via dd search');
+                    break;
+                }
+            }
+        }
+        
+        // Approach 3: Look for any element containing current MLflow run ID patterns
+        if (!mlflowRunIdElement) {
+            const allElements = document.querySelectorAll('dd, span, div');
+            for (const el of allElements) {
+                const text = el.textContent.trim();
+                // Look for MLflow run ID patterns (32 char hex, None, empty, etc.)
+                if (text.match(/^[a-f0-9]{32}$/) || text === 'None' || text === '-' || text === '') {
+                    const context = el.parentElement?.textContent || el.previousElementSibling?.textContent || '';
+                    if (context.includes('MLflow') || context.includes('Run ID')) {
+                        mlflowRunIdElement = el;
+                        console.log('ModelDetailManager: Found MLflow element via pattern search');
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (mlflowRunIdElement) {
+            const currentRunId = mlflowRunIdElement.textContent.trim();
+            console.log('ModelDetailManager: Current MLflow run ID in DOM:', currentRunId);
+            console.log('ModelDetailManager: New MLflow run ID from API:', newRunId);
+            
+            // Update if the run ID has changed or was empty/None
+            if (!currentRunId || currentRunId === 'None' || currentRunId === '-' || currentRunId === '' || currentRunId !== newRunId) {
+                console.log('ModelDetailManager: Updating MLflow run ID from', `"${currentRunId}"`, 'to', `"${newRunId}"`);
+                
+                // Store existing link if present
+                const existingLink = mlflowRunIdElement.querySelector('a[href*="mlflow"]');
+                const existingBr = mlflowRunIdElement.querySelector('br');
+                
+                // Update just the text content, preserving the structure
+                const textNode = Array.from(mlflowRunIdElement.childNodes).find(node => 
+                    node.nodeType === Node.TEXT_NODE && node.textContent.trim()
+                );
+                
+                if (textNode) {
+                    textNode.textContent = newRunId;
+                } else {
+                    // If no text node found, replace all text but preserve links
+                    mlflowRunIdElement.childNodes.forEach(node => {
+                        if (node.nodeType === Node.TEXT_NODE) {
+                            node.textContent = newRunId;
+                        }
+                    });
+                    
+                    // If still no text, set innerHTML carefully
+                    if (!mlflowRunIdElement.textContent.includes(newRunId)) {
+                        const linkHTML = existingLink ? existingLink.outerHTML : '';
+                        const brHTML = existingBr ? '<br>' : '';
+                        mlflowRunIdElement.innerHTML = `${newRunId}${brHTML}${linkHTML}`;
+                    }
+                }
+                
+                // Add MLflow UI link if not present and we have a valid run ID
+                if (newRunId && newRunId !== 'None' && newRunId !== '-' && newRunId !== '' && 
+                    !mlflowRunIdElement.querySelector('a[href*="mlflow"]')) {
+                    
+                    const mlflowLink = document.createElement('a');
+                    mlflowLink.href = `/ml/mlflow-dashboard/#/experiments/1/runs/${newRunId}`;
+                    mlflowLink.target = '_blank';
+                    mlflowLink.className = 'btn btn-sm btn-outline-primary mt-2';
+                    mlflowLink.innerHTML = '<i class="fas fa-external-link-alt me-1"></i>View in MLflow';
+                    
+                    mlflowRunIdElement.appendChild(document.createElement('br'));
+                    mlflowRunIdElement.appendChild(mlflowLink);
+                    console.log('ModelDetailManager: Added MLflow UI link');
+                }
+                
+                // Highlight the change briefly
+                mlflowRunIdElement.style.transition = 'background-color 0.3s ease';
+                mlflowRunIdElement.style.backgroundColor = '#d4edda';
+                mlflowRunIdElement.style.padding = '4px 8px';
+                mlflowRunIdElement.style.borderRadius = '4px';
+                
+                setTimeout(() => {
+                    mlflowRunIdElement.style.backgroundColor = '';
+                    mlflowRunIdElement.style.padding = '';
+                    mlflowRunIdElement.style.borderRadius = '';
+                }, 3000);
+                
+                // Show notification
+                const shortRunId = newRunId.length > 8 ? newRunId.substring(0, 8) + '...' : newRunId;
+                this.showAlert('success', `✅ MLflow Run ID updated: ${shortRunId}`);
+                
+                console.log('ModelDetailManager: MLflow run ID update completed successfully');
+            } else {
+                console.log('ModelDetailManager: MLflow run ID unchanged, no update needed');
+            }
+        } else {
+            console.warn('ModelDetailManager: Could not find MLflow run ID element in DOM');
+            console.log('ModelDetailManager: Available dt elements:', Array.from(document.querySelectorAll('dt')).map(el => el.textContent.trim()));
         }
     }
     

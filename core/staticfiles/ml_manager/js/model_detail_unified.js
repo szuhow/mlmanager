@@ -331,6 +331,9 @@ class ModelDetailManager {
         // Update metrics
         this.updateMetrics(data.metrics, data.progress);
         
+        // Update MLflow run ID if it has changed
+        this.updateMLflowRunId(data.mlflow_run_id);
+        
         // Update last update time
         this.updateLastUpdateTime();
         
@@ -353,6 +356,60 @@ class ModelDetailManager {
                     location.reload();
                 }, 2000);
             }, 1000);
+        }
+    }
+    
+    updateMLflowRunId(newRunId) {
+        if (!newRunId) return;
+        
+        // Find the MLflow run ID display element
+        const mlflowElement = document.querySelector('dd:has-text("MLflow Run ID") + dd, dt:contains("MLflow Run ID") + dd');
+        
+        // Alternative selector approach since :has-text is not standard
+        let mlflowRunIdElement = null;
+        const dtElements = document.querySelectorAll('dt');
+        
+        for (const dt of dtElements) {
+            if (dt.textContent.trim().includes('MLflow Run ID')) {
+                mlflowRunIdElement = dt.nextElementSibling;
+                break;
+            }
+        }
+        
+        if (mlflowRunIdElement) {
+            const currentRunId = mlflowRunIdElement.textContent.trim();
+            
+            // Update if the run ID has changed or was empty
+            if (!currentRunId || currentRunId === 'None' || currentRunId === '-' || currentRunId !== newRunId) {
+                console.log('ModelDetailManager: Updating MLflow run ID from', currentRunId, 'to', newRunId);
+                
+                // Update the text content
+                const originalHTML = mlflowRunIdElement.innerHTML;
+                mlflowRunIdElement.innerHTML = newRunId;
+                
+                // Add MLflow UI link if not present and we have a valid run ID
+                if (newRunId && newRunId !== 'None' && !mlflowRunIdElement.querySelector('a[href*="mlflow"]')) {
+                    const mlflowLink = document.createElement('a');
+                    mlflowLink.href = `/ml/mlflow-dashboard/#/experiments/1/runs/${newRunId}`;
+                    mlflowLink.target = '_blank';
+                    mlflowLink.className = 'btn btn-sm btn-outline-primary mt-2';
+                    mlflowLink.innerHTML = '<i class="fas fa-external-link-alt me-1"></i>View in MLflow';
+                    
+                    mlflowRunIdElement.appendChild(document.createElement('br'));
+                    mlflowRunIdElement.appendChild(mlflowLink);
+                }
+                
+                // Highlight the change briefly
+                mlflowRunIdElement.style.transition = 'background-color 0.3s ease';
+                mlflowRunIdElement.style.backgroundColor = '#d4edda';
+                
+                setTimeout(() => {
+                    mlflowRunIdElement.style.backgroundColor = '';
+                }, 2000);
+                
+                // Show notification
+                this.showAlert('success', `MLflow Run ID updated: ${newRunId.substring(0, 8)}...`);
+            }
         }
     }
     

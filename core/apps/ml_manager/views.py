@@ -2056,7 +2056,8 @@ def get_training_progress(request, model_id):
             'model_status': model.status,
             'metrics': metrics,
             'training_config': training_config,
-            'training_logs': training_logs
+            'training_logs': training_logs,
+            'mlflow_run_id': getattr(model, 'mlflow_run_id', None)
         })
         
     except Exception as e:
