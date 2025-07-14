@@ -52,13 +52,7 @@ stop_worker() {
 echo "🔧 Stopping Celery workers..."
 
 stop_worker "training_worker"
-stop_worker "inference_worker" 
-stop_worker "control_worker"
-stop_worker "maintenance_worker"
-
-# Stop beat scheduler
-echo -e "${YELLOW}🥁 Stopping Celery beat scheduler${NC}"
-stop_worker "beat"
+stop_worker "default_worker"
 
 # Also try to stop any remaining Celery processes
 echo "🧹 Cleaning up any remaining Celery processes..."
@@ -71,38 +65,14 @@ if pgrep -f "celery.*worker" > /dev/null; then
     pkill -KILL -f "celery.*worker" 2>/dev/null || true
 fi
 
-if pgrep -f "celery.*beat" > /dev/null; then
-    echo -e "${YELLOW}⚠️  Found remaining Celery beat processes, stopping them...${NC}"
-    pkill -TERM -f "celery.*beat" || true
-    sleep 2
-    pkill -KILL -f "celery.*beat" 2>/dev/null || true
-fi
-
-# Stop Flower if running
-if pgrep -f "flower" > /dev/null; then
-    echo -e "${YELLOW}🌸 Stopping Flower monitoring${NC}"
-    pkill -TERM -f "flower" || true
-fi
-
 # Clean up any stale PID files
 echo "🧹 Cleaning up PID files..."
 rm -f logs/celery_*.pid
 
 echo ""
-echo -e "${GREEN}✅ All Celery services stopped successfully!${NC}"
+echo -e "${GREEN}✅ All Celery workers stopped successfully!${NC}"
 echo ""
 
-# Check if any Celery processes are still running
-if pgrep -f "celery" > /dev/null; then
-    echo -e "${RED}⚠️  Warning: Some Celery processes may still be running:${NC}"
-    pgrep -f "celery" -l
-    echo ""
-    echo "You may need to manually kill them with:"
-    echo "   pkill -9 -f celery"
-else
-    echo -e "${GREEN}🎉 No Celery processes are running${NC}"
-fi
-
 echo ""
-echo -e "${GREEN}🚀 To restart Celery services, run:${NC}"
+echo -e "${GREEN}� To restart workers, run:${NC}"
 echo "   ./scripts/start_celery.sh"

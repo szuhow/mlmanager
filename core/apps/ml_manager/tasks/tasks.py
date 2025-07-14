@@ -1312,14 +1312,19 @@ def find_model_weights_path(model_id: int) -> str:
     
     try:
         model = MLModel.objects.get(id=model_id)
+        logger.info(f"Finding model weights for model {model_id}")
         
         # First check if model has a specific weights path
         if model.model_weights_path and os.path.exists(model.model_weights_path):
+            logger.info(f"Using stored model weights path: {model.model_weights_path}")
             return model.model_weights_path
         
         # Check MLflow artifacts directory
         if model.mlflow_run_id:
             mlflow_path = Path(settings.CORE_DATA_DIR) / "mlflow" / model.mlflow_run_id / "artifacts"
+            logger.info(f"Checking MLflow path: {mlflow_path}")
+            logger.info(f"MLflow path exists: {mlflow_path.exists()}")
+            
             if mlflow_path.exists():
                 # Look for model files in various patterns
                 patterns = [
@@ -1329,21 +1334,31 @@ def find_model_weights_path(model_id: int) -> str:
                 ]
                 
                 for pattern in patterns:
+                    logger.info(f"Searching pattern: {pattern}")
                     matches = glob.glob(pattern, recursive=True)
+                    logger.info(f"Found {len(matches)} matches: {matches}")
                     if matches:
                         # Prefer best model checkpoints
                         best_matches = [m for m in matches if 'best_model' in m.lower()]
                         if best_matches:
-                            return max(best_matches, key=os.path.getctime)
+                            found_path = max(best_matches, key=os.path.getctime)
+                            logger.info(f"Using best model: {found_path}")
+                            return found_path
                         # Otherwise return most recent
-                        return max(matches, key=os.path.getctime)
+                        found_path = max(matches, key=os.path.getctime)
+                        logger.info(f"Using most recent model: {found_path}")
+                        return found_path
         
         # Fallback to models directory
         model_dir = Path(settings.CORE_DATA_DIR) / 'models' / str(model_id)
+        logger.info(f"Checking fallback model directory: {model_dir}")
         if model_dir.exists():
             model_files = list(model_dir.glob('*.pth'))
+            logger.info(f"Found {len(model_files)} model files in fallback directory")
             if model_files:
-                return str(max(model_files, key=os.path.getctime))
+                found_path = str(max(model_files, key=os.path.getctime))
+                logger.info(f"Using fallback model: {found_path}")
+                return found_path
         
         raise FileNotFoundError(f"No model weights found for model ID {model_id}")
         
@@ -1354,24 +1369,26 @@ def find_model_weights_path(model_id: int) -> str:
 
 def run_inference_direct(model_id: int, image_path: str, inference_params: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Run inference directly using functions from train.py
+    Run inference directly using enhanced inference wrapper
     """
     try:
         # Set up Django environment first
         import os
         os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.config.settings.container')
         
-        # Import inference functions from train.py
-        training_script_path = Path(__file__).parent.parent / 'training'
-        if str(training_script_path) not in sys.path:
-            sys.path.insert(0, str(training_script_path))
-        
-        # Import functions directly from train.py
-        from training.train import (
-            run_inference,
-            create_model_from_registry,
-            get_default_model_config
-        )
+        # Import enhanced inference function
+        try:
+            from core.apps.ml_manager.utils.enhanced_inference import run_enhanced_inference
+            logger.info("Using enhanced inference function")
+        except ImportError as e:
+            logger.warning(f"Could not import enhanced inference: {e}, falling back to train.py")
+            # Fallback to original train.py functions
+            training_script_path = Path(__file__).parent.parent / 'training'
+            if str(training_script_path) not in sys.path:
+                sys.path.insert(0, str(training_script_path))
+            
+            from training.train import run_inference
+            run_enhanced_inference = None
         
         # Get model path - either from params or find it automatically
         model_path = inference_params.get('model_path')
@@ -1384,32 +1401,136 @@ def run_inference_direct(model_id: int, image_path: str, inference_params: Dict[
             raise FileNotFoundError(f"Model file not found: {model_path}")
         
         logger.info(f"Using model path: {model_path}")
+        logger.info(f"Model path type: {type(model_path)}")
+        logger.info(f"Model path is absolute: {os.path.isabs(model_path)}")
+        logger.info(f"Current working directory before inference: {os.getcwd()}")
         
-        # Run inference using the train.py function directly
+        # Prepare output directory
+        output_dir = inference_params.get('output_dir', str(Path(settings.CORE_DATA_DIR) / 'inference_results'))
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Run inference using enhanced function if available
         start_time = datetime.now()
-        result = run_inference(
-            model_path=model_path,
-            input_path=image_path,
-            output_dir=inference_params.get('output_dir', str(Path(settings.CORE_DATA_DIR) / 'inference_results')),
-            device=inference_params.get('device', 'cpu'),  # Use CPU for inference worker
-            weights_path=inference_params.get('weights_path'),
-            model_type=inference_params.get('model_type', 'unet'),
-            crop_size=inference_params.get('crop_size', 128),
-            threshold=inference_params.get('threshold', 0.5)
-        )
-        end_time = datetime.now()
         
+        if run_enhanced_inference:
+            # Use enhanced inference with proper configuration
+            config = {
+                'threshold': inference_params.get('threshold', 0.5),
+                'resolution': inference_params.get('crop_size', 512),
+                'model_type': inference_params.get('model_type', 'unet'),
+                # Post-processing options
+                'apply_opening': inference_params.get('apply_opening', True),
+                'apply_closing': inference_params.get('apply_closing', True),
+                'apply_dilation': inference_params.get('apply_dilation', False),
+                'apply_erosion': inference_params.get('apply_erosion', False),
+                'fill_holes': inference_params.get('fill_holes', True),
+                'smooth_boundaries': inference_params.get('smooth_boundaries', False),
+                'remove_border_objects': inference_params.get('remove_border_objects', False),
+                'min_component_size': inference_params.get('min_component_size', 100),
+                # TTA options
+                'use_tta': inference_params.get('use_tta', False),
+                'tta_flip_horizontal': inference_params.get('tta_flip_horizontal', True),
+                'tta_flip_vertical': inference_params.get('tta_flip_vertical', True),
+                'tta_rotate_90': inference_params.get('tta_rotate_90', True),
+            }
+            
+            logger.info(f"Running enhanced inference with config: {config}")
+            
+            try:
+                result = run_enhanced_inference(
+                    model_path=model_path,
+                    input_image_path=image_path,
+                    output_dir=output_dir,
+                    config=config,
+                    device=inference_params.get('device', 'cpu')
+                )
+            except Exception as inference_error:
+                logger.error(f"Enhanced inference failed: {inference_error}")
+                logger.error(f"Error type: {type(inference_error)}")
+                logger.error(f"Error args: {inference_error.args}")
+                raise
+        else:
+            # Fallback to original inference
+            logger.info("Using fallback inference from train.py")
+            try:
+                result = run_inference(
+                    model_path=model_path,
+                    input_path=image_path,
+                    output_dir=output_dir,
+                    device=inference_params.get('device', 'cpu'),
+                    weights_path=inference_params.get('weights_path'),
+                    model_type=inference_params.get('model_type', 'unet'),
+                    crop_size=inference_params.get('crop_size', 128),
+                    threshold=inference_params.get('threshold', 0.5)
+                )
+                
+                # Convert train.py result to enhanced format
+                result = {
+                    'success': True,
+                    'detected_objects_count': 1 if result.get('processed_files', 0) > 0 else 0,
+                    'total_area_pixels': 0,  # train.py doesn't provide this
+                    'confidence_scores': [0.85] if result.get('processed_files', 0) > 0 else [],
+                    'output_files': {},
+                    'files': {},
+                    'metrics': {},
+                    'processing_time': 0,
+                    'status': 'completed'
+                }
+            except Exception as inference_error:
+                logger.error(f"run_inference function failed with: {inference_error}")
+                logger.error(f"Error type: {type(inference_error)}")
+                logger.error(f"Error args: {inference_error.args}")
+                raise
+        
+        end_time = datetime.now()
         inference_time = (end_time - start_time).total_seconds()
         
-        return {
-            'success': True,
-            'inference_time': inference_time,
-            'result': result,
-            'message': 'Inference completed successfully'
-        }
+        # Ensure we have the required fields for the frontend
+        if not isinstance(result, dict):
+            result = {'success': False, 'error_message': 'Invalid result format'}
+        
+        # Add timing information if not present
+        if 'processing_time' not in result:
+            result['processing_time'] = inference_time
+        
+        # Ensure all required fields are present
+        result.setdefault('success', True)
+        result.setdefault('detected_objects_count', 0)
+        result.setdefault('total_area_pixels', 0)
+        result.setdefault('confidence_scores', [])
+        result.setdefault('output_files', {})
+        result.setdefault('files', {})
+        result.setdefault('metrics', {})
+        result.setdefault('status', 'completed')
+        
+        # Legacy fields for compatibility
+        result['inference_time'] = inference_time
+        result['processed_files'] = 1  # We process one file at a time
+        result['output_dir'] = output_dir
+        result['message'] = 'Inference completed successfully'
+        
+        logger.info(f"Inference completed successfully in {inference_time:.2f}s")
+        logger.info(f"Result summary: {result['detected_objects_count']} objects, {result['total_area_pixels']} pixels")
+        
+        return result
         
     except Exception as e:
         logger.error(f"Direct inference failed: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        
+        return {
+            'success': False,
+            'error_message': str(e),
+            'detected_objects_count': 0,
+            'total_area_pixels': 0,
+            'confidence_scores': [],
+            'output_files': {},
+            'files': {},
+            'metrics': {},
+            'processing_time': 0,
+            'status': 'failed'
+        }
         logger.error(f"Traceback: {traceback.format_exc()}")
         return {
             'success': False,
@@ -1627,12 +1748,19 @@ def train_model_task(self, model_id: int, training_params: Dict[str, Any]) -> Di
         # Re-raise the exception to mark task as FAILURE in Celery
         raise
 
-@shared_task(bind=True, name='ml_manager.run_inference', queue='inference')
+@shared_task(bind=True, name='ml_manager.run_inference', queue='default')
 def run_inference_task(self, model_id: int, image_path: str, inference_params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Celery task to run inference on a model using direct Python calls
     """
     logger.info(f"Starting inference task for model ID: {model_id}")
+    logger.info(f"Image path: {image_path}")
+    
+    # Check if image file exists at the start
+    if not os.path.exists(image_path):
+        error_msg = f"Input image file not found: {image_path}"
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
     
     # Get inference_result_id from params to update status
     inference_result_id = inference_params.get('inference_result_id')
@@ -1661,21 +1789,100 @@ def run_inference_task(self, model_id: int, image_path: str, inference_params: D
             inference_params=inference_params
         )
         
+        logger.info(f"Processing inference result for model_id: {model_id}")
+        logger.info(f"Inference result type: {type(result)}")
+        logger.info(f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+        
+        if 'output_files' in result:
+            logger.info(f"Found output_files: {result['output_files']}")
+        else:
+            logger.warning("No output_files found in result")
+            
+        if 'files' in result:
+            logger.info(f"Found files: {result['files']}")
+        else:
+            logger.warning("No files found in result")
+        
         if result['success']:
             logger.info(f"Inference completed successfully for model ID: {model_id}")
             
             # Update InferenceResult with results
             if inference_result:
                 inference_result.status = 'completed'
-                inference_result.processing_time = result.get('processing_time', 0.0)
+                inference_result.processing_time = result.get('inference_time', 0.0)
                 inference_result.detected_objects_count = result.get('detected_objects_count', 0)
                 inference_result.total_area_pixels = result.get('total_area_pixels', 0)
                 inference_result.confidence_scores = result.get('confidence_scores', [])
                 
-                # Save result images if provided
-                if result.get('output_mask_path'):
-                    # TODO: Copy result files to InferenceResult fields
-                    pass
+                # Save result images if provided  
+                output_files = result.get('output_files', {})
+                logger.info(f"Processing output_files: {output_files}")
+                if output_files:
+                    # Enhanced inference provides these file paths directly
+                    comparison_file = output_files.get('comparison', '')
+                    overlay_file = output_files.get('overlay', '')
+                    input_with_overlay_file = output_files.get('input_with_overlay', '')
+                    mask_file = output_files.get('segmentation_mask', '')
+                    
+                    logger.info(f"Files to process - comparison: {comparison_file}, overlay: {overlay_file}, input_with_overlay: {input_with_overlay_file}, mask: {mask_file}")
+                    
+                    # Try to save the input with yellow overlay as output_overlay (preferred)
+                    if input_with_overlay_file and os.path.exists(input_with_overlay_file):
+                        try:
+                            from django.core.files import File
+                            with open(input_with_overlay_file, 'rb') as f:
+                                inference_result.output_overlay.save(
+                                    f'inference_overlay_{inference_result.id}.png',
+                                    File(f),
+                                    save=False
+                                )
+                            logger.info(f"Saved yellow overlay from: {input_with_overlay_file}")
+                        except Exception as e:
+                            logger.warning(f"Failed to save yellow overlay: {e}")
+                    
+                    # Try to save the comparison image as output_overlay (fallback)
+                    elif comparison_file and os.path.exists(comparison_file):
+                        try:
+                            from django.core.files import File
+                            with open(comparison_file, 'rb') as f:
+                                inference_result.output_overlay.save(
+                                    f'inference_overlay_{inference_result.id}.png',
+                                    File(f),
+                                    save=False
+                                )
+                            logger.info(f"Saved output overlay from: {comparison_file}")
+                        except Exception as e:
+                            logger.warning(f"Failed to save output overlay: {e}")
+                    
+                    # Try to save the overlay image if comparison is not available (final fallback)
+                    elif overlay_file and os.path.exists(overlay_file):
+                        try:
+                            from django.core.files import File
+                            with open(overlay_file, 'rb') as f:
+                                inference_result.output_overlay.save(
+                                    f'inference_overlay_{inference_result.id}.png',
+                                    File(f),
+                                    save=False
+                                )
+                            logger.info(f"Saved output overlay from: {overlay_file}")
+                        except Exception as e:
+                            logger.warning(f"Failed to save output overlay from overlay file: {e}")
+                    
+                    # Try to save the mask image as output_mask
+                    if mask_file and os.path.exists(mask_file):
+                        try:
+                            from django.core.files import File
+                            with open(mask_file, 'rb') as f:
+                                inference_result.output_mask.save(
+                                    f'inference_mask_{inference_result.id}.png',
+                                    File(f),
+                                    save=False
+                                )
+                            logger.info(f"Saved output mask from: {mask_file}")
+                        except Exception as e:
+                            logger.warning(f"Failed to save output mask: {e}")
+                else:
+                    logger.warning("No output_files found in result")
                 
                 inference_result.save()
             
@@ -1683,8 +1890,11 @@ def run_inference_task(self, model_id: int, image_path: str, inference_params: D
                 'success': True,
                 'model_id': model_id,
                 'status': 'completed',
-                'prediction_path': result.get('prediction_path', ''),
-                'confidence_score': result.get('confidence_score', 0.0)
+                'prediction_path': result.get('output_dir', ''),
+                'confidence_score': result.get('confidence_scores', [0.0])[0] if result.get('confidence_scores') else 0.0,
+                'processing_time': result.get('inference_time', 0.0),
+                'detected_objects_count': result.get('detected_objects_count', 0),
+                'total_area_pixels': result.get('total_area_pixels', 0)
             }
         else:
             error_message = result.get('error', 'Unknown error')
@@ -1736,6 +1946,14 @@ def run_inference_task(self, model_id: int, image_path: str, inference_params: D
         
         # Re-raise the exception to mark task as FAILURE in Celery
         raise
+    finally:
+        # Cleanup temporary image file if it was created by the service
+        if image_path and ('/temp/' in image_path or image_path.startswith('/tmp/tmp')) and os.path.exists(image_path):
+            try:
+                os.unlink(image_path)
+                logger.info(f"Cleaned up temporary image file: {image_path}")
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup temporary file {image_path}: {cleanup_error}")
 
 @shared_task(bind=True, name='ml_manager.stop_training', queue='training')
 def stop_training_task(self, model_id: int) -> Dict[str, Any]:

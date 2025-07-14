@@ -5362,12 +5362,13 @@ def save_interactive_training_plot(epoch_history, model_dir):
     # return dummy_plot_path
     return None
 
-def get_inference_transforms(image_size=(256, 256), use_original_size=False):
+def get_inference_transforms(image_size=(256, 256), use_original_size=False, input_channels=3):
     """Get transforms for inference - uses PIL-compatible orientation
     
     Args:
         image_size: Target image size as (height, width). Ignored if use_original_size=True
         use_original_size: If True, don't resize the image, keep original dimensions
+        input_channels: Number of input channels (1 for grayscale, 3 for RGB)
     """
     def load_pil_compatible_image(filepath):
         """Load image using PIL to maintain browser-compatible orientation"""
@@ -5375,24 +5376,53 @@ def get_inference_transforms(image_size=(256, 256), use_original_size=False):
         import numpy as np
         import torch
         
-        img = Image.open(filepath)
+        # Check if file exists before trying to open it
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Image file not found: {filepath}")
         
-        # Keep RGB format to match training (3 channels)
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
+        # Log file info for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Loading image from: {filepath}")
+        logger.info(f"File size: {os.path.getsize(filepath)} bytes")
+        logger.info(f"File exists: {os.path.exists(filepath)}")
         
-        # Convert to numpy array and add channel dimension
-        img_array = np.array(img)
-        if len(img_array.shape) == 3:
-            # Convert HWC to CHW format
-            img_array = img_array.transpose(2, 0, 1)  # HWC -> CHW
+        try:
+            img = Image.open(filepath)
+        except Exception as e:
+            logger.error(f"Failed to open image {filepath}: {e}")
+            raise IOError(f"Failed to open image {filepath}: {e}")
+        
+        # Convert based on required channels
+        if input_channels == 1:
+            # Convert to grayscale for single channel models
+            if img.mode != 'L':
+                img = img.convert('L')
+            img_array = np.array(img)
+            # Add channel dimension for grayscale
+            if len(img_array.shape) == 2:
+                img_array = img_array[np.newaxis, :, :]  # Add channel dim: HW -> CHW
+        else:
+            # Keep RGB format for multi-channel models
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            img_array = np.array(img)
+            if len(img_array.shape) == 3:
+                # Convert HWC to CHW format
+                img_array = img_array.transpose(2, 0, 1)  # HWC -> CHW
         
         # Convert to torch tensor and normalize to [0, 1]
         img_tensor = torch.from_numpy(img_array).float() / 255.0
         
-        # Apply RGB normalization to match training
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+        # Apply appropriate normalization
+        if input_channels == 1:
+            # Grayscale normalization
+            mean = torch.tensor([0.5]).view(1, 1, 1)
+            std = torch.tensor([0.5]).view(1, 1, 1)
+        else:
+            # RGB normalization to match training
+            mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
         img_tensor = (img_tensor - mean) / std
         
         return img_tensor
@@ -5438,23 +5468,103 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
         crop_size: Target size for input images (128, 256, 384, 512)
         threshold: Binary segmentation threshold for hard predictions
     """
+    import json
+    import time
+    from PIL import Image
+    
     logger = logging.getLogger(__name__)
     device = torch.device(device if torch.cuda.is_available() else "cpu")
     os.makedirs(output_dir, exist_ok=True)
     
-    # Create model using architecture registry - use 3 channels for RGB input (matching training)
+    # Load checkpoint first to get model metadata
+    if weights_path:
+        checkpoint = torch.load(weights_path, map_location=device)
+    else:
+        checkpoint = torch.load(model_path, map_location=device)
+    
+    # Handle different checkpoint formats and extract metadata
+    state_dict = None
+    metadata = {}
+    
+    if isinstance(checkpoint, dict):
+        if 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+            metadata = checkpoint.get('model_metadata', {})
+            logger.info("Loading model from 'model_state_dict' key")
+        elif 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+            metadata = checkpoint.get('metadata', {})
+            logger.info("Loading model from 'state_dict' key")
+        else:
+            # Assume checkpoint is the state_dict directly
+            state_dict = checkpoint
+            logger.info("Loading model from checkpoint directly")
+    else:
+        state_dict = checkpoint
+        logger.info("Loading model from checkpoint directly (not dict)")
+    
+    # Get input channels - prioritize state_dict over metadata
+    input_channels = None
+    
+    # First try to infer from state_dict (most reliable)
+    first_layer_key = None
+    # Look specifically for conv weight layers, not normalization or bias
+    for key in sorted(state_dict.keys()):
+        if 'weight' in key and 'conv' in key and not 'adn' in key and not 'norm' in key:
+            first_layer_key = key
+            break
+    
+    if first_layer_key:
+        weight_shape = state_dict[first_layer_key].shape
+        if len(weight_shape) >= 2:
+            input_channels = weight_shape[1]  # Input channels dimension
+            logger.info(f"Inferred input_channels={input_channels} from layer {first_layer_key} with shape {weight_shape}")
+        else:
+            logger.warning(f"Layer {first_layer_key} has unexpected shape {weight_shape}, cannot infer input channels")
+            input_channels = metadata.get('input_channels', 3)
+            logger.info(f"Fallback to metadata/default input_channels={input_channels}")
+    else:
+        # Fallback to metadata if state_dict parsing fails
+        input_channels = metadata.get('input_channels')
+        if input_channels:
+            logger.info(f"Using input_channels={input_channels} from metadata")
+        else:
+            # Debug: show all keys to understand structure
+            all_keys = list(state_dict.keys())[:10]
+            logger.warning(f"Could not find first conv layer. Available keys (first 10): {all_keys}")
+            input_channels = 3  # Default fallback
+            logger.warning("Could not infer input channels, using default 3")
+    
+    logger.info(f"Final input_channels={input_channels}")
+    
+    # Create model using architecture registry with correct channels
     model_config = get_default_model_config(model_type)
-    model_config["in_channels"] = 3  # Force 3 channels for RGB input to match training
+    model_config["in_channels"] = input_channels
+    logger.info(f"Creating model with config: {model_config}")
     model, arch_info = create_model_from_registry(model_type, device, **model_config)
     
-    if weights_path:
-        model.load_state_dict(torch.load(weights_path, map_location=device))
-    else:
-        model.load_state_dict(torch.load(model_path, map_location=device))
+    # Debug: show model's first layer to verify correct creation
+    if hasattr(model, 'model') and hasattr(model.model, '0'):
+        first_layer = model.model[0]
+        if hasattr(first_layer, 'conv') and hasattr(first_layer.conv, 'unit0'):
+            first_conv = first_layer.conv.unit0.conv
+            logger.info(f"Created model first conv layer expects: {first_conv.weight.shape}")
+    
+    # Load the state dict
+    try:
+        model.load_state_dict(state_dict)
+        logger.info("Model state_dict loaded successfully")
+    except Exception as e:
+        logger.error(f"Failed to load state_dict: {e}")
+        # Show the problematic layer info for debugging
+        if 'model.0.conv.unit0.conv.weight' in state_dict:
+            checkpoint_shape = state_dict['model.0.conv.unit0.conv.weight'].shape
+            logger.error(f"Checkpoint first layer shape: {checkpoint_shape}")
+        raise
     model.eval()
     
-    # Get transforms based on crop_size
-    transforms = get_inference_transforms(image_size=(crop_size, crop_size), use_original_size=False)
+    # Get transforms based on crop_size and detected input channels
+    transforms = get_inference_transforms(image_size=(crop_size, crop_size), use_original_size=False, input_channels=input_channels)
     
     if os.path.isdir(input_path):
         input_files = [os.path.join(input_path, f) for f in os.listdir(input_path)
@@ -5462,107 +5572,143 @@ def run_inference(model_path, input_path, output_dir, device="cuda", weights_pat
     else:
         input_files = [input_path]
     logger.info(f"Processing {len(input_files)} files...")
+    
     with torch.no_grad():
         for input_file in input_files:
-            # Load and transform image
-            img = transforms(input_file)
-            img = img.unsqueeze(0).to(device)  # Add batch dimension
-            
-            # Generate prediction
-            output = model(img)
-            
-            # Apply appropriate post-processing based on number of output channels
-            num_output_channels = output.shape[1]
-            if num_output_channels == 1:
-                # Binary segmentation
-                output_soft = torch.sigmoid(output)  # Soft predictions
-                pred = (output_soft > threshold).float()   # Hard predictions
-                logger.info(f"Applied binary segmentation post-processing (sigmoid + threshold)")
-            else:
-                # Multi-class semantic segmentation
-                output = torch.softmax(output, dim=1)
-                pred = torch.argmax(output, dim=1, keepdim=True).float()
-                logger.info(f"Applied multi-class segmentation post-processing (softmax + argmax) for {num_output_channels} classes")
-            
-            # Save prediction - ensure correct tensor dimensions
-            pred_np = pred.squeeze().cpu().numpy()
-            # Ensure 2D array (height, width) for proper image creation
-            if pred_np.ndim == 3 and pred_np.shape[0] == 1:
-                pred_np = pred_np.squeeze(0)
-            
-            # Debug: Log prediction statistics
-            logger.info(f"Prediction stats - Shape: {pred_np.shape}, Min: {pred_np.min():.3f}, Max: {pred_np.max():.3f}, Mean: {pred_np.mean():.3f}")
-            
-            # Convert to visible image - if prediction is all zeros, create a test pattern
-            if pred_np.max() == 0:
-                logger.warning("Prediction is all zeros - no segmentation detected")
-                # Create a semi-transparent overlay to show the model ran
-                pred_image = np.zeros_like(pred_np, dtype=np.uint8)
-                # Add a small indicator that inference ran but found no segments
-                pred_image[10:30, 10:30] = 128  # Small gray square as indicator
-            else:
-                pred_image = (pred_np * 255).astype(np.uint8)
-                logger.info(f"Segmentation detected - {np.sum(pred_np > 0)} pixels")
-            output_filename = os.path.join(output_dir, f"pred_{os.path.basename(input_file)}")
-            
-            # Create a side-by-side comparison with consistent orientation
-            # Both model input and display now use the same PIL orientation
-            display_input = get_display_oriented_image(input_file, (pred_image.shape[1], pred_image.shape[0]))
-            
-            # Create side-by-side comparison
-            comparison = np.hstack([display_input, pred_image])
-            comparison_img = Image.fromarray(comparison)
-            comparison_img.save(output_filename)
-            
-            # Save the display-oriented input separately for web display consistency
-            input_only_filename = os.path.join(output_dir, f"input_{os.path.basename(input_file)}")
-            input_only_img = Image.fromarray(display_input)
-            input_only_img.save(input_only_filename)
-            
-            # Save prediction only
-            pred_only_filename = os.path.join(output_dir, f"pred_only_{os.path.basename(input_file)}")
-            pred_only_img = Image.fromarray(pred_image)
-            pred_only_img.save(pred_only_filename)
-            
-            logger.info(f"Saved prediction to {output_filename}")
-            
-            # Enhanced MLflow artifact logging for predictions
             try:
-                if mlflow.active_run():
-                    # Log all prediction outputs with organized structure - get model_dir from context if available
-                    current_model_dir = globals().get('model_dir') if 'model_dir' in globals() else None
-                    log_artifact_to_model_directory(output_filename, current_model_dir, "predictions/comparisons")
-                    log_artifact_to_model_directory(input_only_filename, current_model_dir, "predictions/inputs")
-                    log_artifact_to_model_directory(pred_only_filename, current_model_dir, "predictions/outputs")
-                    
-                    # Create and log prediction metadata
-                    prediction_metadata = {
-                        'input_file': os.path.basename(input_file),
-                        'prediction_timestamp': time.time(),
-                        'device_used': str(device),
-                        'model_type': model_type,
-                        'crop_size': crop_size,
-                        'input_shape': img.shape,
-                        'output_shape': pred.shape,
-                        'prediction_threshold': threshold,
-                        'files_generated': {
-                            'comparison': os.path.basename(output_filename),
-                            'input_only': os.path.basename(input_only_filename),
-                            'prediction_only': os.path.basename(pred_only_filename)
+                logger.info(f"Processing: {input_file}")
+                
+                # Load and preprocess image using transforms
+                img = transforms(input_file)
+                
+                # Add batch dimension and move to device
+                img = img.unsqueeze(0).to(device)
+                logger.info(f"Input tensor shape: {img.shape}")
+                
+                # Run inference
+                output = model(img)
+                logger.info(f"Model output shape: {output.shape}")
+                
+                # Apply appropriate post-processing based on number of output channels
+                num_output_channels = output.shape[1]
+                if num_output_channels == 1:
+                    # Binary segmentation
+                    output_soft = torch.sigmoid(output)  # Soft predictions
+                    pred = (output_soft > threshold).float()   # Hard predictions
+                    logger.info(f"Applied binary segmentation post-processing (sigmoid + threshold)")
+                else:
+                    # Multi-class semantic segmentation
+                    output = torch.softmax(output, dim=1)
+                    pred = torch.argmax(output, dim=1, keepdim=True).float()
+                    logger.info(f"Applied multi-class segmentation post-processing (softmax + argmax) for {num_output_channels} classes")
+                
+                # Save prediction - ensure correct tensor dimensions
+                pred_np = pred.squeeze().cpu().numpy()
+                # Ensure 2D array (height, width) for proper image creation
+                if pred_np.ndim == 3 and pred_np.shape[0] == 1:
+                    pred_np = pred_np.squeeze(0)
+                
+                # Debug: Log prediction statistics
+                logger.info(f"Prediction stats - Shape: {pred_np.shape}, Min: {pred_np.min():.3f}, Max: {pred_np.max():.3f}, Mean: {pred_np.mean():.3f}")
+                
+                # Convert to visible image - if prediction is all zeros, create a test pattern
+                if pred_np.max() == 0:
+                    logger.warning("Prediction is all zeros - no segmentation detected")
+                    # Create a semi-transparent overlay to show the model ran
+                    pred_image = np.zeros_like(pred_np, dtype=np.uint8)
+                    # Add a small indicator that inference ran but found no segments
+                    pred_image[10:30, 10:30] = 128  # Small gray square as indicator
+                else:
+                    pred_image = (pred_np * 255).astype(np.uint8)
+                    logger.info(f"Segmentation detected - {np.sum(pred_np > 0)} pixels")
+                
+                output_filename = os.path.join(output_dir, f"pred_{os.path.basename(input_file)}")
+                
+                # Create a side-by-side comparison with consistent orientation
+                # Both model input and display now use the same PIL orientation
+                display_input = get_display_oriented_image(input_file, (pred_image.shape[1], pred_image.shape[0]))
+                
+                # Create side-by-side comparison
+                comparison = np.hstack([display_input, pred_image])
+                comparison_img = Image.fromarray(comparison)
+                comparison_img.save(output_filename)
+                
+                # Save the display-oriented input separately for web display consistency
+                input_only_filename = os.path.join(output_dir, f"input_{os.path.basename(input_file)}")
+                input_only_img = Image.fromarray(display_input)
+                input_only_img.save(input_only_filename)
+                
+                # Save prediction only
+                pred_only_filename = os.path.join(output_dir, f"pred_only_{os.path.basename(input_file)}")
+                pred_only_img = Image.fromarray(pred_image)
+                pred_only_img.save(pred_only_filename)
+                
+                logger.info(f"Saved prediction to {output_filename}")
+                
+                # Enhanced MLflow artifact logging for predictions
+                try:
+                    if mlflow.active_run():
+                        # Log all prediction outputs with organized structure - get model_dir from context if available
+                        current_model_dir = globals().get('model_dir') if 'model_dir' in globals() else None
+                        log_artifact_to_model_directory(output_filename, current_model_dir, "predictions/comparisons")
+                        log_artifact_to_model_directory(input_only_filename, current_model_dir, "predictions/inputs")
+                        log_artifact_to_model_directory(pred_only_filename, current_model_dir, "predictions/outputs")
+                        
+                        # Create and log prediction metadata
+                        prediction_metadata = {
+                            'input_file': os.path.basename(input_file),
+                            'prediction_timestamp': time.time(),
+                            'device_used': str(device),
+                            'model_type': model_type,
+                            'crop_size': crop_size,
+                            'input_shape': img.shape,
+                            'output_shape': pred.shape,
+                            'prediction_threshold': threshold,
+                            'files_generated': {
+                                'comparison': os.path.basename(output_filename),
+                                'input_only': os.path.basename(input_only_filename),
+                                'prediction_only': os.path.basename(pred_only_filename)
+                            }
                         }
-                    }
-                    
-                    # Save metadata file
-                    metadata_filename = os.path.join(output_dir, f"metadata_{os.path.splitext(os.path.basename(input_file))[0]}.json")
-                    with open(metadata_filename, 'w') as f:
-                        json.dump(prediction_metadata, f, indent=2, default=str)
-                    
-                    log_artifact_to_model_directory(metadata_filename, current_model_dir, "predictions/metadata")
-                    
-                    logger.info(f"[MLFLOW] Logged prediction artifacts for {os.path.basename(input_file)}")
+                        
+                        # Save metadata file
+                        metadata_filename = os.path.join(output_dir, f"metadata_{os.path.splitext(os.path.basename(input_file))[0]}.json")
+                        with open(metadata_filename, 'w') as f:
+                            json.dump(prediction_metadata, f, indent=2, default=str)
+                        
+                        log_artifact_to_model_directory(metadata_filename, current_model_dir, "predictions/metadata")
+                        
+                        logger.info(f"[MLFLOW] Logged prediction artifacts for {os.path.basename(input_file)}")
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to log prediction to MLflow: {e}")
                     
             except Exception as e:
-                logger.warning(f"Failed to log prediction to MLflow: {e}")
+                logger.error(f"Failed to process {input_file}: {e}")
+                continue
+    
+    # Return inference results summary
+    results = {
+        'processed_files': len(input_files),
+        'output_dir': output_dir,
+        'generated_files': []
+    }
+    
+    # Collect information about generated files
+    if os.path.exists(output_dir):
+        for input_file in input_files:
+            basename = os.path.basename(input_file)
+            file_info = {
+                'input_file': basename,
+                'comparison_file': f"pred_{basename}",
+                'input_only_file': f"input_{basename}",
+                'prediction_only_file': f"pred_only_{basename}",
+                'metadata_file': f"metadata_{os.path.splitext(basename)[0]}.json"
+            }
+            results['generated_files'].append(file_info)
+    
+    logger.info(f"Inference completed. Generated {len(results['generated_files'])} sets of output files.")
+    return results
 
 def inference_mode(args):
     """Run the model in inference mode with enhanced MLflow logging"""

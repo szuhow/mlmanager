@@ -1153,7 +1153,7 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                     run = client.get_run(model.mlflow_run_id)
                     
                     # Check MLflow artifacts for checkpoint files
-                    mlflow_path = f"data/mlflow/{model.mlflow_run_id}/artifacts"
+                    mlflow_path = f"/app/core/data/mlflow/{model.mlflow_run_id}/artifacts"
                     mlflow_search_paths = [
                         os.path.join(mlflow_path, "final_model", "weights", "*.pth"),
                         os.path.join(mlflow_path, "checkpoints", "best_model", "**", "*.pth"),
@@ -2303,7 +2303,7 @@ class GeneralInferenceView(LoginRequiredMixin, FormView):
                     # Try to find the best model in MLflow artifacts if still not found
                     if not model_weights_path or not os.path.exists(model_weights_path):
                         if model.mlflow_run_id:
-                            mlflow_path = f"data/mlflow/{model.mlflow_run_id}/artifacts"
+                            mlflow_path = f"/app/core/data/mlflow/{model.mlflow_run_id}/artifacts"
                             # Look for final_model first, then best_model, then any model
                             search_paths = [
                                 os.path.join(mlflow_path, "final_model", "weights", "*.pth"),
@@ -5705,7 +5705,7 @@ def get_model_checkpoints_api(request):
         
         # Look for checkpoints in MLflow directory
         if model.mlflow_run_id:
-            mlflow_path = f"data/mlflow/{model.mlflow_run_id}/artifacts"
+            mlflow_path = f"/app/core/data/mlflow/{model.mlflow_run_id}/artifacts"
             if os.path.exists(mlflow_path):
                 # Look for model files
                 patterns = [

@@ -58,7 +58,6 @@ help: ## Show this help message
 	@echo ""
 	@echo "🌐 Service URLs:"
 	@echo "  Django App: http://localhost:8000"
-	@echo "  Flower:     http://localhost:5555"
 	@echo "  MLflow:     http://localhost:5000"
 	@echo "  Database:   localhost:5432"
 	@echo "  Redis:      localhost:6379"
@@ -104,7 +103,7 @@ start-cpu: ## Start CPU services
 	@echo "🚀 Starting CPU services..."
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) up -d
 	@echo "⏳ Waiting for services to start..."
-	@sleep 35
+	@sleep 40
 	@echo "✅ CPU services started"
 	@make status-cpu
 
@@ -149,8 +148,6 @@ status-cpu: ## Check CPU services status
 	@echo "🔍 Health Checks:"
 	@echo -n "  Django: "
 	@curl -s http://localhost:8000/health/ >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
-	@echo -n "  Flower: "
-	@curl -s http://localhost:5555 >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
 	@echo -n "  MLflow: "
 	@curl -s http://localhost:5000 >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
 	@echo -n "  Redis:  "
@@ -165,8 +162,6 @@ status-gpu: ## Check GPU services status
 	@echo "🔍 Health Checks:"
 	@echo -n "  Django: "
 	@curl -s http://localhost:8000/health/ >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
-	@echo -n "  Flower: "
-	@curl -s http://localhost:5555 >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
 	@echo -n "  MLflow: "
 	@curl -s http://localhost:5000 >/dev/null 2>&1 && echo "✅ OK" || echo "❌ Failed"
 	@echo -n "  Redis:  "
@@ -196,16 +191,10 @@ logs-training-cpu: ## Show CPU Training Worker logs
 logs-training-gpu: ## Show GPU Training Worker logs
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) logs -f training-worker
 
-logs-inference-cpu: ## Show CPU Inference Worker logs
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) logs -f inference-worker
-
-logs-inference-gpu: ## Show GPU Inference Worker logs
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) logs -f inference-worker
-
-logs-default-cpu: ## Show CPU Default Worker logs
+logs-default-cpu: ## Show CPU Default Worker logs (handles inference and general tasks)
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) logs -f default-worker
 
-logs-default-gpu: ## Show GPU Default Worker logs
+logs-default-gpu: ## Show GPU Default Worker logs (handles inference and general tasks)
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_GPU) logs -f default-worker
 
 # ================================================

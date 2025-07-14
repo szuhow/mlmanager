@@ -21,10 +21,10 @@ app.conf.task_routes = {
     'core.apps.ml_manager.tasks.preprocess_dataset': {'queue': 'training'},
     'core.apps.ml_manager.tasks.validate_model': {'queue': 'training'},
     
-    # Inference tasks go to inference queue
-    'core.apps.ml_manager.tasks.run_inference': {'queue': 'inference'},
-    'core.apps.ml_manager.tasks.batch_inference': {'queue': 'inference'},
-    'core.apps.ml_manager.tasks.predict_image': {'queue': 'inference'},
+    # Inference tasks now go to default queue (handled by default worker)
+    'core.apps.ml_manager.tasks.run_inference': {'queue': 'default'},
+    'core.apps.ml_manager.tasks.batch_inference': {'queue': 'default'},
+    'core.apps.ml_manager.tasks.predict_image': {'queue': 'default'},
     
     # Default tasks remain in default queue
     'core.apps.ml_manager.tasks.cleanup_temp_files': {'queue': 'default'},
@@ -57,15 +57,16 @@ def training_worker_health_check(self):
         'status': 'healthy'
     }
 
-@app.task(bind=True, queue='inference')
-def inference_worker_health_check(self):
-    """Health check for inference workers"""
+@app.task(bind=True, queue='default')
+def default_worker_health_check(self):
+    """Health check for default workers (handles inference and general tasks)"""
     import torch
     import numpy
     return {
-        'worker_type': 'inference',
+        'worker_type': 'default',
         'torch_version': torch.__version__,
         'numpy_version': numpy.__version__,
         'cuda_available': torch.cuda.is_available(),
+        'handles_inference': True,
         'status': 'healthy'
     }

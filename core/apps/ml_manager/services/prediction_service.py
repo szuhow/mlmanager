@@ -36,8 +36,16 @@ class MLPredictionService:
             # Import Celery task
             from ..tasks.tasks import run_inference_task
             
-            # Save uploaded image temporarily
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+            # Create temp directory in shared volume between containers
+            temp_dir = Path(settings.CORE_DATA_DIR) / 'temp'
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save uploaded image temporarily in shared volume
+            with tempfile.NamedTemporaryFile(
+                delete=False, 
+                suffix='.png', 
+                dir=str(temp_dir)
+            ) as temp_file:
                 for chunk in image_file.chunks():
                     temp_file.write(chunk)
                 temp_image_path = temp_file.name
@@ -90,8 +98,16 @@ class MLPredictionService:
             dict: Prediction results
         """
         try:
-            # Save uploaded image temporarily
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+            # Create temp directory in shared volume between containers
+            temp_dir = Path(settings.CORE_DATA_DIR) / 'temp'
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save uploaded image temporarily in shared volume
+            with tempfile.NamedTemporaryFile(
+                delete=False, 
+                suffix='.png', 
+                dir=str(temp_dir)
+            ) as temp_file:
                 for chunk in image_file.chunks():
                     temp_file.write(chunk)
                 temp_image_path = temp_file.name
@@ -185,11 +201,27 @@ class MLPredictionService:
             # Import Celery task
             from ..tasks.tasks import run_inference_task
             
-            # Save uploaded image temporarily
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+            # Create temp directory in shared volume between containers
+            temp_dir = Path(settings.CORE_DATA_DIR) / 'temp'
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save uploaded image temporarily in shared volume
+            with tempfile.NamedTemporaryFile(
+                delete=False, 
+                suffix='.png', 
+                dir=str(temp_dir)
+            ) as temp_file:
                 for chunk in image_file.chunks():
                     temp_file.write(chunk)
                 temp_image_path = temp_file.name
+            
+            # Verify the file was created and is accessible
+            if not os.path.exists(temp_image_path):
+                raise IOError(f"Failed to create temporary image file: {temp_image_path}")
+            
+            # Log file creation for debugging
+            logger.info(f"Created temporary image file: {temp_image_path}")
+            logger.info(f"File size: {os.path.getsize(temp_image_path)} bytes")
             
             # Use provided inference parameters or create defaults
             if inference_params is None:
@@ -220,11 +252,12 @@ class MLPredictionService:
             
         except Exception as e:
             # Cleanup on error
-            if 'temp_image_path' in locals():
+            if 'temp_image_path' in locals() and os.path.exists(temp_image_path):
                 try:
                     os.unlink(temp_image_path)
-                except:
-                    pass
+                    logger.info(f"Cleaned up temporary file after error: {temp_image_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup temporary file: {cleanup_error}")
             logger.error(f"Failed to start async prediction: {str(e)}")
             return {
                 'success': False,

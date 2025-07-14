@@ -20,12 +20,11 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy and install Python dependencies
-COPY infrastructure/requirements/default.txt /app/requirements/default.txt
+COPY infrastructure/requirements/default.txt /app/requirements.txt
 
-# Install default dependencies with GPU support
+# Install default dependencies with GPU support (PyTorch already in base image)
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements/default.txt && \
-    pip install --no-cache-dir opencv-python-headless && \
+    pip install --no-cache-dir -r requirements.txt && \
     pip cache purge
 
 # Copy application code

@@ -86,25 +86,16 @@ coronary-experiments/
   - Interface do treningu
   - Interfejs inferencji
 
-### Celery Worker
-- **Funkcje:**
-  - Asynchroniczne trenowanie modeli
-  - Przetwarzanie inferencji
-  - Zarządzanie taskami
+### Celery Workers
+- **Training Worker:**
+  - Dedykowany trenowaniu modeli ML
+  - Jeden task na raz (GPU memory management)
+  - Kolejka: `training`
 
-### Celery Beat
-- **Funkcje:**
-  - Zaplanowane zadania
-  - Czyszczenie plików tymczasowych
-  - Monitoring systemowy
-
-### Flower
-- **URL:** http://localhost:5555
-- **Opis:** Monitoring Celery
-- **Funkcje:**
-  - Podgląd tasków
-  - Statystyki workera
-  - Zarządzanie kolejkami
+- **Default Worker:**
+  - Obsługuje inferencję, cleanup i ogólne zadania
+  - Wielozadaniowy (concurrency: 2)
+  - Kolejki: `default`, `cleanup`, `inference`
 
 ### Redis
 - **Funkcje:**

@@ -28,11 +28,12 @@ WORKDIR /app
 # Copy and install Python dependencies for training
 COPY infrastructure/requirements/training.txt /app/requirements/training.txt
 
-# Install training dependencies with optimizations
+# Install training dependencies with proper PyTorch version
 RUN pip install --no-cache-dir --upgrade pip && \
+    # Install PyTorch first with specific CPU version to avoid conflicts
+    pip install --no-cache-dir torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu && \
+    # Install all training requirements
     pip install --no-cache-dir -r requirements/training.txt && \
-    pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir monai[all] mlflow scikit-learn matplotlib seaborn opencv-python-headless && \
     pip cache purge
 
 # Copy application code

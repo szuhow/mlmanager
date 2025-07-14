@@ -56,7 +56,7 @@ CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1  # Prevent GPU memory leaks
 
 # Worker queues configuration
-CELERY_WORKER_QUEUES = os.environ.get('CELERY_WORKER_QUEUES', 'gpu_training,gpu_inference').split(',')
+CELERY_WORKER_QUEUES = os.environ.get('CELERY_WORKER_QUEUES', 'training,default').split(',')
 
 # Database configuration for worker (read-only mostly)
 import dj_database_url

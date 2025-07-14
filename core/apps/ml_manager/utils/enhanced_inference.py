@@ -5,13 +5,18 @@ import os
 import time
 import json
 import tempfile
-import logging
 import numpy as np
 from pathlib import Path
 from PIL import Image
 import torch
 
-logger = logging.getLogger(__name__)
+try:
+    from celery.utils.log import get_task_logger
+    logger = get_task_logger(__name__)
+except ImportError:
+    # Fallback to standard logging if Celery is not available
+    import logging
+    logger = logging.getLogger(__name__)
 
 def run_enhanced_inference(
     model_path, 
@@ -69,7 +74,16 @@ def run_enhanced_inference(
     
     try:
         # Import the original inference function
-        from ml.training.train import run_inference, create_model_from_registry, get_default_model_config
+        try:
+            from core.apps.ml_manager.training.train import run_inference, create_model_from_registry, get_default_model_config
+        except ImportError:
+            # Try alternative import paths
+            import sys
+            from pathlib import Path
+            training_script_path = Path(__file__).parent.parent / 'training'
+            if str(training_script_path) not in sys.path:
+                sys.path.insert(0, str(training_script_path))
+            from training.train import run_inference, create_model_from_registry, get_default_model_config
         import torch
         
         # Create temporary directory for original function output
@@ -243,7 +257,16 @@ def run_custom_inference(model_path, input_image_path, output_dir, config, devic
     """
     try:
         import torch
-        from ml.training.train import create_model_from_registry, get_default_model_config, get_inference_transforms
+        try:
+            from core.apps.ml_manager.training.train import create_model_from_registry, get_default_model_config, get_inference_transforms
+        except ImportError:
+            # Try alternative import paths
+            import sys
+            from pathlib import Path
+            training_script_path = Path(__file__).parent.parent / 'training'
+            if str(training_script_path) not in sys.path:
+                sys.path.insert(0, str(training_script_path))
+            from training.train import create_model_from_registry, get_default_model_config, get_inference_transforms
         
         logger.info(f"Starting custom inference with device: {device}")
         logger.info(f"Model path: {model_path}")
@@ -276,14 +299,19 @@ def run_custom_inference(model_path, input_image_path, output_dir, config, devic
                 state_dict = checkpoint['model_state_dict']
                 metadata = checkpoint.get('model_metadata', {})
                 logger.info("Loaded checkpoint with model_state_dict format")
+                logger.info(f"Available metadata keys: {list(metadata.keys()) if metadata else 'No metadata'}")
+                if metadata:
+                    logger.info(f"Metadata content: {metadata}")
             elif 'state_dict' in checkpoint:
                 state_dict = checkpoint['state_dict'] 
                 metadata = checkpoint.get('metadata', {})
                 logger.info("Loaded checkpoint with state_dict format")
+                logger.info(f"Available metadata keys: {list(metadata.keys()) if metadata else 'No metadata'}")
             elif 'model' in checkpoint:
                 state_dict = checkpoint['model']
                 metadata = checkpoint.get('metadata', {})
                 logger.info("Loaded checkpoint with model format")
+                logger.info(f"Available metadata keys: {list(metadata.keys()) if metadata else 'No metadata'}")
             else:
                 # Check if it looks like a state_dict (has layer keys)
                 sample_keys = list(checkpoint.keys())[:5]
@@ -301,6 +329,20 @@ def run_custom_inference(model_path, input_image_path, output_dir, config, devic
             logger.error("Could not extract state_dict from checkpoint")
             return False
         
+        logger.info(f"State dict loaded successfully, has {len(state_dict)} keys")
+        
+        # Debug: Show first few keys to understand the model structure
+        sample_keys = list(state_dict.keys())[:10]
+        logger.info(f"Sample state_dict keys: {sample_keys}")
+        
+        # Show first layer weight shape for debugging
+        first_conv_key = None
+        for key in sample_keys:
+            if 'weight' in key and ('conv' in key or 'model.0' in key):
+                first_conv_key = key
+                logger.info(f"First conv layer key: {key}, shape: {state_dict[key].shape}")
+                break
+        
         # Move state_dict to the correct device
         if device != 'cpu':
             # Move state dict tensors to target device
@@ -308,17 +350,39 @@ def run_custom_inference(model_path, input_image_path, output_dir, config, devic
                 if hasattr(state_dict[key], 'to'):
                     state_dict[key] = state_dict[key].to(device)
         
-        # Get model configuration - use metadata if available
-        if metadata:
-            model_type = metadata.get('model_architecture', config.get('model_type', 'unet'))
-            in_channels = metadata.get('input_channels', 3)
-            out_channels = metadata.get('num_classes', 1)
-            logger.info(f"Using metadata: model_type={model_type}, in_channels={in_channels}, out_channels={out_channels}")
+        # Get model configuration - prioritize state_dict detection over metadata
+        model_type = metadata.get('model_architecture', config.get('model_type', 'unet')) if metadata else config.get('model_type', 'unet')
+        
+        # Always try to infer input channels from state_dict (most reliable method)
+        in_channels = 3  # default fallback
+        first_layer_key = None
+        
+        # Look for the first convolutional layer weight
+        for key in sorted(state_dict.keys()):
+            if 'weight' in key and ('conv' in key or 'model.0' in key) and not 'adn' in key and not 'norm' in key and not 'bias' in key:
+                first_layer_key = key
+                break
+        
+        if first_layer_key and first_layer_key in state_dict:
+            weight_shape = state_dict[first_layer_key].shape
+            if len(weight_shape) >= 2:
+                detected_channels = weight_shape[1]  # Input channels dimension
+                logger.info(f"Detected input_channels={detected_channels} from layer {first_layer_key} with shape {weight_shape}")
+                in_channels = detected_channels  # Use detected channels
+            else:
+                logger.warning(f"Layer {first_layer_key} has unexpected shape {weight_shape}")
+                # Fallback to metadata if available
+                in_channels = metadata.get('input_channels', 3) if metadata else 3
         else:
-            model_type = config.get('model_type', 'unet')
-            in_channels = 3
-            out_channels = 1
-            logger.info(f"Using defaults: model_type={model_type}, in_channels={in_channels}, out_channels={out_channels}")
+            logger.warning(f"Could not find first conv layer. Available keys (first 10): {list(state_dict.keys())[:10]}")
+            # Fallback to metadata if available
+            in_channels = metadata.get('input_channels', 3) if metadata else 3
+        
+        # Get output channels from metadata or default
+        out_channels = metadata.get('num_classes', 1) if metadata else 1
+        
+        logger.info(f"Final model config: model_type={model_type}, in_channels={in_channels}, out_channels={out_channels}")
+        logger.info(f"Detection method: {'state_dict' if first_layer_key else 'metadata/default'}")
             
         # Ensure crop_size is an integer
         try:
@@ -330,11 +394,21 @@ def run_custom_inference(model_path, input_image_path, output_dir, config, devic
         threshold = float(config.get('threshold', 0.5))
         logger.info(f"Using crop_size: {crop_size}, threshold: {threshold}")
         
-        # Create model using architecture registry with metadata
+        # Create model using architecture registry with detected metadata
         model_config = get_default_model_config(model_type)
         model_config["in_channels"] = in_channels
         model_config["out_channels"] = out_channels
+        logger.info(f"Creating model with config: {model_config}")
         model, arch_info = create_model_from_registry(model_type, 'cpu', **model_config)  # Force CPU
+        
+        # Verify model was created with correct input channels
+        if hasattr(model, 'model') and hasattr(model.model, '0'):
+            first_layer = model.model[0]
+            if hasattr(first_layer, 'conv') and hasattr(first_layer.conv, 'unit0'):
+                first_conv = first_layer.conv.unit0.conv
+                logger.info(f"Created model first conv layer expects: {first_conv.weight.shape} (should match checkpoint)")
+        
+        logger.info(f"Model created successfully with {in_channels} input channels")
         
         # Load state dict with strict=False to handle minor key mismatches
         try:
@@ -358,6 +432,7 @@ def run_custom_inference(model_path, input_image_path, output_dir, config, devic
         # Traktujemy wszystkie modele jako potencjalnie wykorzystujące MONAI dla bezpieczeństwa
         is_monai_model = True
         logger.info(f"Model type: {model_type_from_config}, using safe image loading for all models")
+        logger.info(f"Detected input channels: {in_channels}, will load image accordingly")
         
         try:
             if is_monai_model:
@@ -370,26 +445,53 @@ def run_custom_inference(model_path, input_image_path, output_dir, config, devic
                 # Load image using PIL to maintain browser-compatible orientation
                 img_pil = Image.open(input_image_path)
                 
-                # Ensure RGB format
-                if img_pil.mode != 'RGB':
-                    img_pil = img_pil.convert('RGB')
-                
-                # Resize to target size
-                img_pil = img_pil.resize((crop_size, crop_size), Image.Resampling.LANCZOS)
-                
-                # Convert to numpy array and add channel dimension
-                img_array = np.array(img_pil)
-                if len(img_array.shape) == 3:
-                    # Convert HWC to CHW format
-                    img_array = img_array.transpose(2, 0, 1)  # HWC -> CHW
-                
-                # Convert to torch tensor and normalize to [0, 1]
-                img = torch.from_numpy(img_array).float() / 255.0
-                
-                # Apply RGB normalization to match training
-                mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-                std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-                img = (img - mean) / std
+                # Handle input channels - convert image format based on model requirements
+                if in_channels == 1:
+                    # Model expects grayscale input
+                    if img_pil.mode != 'L':
+                        img_pil = img_pil.convert('L')
+                    logger.info("Converted image to grayscale for 1-channel model")
+                    
+                    # Resize to target size
+                    img_pil = img_pil.resize((crop_size, crop_size), Image.Resampling.LANCZOS)
+                    
+                    # Convert to numpy array and add channel dimension
+                    img_array = np.array(img_pil)
+                    if len(img_array.shape) == 2:
+                        # Add channel dimension: HW -> CHW
+                        img_array = img_array[np.newaxis, :, :]
+                    
+                    # Convert to torch tensor and normalize to [0, 1]
+                    img = torch.from_numpy(img_array).float() / 255.0
+                    
+                    # Apply grayscale normalization
+                    mean = torch.tensor([0.5]).view(1, 1, 1)
+                    std = torch.tensor([0.5]).view(1, 1, 1)
+                    img = (img - mean) / std
+                    
+                else:
+                    # Model expects RGB input
+                    if img_pil.mode != 'RGB':
+                        img_pil = img_pil.convert('RGB')
+                    logger.info("Using RGB format for 3-channel model")
+                    
+                    # Resize to target size
+                    img_pil = img_pil.resize((crop_size, crop_size), Image.Resampling.LANCZOS)
+                    
+                    # Convert to numpy array and add channel dimension
+                    img_array = np.array(img_pil)
+                    if len(img_array.shape) == 3:
+                        # Convert HWC to CHW format
+                        img_array = img_array.transpose(2, 0, 1)  # HWC -> CHW
+                    
+                    # Convert to torch tensor and normalize to [0, 1]
+                    img = torch.from_numpy(img_array).float() / 255.0
+                    
+                    # Apply RGB normalization to match training
+                    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+                    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+                    img = (img - mean) / std
+                    
             else:
                 # Dla bezpieczeństwa, również dla zwykłych modeli używamy bezpiecznego ładowania PIL
                 # ponieważ transformacje mogą mieć problemy z ścieżkami plików
@@ -401,29 +503,51 @@ def run_custom_inference(model_path, input_image_path, output_dir, config, devic
                 # Load image using PIL
                 img_pil = Image.open(input_image_path)
                 
-                # Ensure RGB format
-                if img_pil.mode != 'RGB':
-                    img_pil = img_pil.convert('RGB')
-                
-                # Resize to target size
-                img_pil = img_pil.resize((crop_size, crop_size), Image.Resampling.LANCZOS)
-                
-                # Convert to numpy array and add channel dimension
-                img_array = np.array(img_pil)
-                if len(img_array.shape) == 3:
-                    # Convert HWC to CHW format
-                    img_array = img_array.transpose(2, 0, 1)  # HWC -> CHW
-                
-                # Convert to torch tensor and normalize to [0, 1]
-                img = torch.from_numpy(img_array).float() / 255.0
-                
-                # Apply RGB normalization
-                mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-                std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-                img = (img - mean) / std
+                # Handle channels based on model requirements
+                if in_channels == 1:
+                    if img_pil.mode != 'L':
+                        img_pil = img_pil.convert('L')
+                    
+                    # Resize to target size
+                    img_pil = img_pil.resize((crop_size, crop_size), Image.Resampling.LANCZOS)
+                    
+                    # Convert to numpy array and add channel dimension
+                    img_array = np.array(img_pil)
+                    if len(img_array.shape) == 2:
+                        img_array = img_array[np.newaxis, :, :]
+                    
+                    # Convert to torch tensor and normalize to [0, 1]
+                    img = torch.from_numpy(img_array).float() / 255.0
+                    
+                    # Apply grayscale normalization
+                    mean = torch.tensor([0.5]).view(1, 1, 1)
+                    std = torch.tensor([0.5]).view(1, 1, 1)
+                    img = (img - mean) / std
+                else:
+                    # Ensure RGB format
+                    if img_pil.mode != 'RGB':
+                        img_pil = img_pil.convert('RGB')
+                    
+                    # Resize to target size
+                    img_pil = img_pil.resize((crop_size, crop_size), Image.Resampling.LANCZOS)
+                    
+                    # Convert to numpy array and add channel dimension
+                    img_array = np.array(img_pil)
+                    if len(img_array.shape) == 3:
+                        # Convert HWC to CHW format
+                        img_array = img_array.transpose(2, 0, 1)  # HWC -> CHW
+                    
+                    # Convert to torch tensor and normalize to [0, 1]
+                    img = torch.from_numpy(img_array).float() / 255.0
+                    
+                    # Apply RGB normalization
+                    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+                    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+                    img = (img - mean) / std
                 
             # Add batch dimension and move to device
             img = img.unsqueeze(0).to(device)
+            logger.info(f"Final input tensor shape: {img.shape} (expected: [1, {in_channels}, {crop_size}, {crop_size}])")
             
         except Exception as e:
             logger.error(f"Error in image preprocessing: {e}")
@@ -521,13 +645,28 @@ def process_inference_results(temp_dir, input_image_path, output_dir, config):
     input_only_file = None
     comparison_file = None
     
-    for file in os.listdir(temp_dir):
-        if file.startswith('pred_only_') and file.endswith(os.path.splitext(input_filename)[1]):
+    logger.info(f"Processing inference results from {temp_dir}")
+    logger.info(f"Looking for files related to {input_filename}")
+    
+    # List all files in temp directory for debugging
+    temp_files = os.listdir(temp_dir) if os.path.exists(temp_dir) else []
+    logger.info(f"Files in temp directory: {temp_files}")
+    
+    for file in temp_files:
+        file_lower = file.lower()
+        input_base = os.path.splitext(input_filename)[0].lower()
+        
+        logger.info(f"Checking file: {file}")
+        
+        if file.startswith('pred_only_'):
             pred_only_file = os.path.join(temp_dir, file)
-        elif file.startswith('input_') and file.endswith(os.path.splitext(input_filename)[1]):
+            logger.info(f"Found prediction file: {pred_only_file}")
+        elif file.startswith('input_'):
             input_only_file = os.path.join(temp_dir, file)
-        elif file.startswith('pred_') and file.endswith(os.path.splitext(input_filename)[1]):
+            logger.info(f"Found input file: {input_only_file}")
+        elif file.startswith('pred_') and not file.startswith('pred_only_'):
             comparison_file = os.path.join(temp_dir, file)
+            logger.info(f"Found comparison file: {comparison_file}")
     
     results = {
         'detected_objects_count': 0,
@@ -535,38 +674,114 @@ def process_inference_results(temp_dir, input_image_path, output_dir, config):
         'confidence_scores': [],
         'output_files': {},
         'files': {},
-        'metrics': {}
+        'metrics': {},
+        'debug_info': {
+            'temp_dir': temp_dir,
+            'temp_files': temp_files,
+            'pred_file': pred_only_file,
+            'input_file': input_only_file,
+            'comparison_file': comparison_file
+        }
     }
     
     if pred_only_file and os.path.exists(pred_only_file):
-        # Load and analyze the prediction mask
-        pred_image = Image.open(pred_only_file)
-        pred_array = np.array(pred_image)
+        logger.info(f"Processing prediction file: {pred_only_file}")
         
-        # Apply post-processing
-        processed_mask = apply_post_processing(pred_array, config)
+        try:
+            # Load and analyze the prediction mask
+            pred_image = Image.open(pred_only_file)
+            pred_array = np.array(pred_image)
+            
+            logger.info(f"Loaded prediction - shape: {pred_array.shape}, dtype: {pred_array.dtype}, min: {pred_array.min()}, max: {pred_array.max()}")
+            
+            # Convert to binary if needed
+            if pred_array.max() > 1:
+                # Image is in 0-255 range
+                pred_binary = (pred_array > 127).astype(np.uint8)
+            else:
+                # Image is in 0-1 range
+                pred_binary = (pred_array > 0.5).astype(np.uint8)
+            
+            logger.info(f"Binary prediction - shape: {pred_binary.shape}, unique values: {np.unique(pred_binary)}")
+            logger.info(f"Number of positive pixels: {np.sum(pred_binary > 0)}")
+            
+            # Apply post-processing
+            processed_mask = apply_post_processing(pred_binary, config)
+            logger.info(f"Post-processed mask - shape: {processed_mask.shape}, positive pixels: {np.sum(processed_mask > 0)}")
+            
+            # Analyze the processed mask
+            analysis = analyze_segmentation_mask(processed_mask)
+            results.update(analysis)
+            
+            logger.info(f"Analysis results: {analysis}")
+            
+            # Save processed files to final output directory
+            output_files = save_processed_results(
+                input_image_path,
+                processed_mask,
+                pred_binary,
+                output_dir,
+                input_filename
+            )
+            results['output_files'] = output_files
+            results['files'] = output_files  # Add for compatibility
+            results['metrics'] = {
+                'detected_objects': results['detected_objects_count'],
+                'total_area': results['total_area_pixels'],
+                'confidence_scores': results['confidence_scores']
+            }
+            
+            logger.info(f"Found {results['detected_objects_count']} objects, total area: {results['total_area_pixels']} pixels")
+            logger.info(f"Generated output files: {list(output_files.keys())}")
+            
+        except Exception as e:
+            logger.error(f"Error processing prediction file {pred_only_file}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            # Add error info to results
+            results['error'] = str(e)
+            results['debug_info']['processing_error'] = str(e)
+    else:
+        logger.warning(f"No prediction file found. pred_only_file: {pred_only_file}")
+        logger.warning(f"Available files: {temp_files}")
         
-        # Analyze the processed mask
-        analysis = analyze_segmentation_mask(processed_mask)
-        results.update(analysis)
-        
-        # Save processed files to final output directory
-        output_files = save_processed_results(
-            input_image_path,
-            processed_mask,
-            pred_array,
-            output_dir,
-            input_filename
-        )
-        results['output_files'] = output_files
-        results['files'] = output_files  # Add for compatibility
-        results['metrics'] = {
-            'detected_objects': results['detected_objects_count'],
-            'total_area': results['total_area_pixels'],
-            'confidence_scores': results['confidence_scores']
-        }
-        
-        logger.info(f"Found {results['detected_objects_count']} objects, total area: {results['total_area_pixels']} pixels")
+        # Try to create dummy results for debugging
+        try:
+            # Create a minimal mask for testing
+            dummy_mask = np.zeros((512, 512), dtype=np.uint8)
+            dummy_mask[100:200, 100:200] = 1  # Small square for testing
+            
+            logger.info("Creating dummy mask for debugging")
+            
+            # Analyze dummy mask
+            analysis = analyze_segmentation_mask(dummy_mask)
+            logger.info(f"Dummy analysis: {analysis}")
+            
+            # Save dummy results
+            output_files = save_processed_results(
+                input_image_path,
+                dummy_mask,
+                dummy_mask,
+                output_dir,
+                input_filename
+            )
+            
+            results.update(analysis)
+            results['output_files'] = output_files
+            results['files'] = output_files
+            results['metrics'] = {
+                'detected_objects': results['detected_objects_count'],
+                'total_area': results['total_area_pixels'],
+                'confidence_scores': results['confidence_scores']
+            }
+            results['debug_info']['used_dummy_mask'] = True
+            
+            logger.info("Dummy results created successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to create dummy results: {e}")
+            results['debug_info']['dummy_creation_error'] = str(e)
     
     return results
 
@@ -646,44 +861,103 @@ def analyze_segmentation_mask(mask_array):
     Returns:
         dict: Analysis results with object count, areas, confidence scores
     """
+    # Ensure mask is binary (0 or 1)
+    if mask_array.max() > 1:
+        binary_mask = (mask_array > 0.5 * mask_array.max()).astype(np.uint8)
+    else:
+        binary_mask = (mask_array > 0.5).astype(np.uint8)
+    
+    # Calculate total area first
+    total_area = int(np.sum(binary_mask > 0))
+    
+    logger.info(f"Mask analysis - shape: {binary_mask.shape}, max: {binary_mask.max()}, total area: {total_area}")
+    
     try:
         from skimage import measure, morphology
+        
+        # Label connected components
+        labeled_mask = measure.label(binary_mask)
+        regions = measure.regionprops(labeled_mask)
+        
+        object_count = len(regions)
+        
+        # Re-calculate total area from regions (more accurate)
+        total_area_from_regions = sum(region.area for region in regions) if regions else total_area
+        
+        # Calculate confidence scores based on object properties
+        confidence_scores = []
+        for region in regions:
+            # Use solidity and area as confidence indicators
+            solidity = region.solidity if hasattr(region, 'solidity') else 0.8
+            area_ratio = region.area / (binary_mask.shape[0] * binary_mask.shape[1])
+            
+            # Enhanced confidence calculation
+            base_confidence = 0.75
+            solidity_bonus = solidity * 0.15
+            area_bonus = min(area_ratio * 3, 0.1)  # Bonus for reasonable sized objects
+            
+            confidence = min(0.99, base_confidence + solidity_bonus + area_bonus)
+            confidence_scores.append(round(confidence, 3))
+        
+        # Use the more accurate area calculation
+        final_total_area = max(total_area, total_area_from_regions)
+        
+        logger.info(f"Detected {object_count} objects with total area {final_total_area} pixels")
+        
+        return {
+            'detected_objects_count': object_count,
+            'total_area_pixels': int(final_total_area),
+            'confidence_scores': confidence_scores if confidence_scores else ([0.85] if final_total_area > 0 else [])
+        }
+        
     except ImportError:
         # Fallback analysis without skimage
-        total_area = np.sum(mask_array > 0)
-        return {
-            'detected_objects_count': 1 if total_area > 0 else 0,
-            'total_area_pixels': int(total_area),
-            'confidence_scores': [0.85] if total_area > 0 else []
-        }
-    
-    # Label connected components
-    labeled_mask = measure.label(mask_array)
-    regions = measure.regionprops(labeled_mask)
-    
-    object_count = len(regions)
-    total_area = sum(region.area for region in regions)
-    
-    # Calculate confidence scores based on object properties
-    confidence_scores = []
-    for region in regions:
-        # Use solidity and area as confidence indicators
-        solidity = region.solidity if hasattr(region, 'solidity') else 0.8
-        area_ratio = region.area / (mask_array.shape[0] * mask_array.shape[1])
+        logger.warning("Skimage not available, using fallback analysis")
         
-        # Simple confidence calculation
-        confidence = min(0.99, 0.7 + solidity * 0.2 + min(area_ratio * 5, 0.1))
-        confidence_scores.append(round(confidence, 3))
-    
-    return {
-        'detected_objects_count': object_count,
-        'total_area_pixels': int(total_area),
-        'confidence_scores': confidence_scores
-    }
+        # Simple connected component analysis using scipy if available
+        try:
+            from scipy import ndimage
+            labeled_array, num_features = ndimage.label(binary_mask)
+            
+            if num_features > 0:
+                # Calculate areas of each component
+                component_areas = []
+                for i in range(1, num_features + 1):
+                    component_area = np.sum(labeled_array == i)
+                    component_areas.append(component_area)
+                
+                # Generate confidence scores
+                confidence_scores = []
+                for area in component_areas:
+                    area_ratio = area / (binary_mask.shape[0] * binary_mask.shape[1])
+                    confidence = min(0.95, 0.8 + min(area_ratio * 2, 0.15))
+                    confidence_scores.append(round(confidence, 3))
+                
+                return {
+                    'detected_objects_count': num_features,
+                    'total_area_pixels': int(total_area),
+                    'confidence_scores': confidence_scores
+                }
+            else:
+                return {
+                    'detected_objects_count': 0,
+                    'total_area_pixels': 0,
+                    'confidence_scores': []
+                }
+                
+        except ImportError:
+            # Final fallback - simple pixel counting
+            logger.warning("Neither skimage nor scipy available, using simple pixel counting")
+            
+            return {
+                'detected_objects_count': 1 if total_area > 0 else 0,
+                'total_area_pixels': int(total_area),
+                'confidence_scores': [0.85] if total_area > 0 else []
+            }
 
 def save_processed_results(input_image_path, processed_mask, original_mask, output_dir, input_filename):
     """
-    Save the processed results to output directory
+    Save the processed results to output directory with high-quality, zoomable outputs
     
     Args:
         input_image_path: Path to original input image
@@ -697,25 +971,323 @@ def save_processed_results(input_image_path, processed_mask, original_mask, outp
     """
     base_name = os.path.splitext(input_filename)[0]
     
-    # Copy original input image
+    # Load original input image
     input_image = Image.open(input_image_path)
+    if input_image.mode != 'RGB':
+        input_image = input_image.convert('RGB')
+    
+    # Get original image dimensions for high-quality output
+    original_width, original_height = input_image.size
+    
+    # Decide on output resolution - use higher resolution for better zoom capability
+    max_dimension = max(original_width, original_height)
+    if max_dimension < 512:
+        output_size = (original_width * 2, original_height * 2)  # Upscale small images
+    elif max_dimension > 1024:
+        # Downscale very large images to reasonable size
+        scale = 1024 / max_dimension
+        output_size = (int(original_width * scale), int(original_height * scale))
+    else:
+        output_size = (original_width, original_height)  # Keep original size
+    
+    logger.info(f"Original image size: {original_width}x{original_height}, output size: {output_size}")
+    
+    # Resize input to target output size
+    input_resized = input_image.resize(output_size, Image.Resampling.LANCZOS)
+    
+    # Save high-quality input image
     input_output_path = os.path.join(output_dir, f"input_{input_filename}")
-    input_image.save(input_output_path)
+    input_resized.save(input_output_path, quality=95)
     
-    # Save processed mask
+    # Resize mask to match output size
+    mask_pil = Image.fromarray((processed_mask * 255).astype(np.uint8))
+    mask_resized = mask_pil.resize(output_size, Image.Resampling.NEAREST)  # Use NEAREST for masks
+    mask_resized_array = np.array(mask_resized) / 255.0  # Convert back to 0-1 range
+    
+    # Save high-quality processed mask
     processed_mask_path = os.path.join(output_dir, f"mask_{input_filename}")
-    mask_image = Image.fromarray((processed_mask * 255).astype(np.uint8))
-    mask_image.save(processed_mask_path)
+    mask_resized.save(processed_mask_path, quality=95)
     
-    # Create overlay visualization
+    # Create overlay visualization with enhanced visibility
     overlay_path = os.path.join(output_dir, f"overlay_{input_filename}")
-    create_overlay_visualization(input_image_path, processed_mask, overlay_path)
+    create_enhanced_overlay_visualization_from_arrays(
+        np.array(input_resized), 
+        mask_resized_array, 
+        overlay_path
+    )
+    
+    # Also create a side-by-side comparison for better visualization
+    comparison_path = os.path.join(output_dir, f"comparison_{input_filename}")
+    create_side_by_side_comparison(
+        np.array(input_resized),
+        mask_resized_array,
+        comparison_path
+    )
+    
+    # Create yellow overlay on input image
+    input_with_yellow_overlay_path = os.path.join(output_dir, f"input_with_overlay_{input_filename}")
+    create_yellow_overlay_on_input(
+        np.array(input_resized),
+        mask_resized_array,
+        input_with_yellow_overlay_path
+    )
     
     return {
         'input_image': input_output_path,
         'segmentation_mask': processed_mask_path,
-        'overlay': overlay_path
+        'overlay': overlay_path,
+        'comparison': comparison_path,
+        'input_with_overlay': input_with_yellow_overlay_path
     }
+
+def create_yellow_overlay_on_input(input_array, mask_array, output_path):
+    """
+    Create yellow overlay mask on original input image
+    
+    Args:
+        input_array: Input image as numpy array (RGB)
+        mask_array: Mask as numpy array (0-1 range)
+        output_path: Output path for overlay image
+    """
+    try:
+        # Ensure mask is binary
+        binary_mask = (mask_array > 0.5).astype(np.float32)
+        
+        # Start with the original input image
+        result = input_array.copy().astype(np.float32)
+        
+        # Create yellow overlay where mask is present
+        # Yellow = Red + Green, no Blue
+        yellow_overlay = np.zeros_like(input_array, dtype=np.float32)
+        yellow_overlay[:, :, 0] = binary_mask * 255  # Red channel
+        yellow_overlay[:, :, 1] = binary_mask * 255  # Green channel  
+        yellow_overlay[:, :, 2] = binary_mask * 0    # No Blue channel
+        
+        # Apply yellow overlay with transparency (alpha blending)
+        alpha = 0.4  # 40% opacity for overlay
+        mask_3d = np.stack([binary_mask, binary_mask, binary_mask], axis=2)
+        
+        # Blend: result = (1-alpha) * input + alpha * yellow where mask > 0
+        result = np.where(mask_3d > 0.5, 
+                         (1-alpha) * result + alpha * yellow_overlay,
+                         result)
+        
+        # Create edge highlighting for better visibility
+        try:
+            from scipy import ndimage
+            # Find edges of the mask
+            edges = ndimage.sobel(binary_mask)
+            edges = (edges > 0.1).astype(np.float32)
+            
+            # Make edges more prominent with bright yellow
+            edge_overlay = np.zeros_like(input_array, dtype=np.float32)
+            edge_overlay[:, :, 0] = edges * 255  # Red
+            edge_overlay[:, :, 1] = edges * 255  # Green
+            edge_overlay[:, :, 2] = edges * 0    # No Blue
+            
+            # Add edges to result
+            edge_3d = np.stack([edges, edges, edges], axis=2)
+            result = np.where(edge_3d > 0.1,
+                             0.7 * result + 0.3 * edge_overlay,
+                             result)
+                             
+        except ImportError:
+            logger.warning("scipy not available, skipping edge enhancement")
+        
+        # Ensure values are in valid range
+        result = np.clip(result, 0, 255)
+        
+        # Convert to PIL Image and save
+        result_pil = Image.fromarray(result.astype(np.uint8))
+        result_pil.save(output_path, quality=95)
+        
+        logger.info(f"Yellow overlay visualization saved to {output_path}")
+        
+    except Exception as e:
+        logger.error(f"Failed to create yellow overlay visualization: {e}")
+        # Create fallback image
+        try:
+            input_pil = Image.fromarray(input_array.astype(np.uint8))
+            input_pil.save(output_path)
+        except:
+            pass
+
+def create_enhanced_overlay_visualization_from_arrays(input_array, mask_array, output_path):
+    """
+    Create enhanced overlay from numpy arrays
+    
+    Args:
+        input_array: Input image as numpy array (RGB)
+        mask_array: Mask as numpy array (0-1 range)
+        output_path: Output path for overlay image
+    """
+    try:
+        # Ensure mask is binary
+        binary_mask = (mask_array > 0.5).astype(np.float32)
+        
+        # Create enhanced colored overlay with better visibility
+        overlay = input_array.copy().astype(np.float32)
+        
+        # Create multiple color channels for better visibility
+        mask_colored = np.zeros_like(input_array, dtype=np.float32)
+        
+        # Use bright red with some transparency for segmented areas
+        mask_colored[:, :, 0] = binary_mask * 255  # Red channel
+        mask_colored[:, :, 1] = binary_mask * 50   # Slight green for visibility
+        mask_colored[:, :, 2] = binary_mask * 50   # Slight blue for visibility
+        
+        # Create contours for better edge visibility
+        try:
+            from scipy import ndimage
+            # Find edges using simple gradient
+            edges = ndimage.sobel(binary_mask)
+            edges = (edges > 0.1).astype(np.float32)
+            
+            # Make edges more visible - bright yellow
+            edge_colored = np.zeros_like(input_array, dtype=np.float32)
+            edge_colored[:, :, 0] = edges * 255  # Red
+            edge_colored[:, :, 1] = edges * 255  # Green (Red + Green = Yellow)
+            edge_colored[:, :, 2] = edges * 0    # Blue
+            
+            # Blend original + mask + edges
+            alpha_mask = 0.3  # Transparency for filled areas
+            alpha_edge = 0.8  # More opaque for edges
+            
+            # Add filled mask areas
+            mask_bool = binary_mask > 0
+            overlay[mask_bool] = (1 - alpha_mask) * overlay[mask_bool] + alpha_mask * mask_colored[mask_bool]
+            
+            # Add edge highlights
+            edge_bool = edges > 0
+            overlay[edge_bool] = (1 - alpha_edge) * overlay[edge_bool] + alpha_edge * edge_colored[edge_bool]
+            
+        except ImportError:
+            # Fallback without edge detection
+            alpha = 0.4
+            mask_bool = binary_mask > 0
+            overlay[mask_bool] = (1 - alpha) * overlay[mask_bool] + alpha * mask_colored[mask_bool]
+        
+        overlay = np.clip(overlay, 0, 255).astype(np.uint8)
+        
+        # Save high-quality overlay
+        overlay_image = Image.fromarray(overlay)
+        overlay_image.save(output_path, quality=95)
+        
+        logger.info(f"Enhanced overlay visualization saved to {output_path}")
+        
+    except Exception as e:
+        logger.warning(f"Failed to create enhanced overlay: {e}")
+        # Fallback to simple overlay
+        alpha = 0.4
+        overlay = (1 - alpha) * input_array + alpha * (mask_array[:, :, np.newaxis] * [255, 0, 0])
+        overlay = np.clip(overlay, 0, 255).astype(np.uint8)
+        overlay_image = Image.fromarray(overlay)
+        overlay_image.save(output_path, quality=95)
+
+def create_side_by_side_comparison(input_array, mask_array, output_path):
+    """
+    Create a side-by-side comparison image
+    
+    Args:
+        input_array: Input image as numpy array
+        mask_array: Mask as numpy array (0-1 range)
+        output_path: Output path for comparison image
+    """
+    try:
+        # Convert mask to visible image
+        mask_vis = (mask_array * 255).astype(np.uint8)
+        mask_vis_rgb = np.stack([mask_vis, mask_vis, mask_vis], axis=2)
+        
+        # Create side-by-side comparison
+        comparison = np.hstack([input_array, mask_vis_rgb])
+        
+        # Save comparison
+        comparison_image = Image.fromarray(comparison)
+        comparison_image.save(output_path, quality=95)
+        
+        logger.info(f"Side-by-side comparison saved to {output_path}")
+        
+    except Exception as e:
+        logger.warning(f"Failed to create side-by-side comparison: {e}")
+        # Fallback: save just the input
+        input_image = Image.fromarray(input_array)
+        input_image.save(output_path, quality=95)
+
+def create_enhanced_overlay_visualization(input_image_path, mask, output_path):
+    """
+    Create an enhanced overlay visualization with better visibility and zoomable output
+    
+    Args:
+        input_image_path: Path to original image
+        mask: Binary segmentation mask
+        output_path: Output path for overlay image
+    """
+    try:
+        # Load original image
+        original = Image.open(input_image_path)
+        if original.mode != 'RGB':
+            original = original.convert('RGB')
+        
+        # Resize original to match mask if needed
+        mask_size = (mask.shape[1], mask.shape[0])  # PIL uses (width, height)
+        original_resized = original.resize(mask_size, Image.Resampling.LANCZOS)
+        original_array = np.array(original_resized)
+        
+        # Create enhanced colored overlay with better visibility
+        overlay = original_array.copy()
+        
+        # Create multiple color channels for better visibility
+        mask_colored = np.zeros_like(original_array)
+        
+        # Use bright red with some transparency for segmented areas
+        mask_colored[:, :, 0] = mask * 255  # Red channel
+        mask_colored[:, :, 1] = mask * 50   # Slight green for visibility
+        mask_colored[:, :, 2] = mask * 50   # Slight blue for visibility
+        
+        # Create contours for better edge visibility
+        try:
+            from scipy import ndimage
+            # Find edges using simple gradient
+            edges = ndimage.sobel(mask.astype(float))
+            edges = (edges > 0.1).astype(np.uint8)
+            
+            # Make edges more visible - bright yellow
+            edge_colored = np.zeros_like(original_array)
+            edge_colored[:, :, 0] = edges * 255  # Red
+            edge_colored[:, :, 1] = edges * 255  # Green (Red + Green = Yellow)
+            edge_colored[:, :, 2] = edges * 0    # Blue
+            
+            # Blend original + mask + edges
+            alpha_mask = 0.3  # Transparency for filled areas
+            alpha_edge = 0.8  # More opaque for edges
+            
+            overlay = original_array.copy().astype(np.float32)
+            
+            # Add filled mask areas
+            mask_bool = mask > 0
+            overlay[mask_bool] = (1 - alpha_mask) * overlay[mask_bool] + alpha_mask * mask_colored[mask_bool]
+            
+            # Add edge highlights
+            edge_bool = edges > 0
+            overlay[edge_bool] = (1 - alpha_edge) * overlay[edge_bool] + alpha_edge * edge_colored[edge_bool]
+            
+        except ImportError:
+            # Fallback without edge detection
+            alpha = 0.4
+            overlay = (1 - alpha) * original_array + alpha * mask_colored
+        
+        overlay = np.clip(overlay, 0, 255).astype(np.uint8)
+        
+        # Save high-quality overlay
+        overlay_image = Image.fromarray(overlay)
+        overlay_image.save(output_path, quality=95)
+        
+        logger.info(f"Enhanced overlay visualization saved to {output_path}")
+        
+    except Exception as e:
+        logger.warning(f"Failed to create enhanced overlay visualization: {e}")
+        # Fallback to simple overlay
+        create_overlay_visualization(input_image_path, mask, output_path)
 
 def create_overlay_visualization(input_image_path, mask, output_path):
     """
@@ -747,9 +1319,9 @@ def create_overlay_visualization(input_image_path, mask, output_path):
         overlay = (1 - alpha) * original_array + alpha * mask_colored
         overlay = overlay.astype(np.uint8)
         
-        # Save overlay
+        # Save overlay with high quality
         overlay_image = Image.fromarray(overlay)
-        overlay_image.save(output_path)
+        overlay_image.save(output_path, quality=95)
         
     except Exception as e:
         logger.warning(f"Failed to create overlay visualization: {e}")

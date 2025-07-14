@@ -60,7 +60,7 @@ services:
       dockerfile: infrastructure/docker/Dockerfile.default-worker.gpu
     volumes:
       - ../..:/app
-      # - ../../core/data:/app/core/data
+      - ../../core/data:/app/core/data
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
     depends_on:
@@ -74,16 +74,18 @@ services:
       - DJANGO_SETTINGS_MODULE=core.config.settings.worker
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - MLFLOW_ARTIFACT_ROOT=/app/core/data/mlflow
-      - CELERY_WORKER_QUEUES=default,cleanup
+      - CELERY_WORKER_QUEUES=default,cleanup,inference
       - TZ=Europe/Warsaw
       - MPLCONFIGDIR=/tmp/matplotlib
       - HF_HOME=/tmp/huggingface
+      - INFERENCE_TIMEOUT=300  # 5 minutes
+      - MAX_CONCURRENT_INFERENCE_TASKS=2
     restart: unless-stopped
     working_dir: /app
-    shm_size: 1gb
-    command: celery -A core.config worker --loglevel=info --concurrency=1 --queues=default,cleanup --hostname=default-worker@%h --max-memory-per-child=1500000
-    cpus: 0.5
-    mem_limit: 3g
+    shm_size: 2gb
+    command: celery -A core.config worker --loglevel=info --concurrency=2 --queues=default,cleanup,inference --hostname=default-worker@%h --max-memory-per-child=2000000
+    cpus: 1.5
+    mem_limit: 4g
 
   training-worker:
     build:
@@ -125,84 +127,6 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-
-  inference-worker:
-    build:
-      context: ../..
-      dockerfile: infrastructure/docker/Dockerfile.inference-worker.gpu
-    volumes:
-      - ../..:/app
-      - ../../core/data:/app/core/data
-      # - ../../core/data/mlflow:/mlflow
-      - /etc/timezone:/etc/timezone:ro
-      - /etc/localtime:/etc/localtime:ro
-    depends_on:
-      - redis
-      - db
-      - mlflow
-    env_file:
-      - ../env/.env.gpu
-    environment:
-      - PYTHONPATH=/app:/app/core
-      - DJANGO_SETTINGS_MODULE=core.config.settings.worker
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - MLFLOW_ARTIFACT_ROOT=/app/core/data/mlflow
-      - CELERY_WORKER_QUEUES=inference
-      - INFERENCE_TIMEOUT=300  # 5 minutes
-      - MAX_CONCURRENT_INFERENCE_TASKS=2
-      - TZ=Europe/Warsaw
-      - MPLCONFIGDIR=/tmp/matplotlib
-      - HF_HOME=/tmp/huggingface
-    restart: unless-stopped
-    working_dir: /app
-    shm_size: 3gb
-    command: celery -A core.config worker --loglevel=info --concurrency=1 --queues=inference --hostname=inference-worker@%h
-    cpus: 2.0
-    mem_limit: 6g
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
-  celery-beat:
-    build:
-      context: ../..
-      dockerfile: infrastructure/docker/Dockerfile.celery-beat
-    volumes:
-      - ../../core/data:/app/core/data
-      - /etc/timezone:/etc/timezone:ro
-      - /etc/localtime:/etc/localtime:ro
-    depends_on:
-      - redis
-      - db
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - CONTAINER_TYPE=beat
-      - CELERY_LOADER=celery.loaders.app.AppLoader
-      - TZ=Europe/Warsaw
-    restart: unless-stopped
-    working_dir: /app
-    command: bash -c "cd /app && celery --app=core.config.celery_standalone:app beat --loglevel=info"
-
-  flower:
-    build:
-      context: ../..
-      dockerfile: infrastructure/docker/Dockerfile.flower
-    ports:
-      - "5555:5555"
-    depends_on:
-      - redis
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - PYTHONPATH=/app:/app/core
-    restart: unless-stopped
-    working_dir: /app
-    command: bash -c "cd /app && celery --app=core.config.celery_standalone:app flower --port=5555"
 
   mlflow:
     build:

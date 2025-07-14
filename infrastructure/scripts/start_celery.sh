@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # Enhanced ML Manager - Celery startup script
-# This script starts Celery workers and beat scheduler for ML training management
+# This script starts only Celery workers for ML training management
 
 set -e
 
-echo "🚀 Starting Enhanced ML Manager Celery Services"
+echo "🚀 Starting Enhanced ML Manager Celery Workers"
 
 # Colors for output
 RED='\033[0;31m'
@@ -82,20 +82,11 @@ echo "🔧 Starting specialized Celery workers..."
 # Training worker (single concurrency for GPU tasks)
 start_worker "training" "training_worker" 1
 
-# Inference worker (can handle multiple concurrent inference tasks)
-start_worker "inference" "inference_worker" 2
-
-# Control worker (for stopping tasks, etc.)
-start_worker "control" "control_worker" 1
-
-# Maintenance worker (for cleanup tasks)
-start_worker "maintenance" "maintenance_worker" 1
-
-# Start beat scheduler for periodic tasks
-start_beat
+# Default worker (handles inference, cleanup, and general tasks)
+start_worker "default,cleanup,inference" "default_worker" 2
 
 echo ""
-echo -e "${GREEN}🎉 All Celery services started successfully!${NC}"
+echo -e "${GREEN}🎉 All Celery workers started successfully!${NC}"
 echo ""
 echo "📊 To monitor workers:"
 echo "   celery -A core status"
@@ -103,23 +94,9 @@ echo "   celery -A core inspect active"
 echo ""
 echo "📝 Log files:"
 echo "   Training:    logs/celery_training_worker.log"
-echo "   Inference:   logs/celery_inference_worker.log"
-echo "   Control:     logs/celery_control_worker.log"
-echo "   Maintenance: logs/celery_maintenance_worker.log"
-echo "   Beat:        logs/celery_beat.log"
+echo "   Default:     logs/celery_default_worker.log"
 echo ""
 echo "🛑 To stop all workers:"
 echo "   ./scripts/stop_celery.sh"
-echo ""
-
-# Optional: Start Flower for monitoring (if installed)
-if command -v flower &> /dev/null; then
-    echo -e "${YELLOW}🌸 Starting Flower monitoring (optional)${NC}"
-    flower -A core --port=5555 --broker=redis://localhost:6379/0 &
-    echo -e "${GREEN}✅ Flower started at http://localhost:5555${NC}"
-else
-    echo -e "${YELLOW}💡 Install flower for web monitoring: pip install flower${NC}"
-fi
-
 echo ""
 echo -e "${GREEN}🚀 Enhanced ML Manager is ready for training and inference!${NC}"
