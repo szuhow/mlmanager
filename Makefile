@@ -103,7 +103,7 @@ start-cpu: ## Start CPU services
 	@echo "🚀 Starting CPU services..."
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_CPU) up -d
 	@echo "⏳ Waiting for services to start..."
-	@sleep 40
+	@sleep 45
 	@echo "✅ CPU services started"
 	@make status-cpu
 

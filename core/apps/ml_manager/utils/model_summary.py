@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 
 
 def generate_model_summary(model_type: str, input_shape: Tuple[int, ...] = (1, 256, 256), 
-                         device: str = 'cpu', resolution: int = None) -> Dict[str, Any]:
+                         device: str = 'cpu', resolution: int = None,
+                         architecture_params: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Generate a comprehensive model summary similar to torchsummary
     
@@ -20,6 +21,7 @@ def generate_model_summary(model_type: str, input_shape: Tuple[int, ...] = (1, 2
         input_shape: Input tensor shape (C, H, W)
         device: Device to run the model on
         resolution: Image resolution for training (overrides default input_shape)
+        architecture_params: Dictionary with architecture parameters from GUI
         
     Returns:
         Dictionary containing model summary information
@@ -27,36 +29,57 @@ def generate_model_summary(model_type: str, input_shape: Tuple[int, ...] = (1, 2
     # If resolution is provided, use it for input shape
     if resolution:
         input_shape = (input_shape[0], resolution, resolution)
+    
+    # Process architecture parameters
+    if architecture_params is None:
+        architecture_params = {}
+    
+    model_size = architecture_params.get('model_size', 'standard')
+    custom_channels = architecture_params.get('custom_channels', '32,64,128,256,512')
+    use_attention = architecture_params.get('use_attention', False)
+    use_deep_architecture = architecture_params.get('use_deep_architecture', False)
+    use_residual_connections = architecture_params.get('use_residual_connections', False)
+    
+    logger.info(f"[PREVIEW] Model summary generation: model_type={model_type}, model_size={model_size}, "
+                f"custom_channels={custom_channels}, use_attention={use_attention}, "
+                f"use_deep={use_deep_architecture}, use_residual={use_residual_connections}")
         
-    # Check if this is a MONAI model - they have different parameter counts
-    is_monai_model = model_type.lower() in ['monai_unet', 'unet']
+    # Check if this is a MONAI model
+    is_monai_model = model_type.lower() in ['configurable_monai_unet', 'monai_unet']
+    
+    # Apply model_size to channel mapping consistently
+    if model_size in ['micro', 'tiny', 'small', 'standard', 'large', 'xl']:
+        size_to_channels = {
+            'micro': '8,16,32,64',
+            'tiny': '16,32,64,128,256', 
+            'small': '32,64,128,256,512',
+            'standard': '32,64,128,256,512',
+            'large': '32,64,128,256,512',
+            'xl': '64,128,256,512,1024'
+        }
+        custom_channels = size_to_channels.get(model_size, custom_channels)
+        logger.info(f"[PREVIEW] Size {model_size} mapped to channels: {custom_channels}")
+    
+    logger.info(f"[PREVIEW] Final decision: is_monai_model={is_monai_model}, model_type={model_type}, channels={custom_channels}")
+    logger.info(f"[PREVIEW] Expected parameters for channels {custom_channels}:")
     
     try:
         from core.apps.ml_manager.utils.architecture_registry import get_model_class, get_default_registry
         
-        # Special handling for MONAI UNet - use accurate model
+        # Special handling for MONAI UNet - use model from models folder
         if is_monai_model:
-            logger.debug("Creating MONAI UNet model for parameter count")
-            # Create a proper MONAI UNet with actual parameters
-            from monai.networks.nets import UNet as MonaiUNet
-            
-            class MonaiFallbackUNet(nn.Module):
-                def __init__(self, input_channels=1, output_channels=1, **kwargs):
-                    super().__init__()
-                    # Create actual MONAI UNet with proper parameters
-                    self.model = MonaiUNet(
-                        spatial_dims=2,
-                        in_channels=input_channels,
-                        out_channels=output_channels,
-                        channels=(16, 32, 64, 128, 256),
-                        strides=(2, 2, 2, 2),
-                        num_res_units=2,
-                    )
-                
-                def forward(self, x):
-                    return self.model(x)
-            
-            model_class = MonaiFallbackUNet
+            logger.debug(f"[PREVIEW] Creating MONAI UNet model with channels: {custom_channels}")
+            try:
+                from core.apps.ml_manager.training.models.custom_models import create_configurable_monai_unet
+                model_class = lambda **kwargs: create_configurable_monai_unet(
+                    input_channels=kwargs.get('input_channels', kwargs.get('n_channels', 1)),
+                    output_channels=kwargs.get('output_channels', kwargs.get('n_classes', 1)),
+                    custom_channels=custom_channels
+                )
+                logger.info(f"[PREVIEW] Using configurable MONAI UNet from models folder with channels: {custom_channels}")
+            except ImportError as e:
+                logger.warning(f"[PREVIEW] Could not import configurable MONAI UNet: {e}, using fallback")
+                model_class = None
         else:
             model_class = None
             
@@ -75,6 +98,13 @@ def generate_model_summary(model_type: str, input_shape: Tuple[int, ...] = (1, 2
                 
                 # Create specialized wrapper classes for different architectures
                 if model_type.lower() == 'deep_resunet_attention':
+                    # Parse custom channels for Deep ResUNet with Attention
+                    try:
+                        channels = tuple(int(x.strip()) for x in custom_channels.split(','))
+                        logger.info(f"DeepResUNetAttention using custom channels: {channels}")
+                    except:
+                        channels = (64, 128, 256, 512, 1024)  # fallback for XL size
+                    
                     class DeepResUNetAttentionFallback(nn.Module):
                         def __init__(self, n_channels=3, n_classes=1, input_channels=None, output_channels=None, **kwargs):
                             super().__init__()
@@ -82,47 +112,164 @@ def generate_model_summary(model_type: str, input_shape: Tuple[int, ...] = (1, 2
                             in_ch = input_channels if input_channels is not None else n_channels
                             out_ch = output_channels if output_channels is not None else n_classes
                             
-                            # Create a deeper architecture by stacking more layers
-                            self.base_model = base_unet_class(n_channels=in_ch, n_classes=out_ch)
+                            # Create a deeper architecture by stacking more layers based on channels
+                            try:
+                                self.base_model = base_unet_class(n_channels=in_ch, n_classes=out_ch)
+                            except:
+                                # Create custom deep architecture
+                                self.base_model = self._create_deep_resunet_attention(in_ch, out_ch, channels)
                             
-                            # Add extra residual-like layers to simulate deeper architecture
-                            self.extra_conv1 = nn.Conv2d(64, 64, 3, padding=1)
-                            self.extra_conv2 = nn.Conv2d(128, 128, 3, padding=1)
-                            self.extra_conv3 = nn.Conv2d(256, 256, 3, padding=1)
+                            # Add extra deep layers based on channel configuration
+                            for i, ch in enumerate(channels):
+                                setattr(self, f'extra_conv{i+1}', nn.Conv2d(ch, ch, 3, padding=1))
                             
-                            # Add attention-like layers
-                            self.attention1 = nn.Conv2d(64, 1, 1)
-                            self.attention2 = nn.Conv2d(128, 1, 1)
+                            # Add multiple attention layers
+                            for i, ch in enumerate(channels[:3]):  # First 3 channels for attention
+                                setattr(self, f'attention{i+1}', nn.Conv2d(ch, 1, 1))
+                        
+                        def _create_deep_resunet_attention(self, in_ch, out_ch, channels):
+                            """Create a deep ResUNet with attention and specified channels"""
+                            layers = []
+                            current_ch = in_ch
+                            
+                            # Deep encoder with attention
+                            for i, ch in enumerate(channels):
+                                layers.extend([
+                                    nn.Conv2d(current_ch, ch, 3, padding=1),
+                                    nn.BatchNorm2d(ch),
+                                    nn.ReLU(inplace=True),
+                                    nn.Conv2d(ch, ch, 3, padding=1),
+                                    nn.BatchNorm2d(ch),
+                                    nn.ReLU(inplace=True),
+                                    # Residual connection
+                                    nn.Conv2d(ch, ch, 1),  # 1x1 conv for residual
+                                    # Attention mechanism
+                                    nn.Conv2d(ch, ch // 4, 1),  # Attention reduction
+                                    nn.ReLU(inplace=True),
+                                    nn.Conv2d(ch // 4, ch, 1),  # Attention expansion
+                                    nn.Sigmoid(),  # Attention weights
+                                ])
+                                
+                                if i < len(channels) - 1:  # Don't pool on last layer
+                                    layers.append(nn.MaxPool2d(2))
+                                current_ch = ch
+                            
+                            # Deep decoder with attention
+                            for ch in reversed(channels[:-1]):
+                                layers.extend([
+                                    nn.ConvTranspose2d(current_ch, ch, 2, stride=2),
+                                    nn.Conv2d(current_ch, ch, 3, padding=1),
+                                    nn.BatchNorm2d(ch),
+                                    nn.ReLU(inplace=True),
+                                    nn.Conv2d(ch, ch, 3, padding=1),
+                                    nn.BatchNorm2d(ch),
+                                    nn.ReLU(inplace=True),
+                                    # Additional attention for decoder
+                                    nn.Conv2d(ch, ch // 4, 1),
+                                    nn.ReLU(inplace=True),
+                                    nn.Conv2d(ch // 4, ch, 1),
+                                    nn.Sigmoid()
+                                ])
+                                current_ch = ch
+                            
+                            # Final layers
+                            layers.extend([
+                                nn.Conv2d(current_ch, out_ch, 1),
+                                nn.Sigmoid()  # Final activation
+                            ])
+                            
+                            return nn.Sequential(*layers)
                             
                         def forward(self, x):
                             # Just use the base model for actual forward pass
                             return self.base_model(x)
                     
                     model_class = DeepResUNetAttentionFallback
-                    logger.info(f"Using specialized fallback DeepResUNetAttention for {model_type}")
+                    logger.info(f"Using specialized fallback DeepResUNetAttention for {model_type} with channels {channels}")
                     
                 elif model_type.lower() in ['resunet_attention', 'resunet', 'deep_resunet']:
+                    # Parse custom channels for ResUNet architectures
+                    try:
+                        channels = tuple(int(x.strip()) for x in custom_channels.split(','))
+                        logger.info(f"ResUNet using custom channels: {channels}")
+                    except:
+                        channels = (32, 64, 128, 256, 512)  # fallback
+                    
                     class ResUNetFallback(nn.Module):
                         def __init__(self, n_channels=3, n_classes=1, input_channels=None, output_channels=None, **kwargs):
                             super().__init__()
                             in_ch = input_channels if input_channels is not None else n_channels
                             out_ch = output_channels if output_channels is not None else n_classes
                             
-                            self.base_model = base_unet_class(n_channels=in_ch, n_classes=out_ch)
+                            # Create base UNet with custom channels
+                            try:
+                                self.base_model = base_unet_class(n_channels=in_ch, n_classes=out_ch)
+                            except:
+                                # Fallback: create a custom ResUNet with proper channel configuration
+                                self.base_model = self._create_custom_resunet(in_ch, out_ch, channels)
                             
-                            # Add residual-like layers to differentiate from basic UNet
-                            self.residual_conv1 = nn.Conv2d(64, 64, 3, padding=1)
-                            self.residual_conv2 = nn.Conv2d(128, 128, 3, padding=1)
+                            # Add residual-like layers based on channels to differentiate from basic UNet
+                            # Use the first few channel sizes for additional layers
+                            if len(channels) >= 2:
+                                self.residual_conv1 = nn.Conv2d(channels[1], channels[1], 3, padding=1)
+                            if len(channels) >= 3:
+                                self.residual_conv2 = nn.Conv2d(channels[2], channels[2], 3, padding=1)
+                            
+                            # Add more layers for 'deep' variants
+                            if 'deep' in model_type.lower():
+                                if len(channels) >= 4:
+                                    self.deep_conv1 = nn.Conv2d(channels[3], channels[3], 3, padding=1)
+                                if len(channels) >= 5:
+                                    self.deep_conv2 = nn.Conv2d(channels[4], channels[4], 3, padding=1)
                             
                             # Add attention layers if it's attention variant
                             if 'attention' in model_type.lower():
-                                self.attention = nn.Conv2d(64, 1, 1)
+                                if len(channels) >= 2:
+                                    self.attention1 = nn.Conv2d(channels[1], 1, 1)
+                                if len(channels) >= 3:
+                                    self.attention2 = nn.Conv2d(channels[2], 1, 1)
+                        
+                        def _create_custom_resunet(self, in_ch, out_ch, channels):
+                            """Create a custom ResUNet with specified channel configuration"""
+                            layers = []
+                            current_ch = in_ch
+                            
+                            # Encoder
+                            for ch in channels:
+                                layers.extend([
+                                    nn.Conv2d(current_ch, ch, 3, padding=1),
+                                    nn.BatchNorm2d(ch),
+                                    nn.ReLU(inplace=True),
+                                    nn.Conv2d(ch, ch, 3, padding=1),
+                                    nn.BatchNorm2d(ch),
+                                    nn.ReLU(inplace=True),
+                                    nn.MaxPool2d(2)
+                                ])
+                                current_ch = ch
+                            
+                            # Decoder (reversed)
+                            for ch in reversed(channels[:-1]):
+                                layers.extend([
+                                    nn.ConvTranspose2d(current_ch, ch, 2, stride=2),
+                                    nn.Conv2d(current_ch, ch, 3, padding=1),  # Skip connection
+                                    nn.BatchNorm2d(ch),
+                                    nn.ReLU(inplace=True),
+                                    nn.Conv2d(ch, ch, 3, padding=1),
+                                    nn.BatchNorm2d(ch),
+                                    nn.ReLU(inplace=True)
+                                ])
+                                current_ch = ch
+                            
+                            # Final output layer
+                            layers.append(nn.Conv2d(current_ch, out_ch, 1))
+                            
+                            return nn.Sequential(*layers)
                                 
                         def forward(self, x):
                             return self.base_model(x)
                     
                     model_class = ResUNetFallback
-                    logger.info(f"Using specialized fallback ResUNet for {model_type}")
+                    logger.info(f"Using specialized fallback ResUNet for {model_type} with channels {channels}")
                     
                 else:
                     # For other models, try the mapping approach
@@ -163,23 +310,50 @@ def generate_model_summary(model_type: str, input_shape: Tuple[int, ...] = (1, 2
             }
         
         try:
-            # Create model instance
-            if model_type in ['unet_classifier', 'resunet_classifier', 'deep_resunet_classifier', 'resunet_attention_classifier']:
-                # Classification models
-                num_classes = 3  # LAD, LCX, RCA
-                model = model_class(input_channels=input_shape[0], num_classes=num_classes)
-            else:
-                # Try different argument patterns for segmentation models
-                try:
-                    # Try standard naming first
-                    model = model_class(input_channels=input_shape[0], output_channels=1)
-                except (TypeError, ValueError):
-                    try:
-                        # Try UNet-style naming
-                        model = model_class(n_channels=input_shape[0], n_classes=1)
-                    except (TypeError, ValueError):
-                        # Last resort - try just default constructor
-                        model = model_class()
+            # Use the same model creation approach as training script
+            from core.apps.ml_manager.training.train import get_default_model_config, create_model_from_registry
+            
+            # Create a mock args object with architecture parameters
+            class MockArgs:
+                def __init__(self, **kwargs):
+                    for k, v in kwargs.items():
+                        setattr(self, k, v)
+            
+            # Prepare architecture arguments
+            arch_args = {}
+            if model_size:
+                arch_args['model_size'] = model_size
+            if custom_channels:
+                arch_args['custom_channels'] = custom_channels
+            if use_attention is not None:
+                arch_args['use_attention'] = use_attention
+            if use_deep_architecture is not None:
+                arch_args['use_deep_architecture'] = use_deep_architecture
+            if use_residual_connections is not None:
+                arch_args['use_residual_connections'] = use_residual_connections
+                
+            mock_args = MockArgs(**arch_args) if arch_args else None
+            logger.info(f"[PREVIEW] Mock args: {arch_args}")
+            
+            # Get model configuration using the same function as training
+            model_config = get_default_model_config(model_type, mock_args)
+            model_config['in_channels'] = input_shape[0]  # Set input channels
+            logger.info(f"[PREVIEW] Model config: {model_config}")
+            
+            # Use create_model_from_registry just like training script
+            model, arch_info = create_model_from_registry(model_type, 'cpu', **model_config)
+            logger.info(f"[PREVIEW] Successfully created model using create_model_from_registry")
+            logger.info(f"[PREVIEW] Architecture info: {arch_info}")
+            
+        except Exception as e:
+            logger.error(f"[PREVIEW] Failed to create model using training approach: {e}")
+            # Fallback to original approach
+            try:
+                model = model_class(n_channels=input_shape[0], n_classes=1)
+                logger.warning(f"[PREVIEW] Using fallback simple model")
+            except Exception as fallback_error:
+                logger.error(f"[PREVIEW] Fallback also failed: {fallback_error}")
+                model = model_class()
             
             # Check if model has required methods
             if not hasattr(model, 'eval'):

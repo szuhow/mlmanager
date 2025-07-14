@@ -19,6 +19,7 @@ import json
 import re
 import signal
 import fcntl
+import psutil
 import select
 import psutil
 import mlflow
@@ -37,6 +38,10 @@ def managed_process(cmd_args, model_id, timeout=3600):
         # Create process with proper settings for real-time output
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'  # Force Python to be unbuffered
+        
+        # Pass Celery task ID if available for status updates
+        if 'celery_task_id' in env:
+            env['CELERY_TASK_ID'] = env['celery_task_id']
         
         process = subprocess.Popen(
             cmd_args,
@@ -63,24 +68,123 @@ def managed_process(cmd_args, model_id, timeout=3600):
 
 def cleanup_process(process, model_id):
     """Properly cleanup subprocess and its children"""
-    if process.poll() is None:  # Process is still running
+    try:
+        # Get all child processes first, even if main process already finished
+        children = []
         try:
+            import psutil
+            if process.poll() is None:  # Process still running
+                try:
+                    parent = psutil.Process(process.pid)
+                    children = parent.children(recursive=True)
+                    logger.info(f"Found {len(children)} child processes for model {model_id}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    children = []
+            else:
+                # Process already finished, but children might still exist as zombies
+                try:
+                    # Try to find orphaned children by name pattern
+                    all_processes = psutil.process_iter(['pid', 'name', 'ppid', 'status'])
+                    for proc in all_processes:
+                        try:
+                            if ('pt_data_worker' in proc.info['name'] or 
+                                proc.info['status'] == psutil.STATUS_ZOMBIE):
+                                children.append(proc)
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                    logger.info(f"Found {len(children)} orphaned/zombie child processes for cleanup")
+                except ImportError:
+                    pass
+        except ImportError:
+            logger.warning("psutil not available for child process cleanup")
+
+        if process.poll() is None:
             # First, try graceful termination
-            logger.info(f"Terminating process group for model {model_id}")
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-            
+            logger.info(f"Terminating process group for model {model_id} (PID: {process.pid})")
+
+            # Try to terminate child processes first
+            for child in children:
+                try:
+                    child.terminate()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+
+            # Then terminate the main process group
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            except OSError:
+                # If process group doesn't exist, try individual process
+                process.terminate()
+
             # Wait for graceful shutdown
             try:
-                process.wait(timeout=10)
+                process.wait(timeout=15)  # Increased timeout for cleanup
                 logger.info(f"Process {process.pid} terminated gracefully")
             except subprocess.TimeoutExpired:
                 # Force kill if graceful termination fails
                 logger.warning(f"Force killing process group for model {model_id}")
-                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                process.wait()
-                
-        except (OSError, ProcessLookupError) as e:
-            logger.warning(f"Error during process cleanup: {e}")
+
+                # Kill child processes forcefully
+                for child in children:
+                    try:
+                        child.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+
+                # Force kill the main process group
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                except OSError:
+                    # If process group doesn't exist, try individual process
+                    process.kill()
+
+        # ALWAYS try to reap all children and the main process, even if already finished
+        logger.info(f"Waiting for {len(children)} child processes to be reaped...")
+        for child in children:
+            try:
+                if hasattr(child, 'is_running') and child.is_running():
+                    child.terminate()
+                    try:
+                        child.wait(timeout=5)
+                        logger.info(f"Child process {child.pid} reaped successfully")
+                    except psutil.TimeoutExpired:
+                        child.kill()
+                        try:
+                            child.wait(timeout=2)
+                            logger.info(f"Child process {child.pid} force killed and reaped")
+                        except:
+                            logger.warning(f"Failed to reap child process {child.pid}")
+                else:
+                    # For zombie processes, try to wait for them
+                    try:
+                        child.wait(timeout=1)
+                        logger.info(f"Zombie process {child.pid} reaped")
+                    except:
+                        logger.warning(f"Could not reap zombie process {child.pid}")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                logger.info(f"Child process already cleaned up by system")
+            except Exception as e:
+                logger.warning(f"Error waiting for child process: {e}")
+        
+        # Also wait for main process
+        try:
+            process.wait(timeout=5)
+            logger.info(f"Main process {process.pid} reaped")
+        except Exception as e:
+            logger.warning(f"Error waiting for main process: {e}")
+            
+    except (OSError, ProcessLookupError) as e:
+        logger.warning(f"Error during process cleanup for model {model_id}: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error during cleanup for model {model_id}: {e}")
+        # Last resort - try to kill the process directly
+        try:
+            process.kill()
+            process.wait()
+        except:
+            pass
+    
+    logger.info(f"Process cleanup completed for model {model_id}")
 
 def monitor_process_resources(process, model_id):
     """Monitor process resources and return metrics"""
@@ -207,6 +311,19 @@ def read_process_output(process, model_id, progress_callback=None, timeout=3600)
     # Process finished, get return code
     return_code = process.wait()
     
+    # Parse final training result from output if available
+    training_result_json = None
+    for line in output_buffer:
+        if line.startswith("TRAINING_RESULT_JSON:"):
+            try:
+                import json
+                json_str = line.replace("TRAINING_RESULT_JSON:", "").strip()
+                training_result_json = json.loads(json_str)
+                logger.info(f"Parsed training result JSON: {training_result_json}")
+                break
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse training result JSON: {e}")
+    
     # Get the log file path instead of returning full log content
     try:
         from core.apps.ml_manager.models import MLModel
@@ -234,12 +351,17 @@ def read_process_output(process, model_id, progress_callback=None, timeout=3600)
         log_file_path = f"Training logs for model {model_id} - path unavailable"
     
     if return_code == 0:
-        return True, "Training completed successfully", log_file_path
+        success_message = "Training completed successfully"
+        if training_result_json:
+            # Return parsed training result
+            return True, success_message, log_file_path, training_result_json
+        else:
+            return True, success_message, log_file_path, None
     else:
         error_msg = f"Training failed with return code {return_code}"
         if output_buffer:  # Use output_buffer instead of error_buffer since stderr is merged
             error_msg += f". Last output: {'; '.join(output_buffer[-5:])}"
-        return False, error_msg, log_file_path
+        return False, error_msg, log_file_path, None
 
 def parse_training_output_line(line: str, model_id: int) -> Dict[str, Any]:
     """
@@ -735,6 +857,11 @@ def run_training_direct(model_id: int, training_params: Dict[str, Any], progress
         # Add MLflow run ID to command args for train.py to use
         cmd_args.append(f'--mlflow-run-id={mlflow_run_id}')
         
+        # Add Celery task ID if available for status updates
+        if training_params.get('celery_task_id'):
+            cmd_args.append(f'--celery-task-id={training_params["celery_task_id"]}')
+            os.environ['CELERY_TASK_ID'] = training_params['celery_task_id']
+        
         # Log the command
         logger.info(f"Executing training command for model {model_id}: {' '.join(cmd_args)}")
         
@@ -750,7 +877,7 @@ def run_training_direct(model_id: int, training_params: Dict[str, Any], progress
         start_time = datetime.now()
         
         with managed_process(cmd_args, model_id, timeout=7200) as process:  # 2 hours timeout
-            success, message, training_logs = read_process_output(
+            success, message, training_logs, parsed_result = read_process_output(
                 process, 
                 model_id, 
                 progress_callback=progress_callback,
@@ -760,28 +887,34 @@ def run_training_direct(model_id: int, training_params: Dict[str, Any], progress
             end_time = datetime.now()
             training_time = (end_time - start_time).total_seconds()
             
-            # Get final metrics from model
-            try:
-                from core.apps.ml_manager.models import MLModel
-                model = MLModel.objects.get(id=model_id)
-                final_metrics = {
-                    'best_val_dice': model.val_dice or 0,
-                    'final_epoch': model.current_epoch or 0,
-                    'train_loss': model.train_loss,
-                    'val_loss': model.val_loss,
-                    'train_dice': model.train_dice,
-                    'val_dice': model.val_dice,
-                }
-            except Exception as e:
-                logger.warning(f"Could not fetch final metrics for model {model_id}: {e}")
-                final_metrics = {
-                    'best_val_dice': 0,
-                    'final_epoch': 0,
-                    'train_loss': None,
-                    'val_loss': None,
-                    'train_dice': None,
-                    'val_dice': None,
-                }
+            # Use parsed result from training output if available, otherwise get from model
+            if parsed_result and parsed_result.get('success'):
+                final_metrics = parsed_result
+                logger.info(f"Using parsed training result: {final_metrics}")
+            else:
+                # Fallback: Get final metrics from model
+                try:
+                    from core.apps.ml_manager.models import MLModel
+                    model = MLModel.objects.get(id=model_id)
+                    final_metrics = {
+                        'best_val_dice': model.best_val_dice or 0,
+                        'final_epoch': model.current_epoch or 0,
+                        'train_loss': model.train_loss,
+                        'val_loss': model.val_loss,
+                        'train_dice': model.train_dice,
+                        'val_dice': model.val_dice,
+                    }
+                    logger.info(f"Using fallback metrics from model: {final_metrics}")
+                except Exception as e:
+                    logger.warning(f"Could not fetch final metrics for model {model_id}: {e}")
+                    final_metrics = {
+                        'best_val_dice': 0,
+                        'final_epoch': 0,
+                        'train_loss': None,
+                        'val_loss': None,
+                        'train_dice': None,
+                        'val_dice': None,
+                    }
             
             if success:
                 logger.info(f"Training completed successfully for model {model_id} in {training_time:.2f}s")
@@ -840,7 +973,8 @@ def validate_training_params(training_params: Dict[str, Any]) -> Dict[str, Any]:
             # Other architectures
             'fcn', 'pspnet', 'linknet', 'fpn', 'pan'
         ],
-        'loss_function': ['dice', 'bce', 'combined', 'focal', 'tversky', 'focal_tversky'],
+        'loss_function': ['dice', 'bce', 'combined', 'focal', 'tversky', 'focal_tversky', 'iou'],
+        'primary_metric': ['dice', 'iou', 'accuracy', 'precision', 'recall', 'f1'],
         'device': ['auto', 'cpu', 'cuda', 'cuda:0', 'cuda:1', 'cuda:2', 'cuda:3'],
         'preprocessing_type': ['angiography', 'ct', 'mri', 'xray', 'ultrasound'],
         'model_family': [
@@ -936,7 +1070,7 @@ def build_training_command(script_path: Path, model_id: int, training_params: Di
         'model_type': training_params.get('model_type', 'unet'),
         'data_path': training_params.get('data_path'),
         'batch_size': training_params.get('batch_size', 32),
-        'epochs': training_params.get('epochs', 10),
+        'epochs': training_params.get('epochs', 1),
         'learning_rate': training_params.get('learning_rate', 0.001),
         'validation_split': training_params.get('validation_split', 0.2),
         'crop_size': training_params.get('crop_size', 128),
@@ -961,6 +1095,13 @@ def build_training_command(script_path: Path, model_id: int, training_params: Di
         'device': training_params.get('device', 'auto'),
         'model_family': training_params.get('model_family', 'UNet-Coronary'),
         'loss_function': training_params.get('loss_function', 'combined'),
+        'primary_metric': training_params.get('primary_metric', 'dice'),
+        # Model architecture parameters
+        'model_size': training_params.get('model_size', 'standard'),
+        'custom_channels': training_params.get('custom_channels', ''),
+        'use_attention': training_params.get('use_attention', False),
+        'use_deep_architecture': training_params.get('use_deep_architecture', False),
+        'use_residual_connections': training_params.get('use_residual_connections', False),
     }
     
     # Convert parameters to command line arguments
@@ -992,7 +1133,7 @@ def initialize_mlflow_tracking(model_id: int, training_params: Dict[str, Any]) -
             mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000'))
             
             # Get the experiment name from training parameters
-            experiment_name = training_params.get('mlflow_experiment', 'coronary-experiments')
+            experiment_name = training_params.get('mlflow_experiment', 'coronary-experiments-fixed')
             mlflow.set_experiment(experiment_name)
             
             try:
@@ -1008,7 +1149,7 @@ def initialize_mlflow_tracking(model_id: int, training_params: Dict[str, Any]) -
         mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000'))
         
         # Get experiment name from training parameters or use default
-        experiment_name = training_params.get('mlflow_experiment', 'coronary-experiments')
+        experiment_name = training_params.get('mlflow_experiment', 'coronary-experiments-fixed')
         
         # Check if we need to create a new experiment
         create_new_experiment = training_params.get('create_new_experiment', False)
@@ -1570,7 +1711,7 @@ def train_model_task(self, model_id: int, training_params: Dict[str, Any]) -> Di
                 'status': 'training_started',
                 'model_id': model_id,
                 'current_epoch': 0,
-                'total_epochs': training_params.get('epochs', 10),
+                'total_epochs': training_params.get('epochs', 1),
                 'progress_percent': 0,  # Start at 0%
                 'message': 'Preparing training environment'
             }
@@ -1580,7 +1721,7 @@ def train_model_task(self, model_id: int, training_params: Dict[str, Any]) -> Di
         def training_callback(epoch=None, total_epochs=None, train_loss=None, val_loss=None, train_dice=None, val_dice=None, **kwargs):
             """Callback to update training progress"""
             try:
-                # Check if training should be stopped
+                # Check if training should be stopped - EARLY INTERRUPTION CHECK
                 if training_stop_flags.get(model_id, threading.Event()).is_set():
                     logger.info(f"Training stop requested for model {model_id}")
                     return True  # Signal to stop training
@@ -1588,6 +1729,29 @@ def train_model_task(self, model_id: int, training_params: Dict[str, Any]) -> Di
                 # Update model in database
                 update_fields = []
                 
+                # Also add a special callback for dataset loading phase
+                loading_status = kwargs.get('loading_status')
+                if loading_status:
+                    # Check for stop signal even during loading
+                    if training_stop_flags.get(model_id, threading.Event()).is_set():
+                        logger.info(f"Training stop requested during {loading_status} for model {model_id}")
+                        raise InterruptedError(f"Training stopped by user during {loading_status}")
+                    
+                    # Update progress for dataset loading
+                    progress_data = {
+                        'model_id': model_id,
+                        'status': 'loading_dataset',
+                        'message': f'Loading dataset: {loading_status}',
+                        'loading_phase': loading_status
+                    }
+                    
+                    self.update_state(
+                        state='PROGRESS',
+                        meta=progress_data
+                    )
+                    return False  # Continue loading
+                
+                # Update model in database
                 if epoch is not None:
                     model.current_epoch = epoch + 1  # +1 because we're 0-indexed in the code but 1-indexed in UI
                     update_fields.append('current_epoch')
@@ -1656,9 +1820,13 @@ def train_model_task(self, model_id: int, training_params: Dict[str, Any]) -> Di
                 return False
         
         # Direct training function call
+        # Add Celery task ID to training params for status updates
+        training_params_with_task = training_params.copy()
+        training_params_with_task['celery_task_id'] = self.request.id
+        
         result = run_training_direct(
             model_id=model_id,
-            training_params=training_params,
+            training_params=training_params_with_task,
             progress_callback=training_callback
         )
         
@@ -1669,10 +1837,64 @@ def train_model_task(self, model_id: int, training_params: Dict[str, Any]) -> Di
         # Update model status based on result
         if result['success']:
             model.status = 'completed'
-            model.best_val_dice = result.get('best_val_dice', model.val_dice)
-            # Don't save training logs to database - they're saved in files
-            # Save only specific fields to preserve mlflow_run_id and training_data_info
-            model.save(update_fields=['status', 'best_val_dice'])
+            
+            # Update all metrics from training result
+            update_fields = ['status']
+            
+            # Update val_dice and best_val_dice
+            if 'val_dice' in result and result['val_dice'] is not None:
+                model.val_dice = result['val_dice']
+                update_fields.append('val_dice')
+                
+            if 'best_val_dice' in result and result['best_val_dice'] is not None:
+                model.best_val_dice = result['best_val_dice']
+                update_fields.append('best_val_dice')
+            elif model.val_dice is not None:
+                # Use val_dice as best_val_dice if best_val_dice not provided
+                model.best_val_dice = model.val_dice
+                update_fields.append('best_val_dice')
+                
+            # Update other training metrics
+            if 'train_dice' in result and result['train_dice'] is not None:
+                model.train_dice = result['train_dice']
+                update_fields.append('train_dice')
+                
+            if 'train_loss' in result and result['train_loss'] is not None:
+                model.train_loss = result['train_loss'] 
+                update_fields.append('train_loss')
+                
+            if 'val_loss' in result and result['val_loss'] is not None:
+                model.val_loss = result['val_loss']
+                update_fields.append('val_loss')
+                
+            # Update IoU metrics if available
+            if 'val_iou' in result and result['val_iou'] is not None:
+                model.val_iou = result['val_iou']
+                update_fields.append('val_iou')
+                
+            if 'best_val_iou' in result and result['best_val_iou'] is not None:
+                model.best_val_iou = result['best_val_iou']
+                update_fields.append('best_val_iou')
+                
+            if 'train_iou' in result and result['train_iou'] is not None:
+                model.train_iou = result['train_iou']
+                update_fields.append('train_iou')
+            
+            # Save all updated fields
+            model.save(update_fields=update_fields)
+            logger.info(f"Updated model {model_id} with metrics: {dict((field, getattr(model, field)) for field in update_fields if field != 'status')}")
+            
+            # Additional backup: sync latest metrics from MLflow
+            try:
+                if model.mlflow_run_id:
+                    logger.info(f"Performing backup sync of metrics from MLflow for model {model_id}")
+                    sync_successful = sync_model_metrics_from_mlflow(model_id, model.mlflow_run_id)
+                    if sync_successful:
+                        logger.info(f"Successfully synced additional metrics from MLflow for model {model_id}")
+                    else:
+                        logger.warning(f"MLflow backup sync failed for model {model_id}")
+            except Exception as e:
+                logger.warning(f"MLflow backup sync error for model {model_id}: {e}")
             
             logger.info(f"Training completed successfully for model ID: {model_id}")
             logger.info(f"Final metrics - Best Val Dice: {result.get('best_val_dice', 0):.4f}, Final Epoch: {result.get('final_epoch', 0)}, Training Time: {result.get('training_time', 0):.2f}s")
@@ -1977,6 +2199,53 @@ def stop_training_task(self, model_id: int) -> Dict[str, Any]:
         # Try to find and kill the training process
         killed_processes = kill_training_processes(model_id)
         
+        # Handle MLflow run cleanup if training was stopped
+        if model.mlflow_run_id:
+            try:
+                import mlflow
+                logger.info(f"Finalizing MLflow run {model.mlflow_run_id} for stopped training")
+                
+                # Try to set the run as the active run and finalize it
+                try:
+                    mlflow.start_run(run_id=model.mlflow_run_id)
+                    
+                    # Set status tags
+                    mlflow.set_tag('training_status', 'stopped_by_user')
+                    mlflow.set_tag('stop_requested', 'true')
+                    mlflow.set_tag('stopped_at', datetime.now().isoformat())
+                    
+                    # Log final metrics if available
+                    if model.current_epoch:
+                        mlflow.log_metric('final_epoch', model.current_epoch)
+                    if model.train_loss:
+                        mlflow.log_metric('final_train_loss', model.train_loss)
+                    if model.val_loss:
+                        mlflow.log_metric('final_val_loss', model.val_loss)
+                    if model.train_dice:
+                        mlflow.log_metric('final_train_dice', model.train_dice)
+                    if model.val_dice:
+                        mlflow.log_metric('final_val_dice', model.val_dice)
+                    
+                    # End the run
+                    mlflow.end_run(status='KILLED')
+                    logger.info(f"MLflow run {model.mlflow_run_id} ended with KILLED status")
+                    
+                except Exception as mlflow_error:
+                    logger.warning(f"Failed to properly end MLflow run {model.mlflow_run_id}: {mlflow_error}")
+                    # Try alternative approach - mark as failed
+                    try:
+                        from mlflow.tracking import MlflowClient
+                        client = MlflowClient()
+                        client.set_terminated(model.mlflow_run_id, status='KILLED')
+                        logger.info(f"MLflow run {model.mlflow_run_id} marked as KILLED via client")
+                    except Exception as client_error:
+                        logger.error(f"Failed to mark MLflow run as KILLED: {client_error}")
+                        
+            except ImportError:
+                logger.warning("MLflow not available for run cleanup")
+            except Exception as e:
+                logger.error(f"Error during MLflow cleanup for model {model_id}: {e}")
+        
         # Update model status
         model.status = 'stopped'
         model.stop_requested = True
@@ -2249,3 +2518,65 @@ def sync_mlflow_data_task():
             'success': False,
             'error': str(e)
         }
+
+def sync_model_metrics_from_mlflow(model_id: int, mlflow_run_id: str) -> bool:
+    """
+    Synchronize latest metrics from MLflow to Django model
+    Uses MlflowClient to get the most recent values by timestamp
+    """
+    try:
+        import mlflow
+        from mlflow.tracking import MlflowClient
+        from core.apps.ml_manager.models import MLModel
+        
+        logger.info(f"Syncing metrics from MLflow for model {model_id}, run {mlflow_run_id}")
+        
+        client = MlflowClient()
+        model = MLModel.objects.get(id=model_id)
+        
+        # Get latest values for each metric we care about
+        metrics_to_sync = [
+            'best_val_dice', 'val_dice', 'train_dice',
+            'best_val_iou', 'val_iou', 'train_iou', 
+            'train_loss', 'val_loss'
+        ]
+        
+        synced_metrics = {}
+        updated_fields = []
+        
+        for metric_name in metrics_to_sync:
+            try:
+                # Get metric history and take the latest value
+                metric_history = client.get_metric_history(mlflow_run_id, metric_name)
+                if metric_history:
+                    # Sort by timestamp and take the latest value
+                    latest_metric = max(metric_history, key=lambda x: x.timestamp)
+                    synced_metrics[metric_name] = latest_metric.value
+                    logger.debug(f"Found latest {metric_name}: {latest_metric.value}")
+            except Exception as e:
+                logger.debug(f"Metric {metric_name} not found in MLflow: {e}")
+        
+        if not synced_metrics:
+            logger.warning(f"No metrics found in MLflow for model {model_id}")
+            return False
+        
+        # Update Django model with latest MLflow metrics
+        for metric_name, value in synced_metrics.items():
+            if hasattr(model, metric_name):
+                old_value = getattr(model, metric_name)
+                if old_value != value:
+                    setattr(model, metric_name, value)
+                    updated_fields.append(metric_name)
+                    logger.info(f"Updated {metric_name}: {old_value} → {value}")
+        
+        if updated_fields:
+            model.save(update_fields=updated_fields)
+            logger.info(f"Successfully synced {len(updated_fields)} metrics from MLflow for model {model_id}")
+            return True
+        else:
+            logger.info(f"All metrics already up to date for model {model_id}")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Failed to sync metrics from MLflow for model {model_id}: {e}")
+        return False

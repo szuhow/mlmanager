@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from . import views_model_visualization
 
 app_name = 'ml_manager'
 
@@ -17,6 +18,14 @@ urlpatterns = [
     path('inference/results/', views.InferenceResultListView.as_view(), name='inference-results'),
     path('inference/result/<int:pk>/', views.InferenceResultView.as_view(), name='inference-result'),
     path('model/<int:pk>/save-as-template/', views.SaveAsTemplateView.as_view(), name='save-as-template'),
+    
+    # Model Architecture Visualization URLs
+    path('architecture/', views_model_visualization.model_architecture_dashboard, name='model-architecture-dashboard'),
+    path('api/models/visualize/', views_model_visualization.create_model_visualization, name='api-model-visualize'),
+    path('api/models/compare/', views_model_visualization.compare_models_view, name='api-model-compare'),
+    path('api/models/templates/', views_model_visualization.get_model_templates, name='api-model-templates'),
+    path('api/models/download-architecture/<str:model_config_b64>/', views_model_visualization.download_model_architecture, name='api-download-architecture'),
+    path('api/docs/', views_model_visualization.model_architecture_api_docs, name='api-docs'),
     
     # Training template URLs
     path('templates/', views.TrainingTemplateListView.as_view(), name='template-list'),

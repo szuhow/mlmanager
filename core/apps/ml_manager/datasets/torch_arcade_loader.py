@@ -845,12 +845,14 @@ def create_arcade_dataloader(
     else:
         raise ValueError(f"Unknown task: {task}. Supported tasks: binary_segmentation, semantic_segmentation, artery_classification, semantic_segmentation_binary, stenosis_detection, stenosis_segmentation")
     
-    # Create DataLoader
+    # Create DataLoader with proper process cleanup settings
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
+        persistent_workers=False,  # Disable persistent workers to prevent zombie processes
+        pin_memory=False,  # Disable pin_memory to reduce memory pressure in Docker
         **kwargs
     )
     

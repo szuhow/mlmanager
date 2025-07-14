@@ -17,8 +17,9 @@ if core_path not in sys.path:
 if ml_path not in sys.path:
     sys.path.append(ml_path)
 
-# Set up Django (if not already done)
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.config.settings.development')
+# Set up Django (if not already done) - Use environment settings or default
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 
+                     os.environ.get('DJANGO_SETTINGS_MODULE', 'core.config.settings.development'))
 
 # Initialize Django to get settings
 django.setup()
@@ -159,9 +160,33 @@ class TrainingCallback:
             self.model.train_iou = logs.get('train_iou', 0.0)
             self.model.val_iou = logs.get('val_iou', 0.0)
             
-            # Update best validation dice and iou if current is better
+            # Get primary metric information from training logs
+            primary_metric_type = logs.get('primary_metric_type', 'dice')
+            primary_metric_name = logs.get('primary_metric_name', 'Dice')
+            train_metric_name = logs.get('train_metric_name', 'Training Dice')
+            val_metric_name = logs.get('val_metric_name', 'Validation Dice')
+            
+            # Store primary metric info in model for GUI display
+            if hasattr(self.model, 'primary_metric_type'):
+                self.model.primary_metric_type = primary_metric_type
+            if hasattr(self.model, 'primary_metric_name'):
+                self.model.primary_metric_name = primary_metric_name
+            if hasattr(self.model, 'train_metric_name'):
+                self.model.train_metric_name = train_metric_name
+            if hasattr(self.model, 'val_metric_name'):
+                self.model.val_metric_name = val_metric_name
+            
+            # Update best validation metrics based on primary metric
             current_val_dice = logs.get('val_dice', 0.0)
             current_val_iou = logs.get('val_iou', 0.0)
+            
+            # Determine which metric is primary for "best" tracking
+            if primary_metric_type == 'iou':
+                current_primary_metric = current_val_iou
+                best_field_name = 'best_val_iou'
+            else:
+                current_primary_metric = current_val_dice  
+                best_field_name = 'best_val_dice'
             
             # Initialize best values if this is the first epoch or if current is better
             if self.model.best_val_dice is None or current_val_dice > self.model.best_val_dice:
@@ -245,42 +270,63 @@ class TrainingCallback:
             logging.error(f"[CALLBACK] Traceback: {traceback.format_exc()}")
     
     def sync_metrics_from_mlflow(self):
-        """Synchronize metrics from MLflow to Django model"""
+        """Synchronize metrics from MLflow to Django model - get latest values"""
         try:
             import mlflow
+            from mlflow.tracking import MlflowClient
             logging.info(f"[CALLBACK] Syncing metrics from MLflow for model {self.model_id}")
             
-            # Get MLflow run data
-            run = mlflow.get_run(self.run_id)
-            metrics = run.data.metrics
+            # Use MlflowClient to get latest metric values by timestamp
+            client = MlflowClient()
             
-            logging.info(f"[CALLBACK] MLflow metrics: {metrics}")
+            # Get latest values for each metric we care about
+            metrics_to_sync = [
+                'best_val_dice', 'val_dice', 'train_dice',
+                'best_val_iou', 'val_iou', 'train_iou', 
+                'train_loss', 'val_loss'
+            ]
             
-            # Update Django model with MLflow metrics
-            if 'best_val_dice' in metrics:
-                self.model.best_val_dice = metrics['best_val_dice']
-                logging.info(f"[CALLBACK] Updated best_val_dice from MLflow: {metrics['best_val_dice']}")
+            synced_metrics = {}
+            for metric_name in metrics_to_sync:
+                try:
+                    # Get metric history and take the latest value
+                    metric_history = client.get_metric_history(self.run_id, metric_name)
+                    if metric_history:
+                        # Sort by timestamp and take the latest value
+                        latest_metric = max(metric_history, key=lambda x: x.timestamp)
+                        synced_metrics[metric_name] = latest_metric.value
+                        logging.info(f"[CALLBACK] Found latest {metric_name}: {latest_metric.value}")
+                except Exception as e:
+                    logging.debug(f"[CALLBACK] Metric {metric_name} not found in MLflow: {e}")
             
-            if 'best_val_iou' in metrics:
-                self.model.best_val_iou = metrics['best_val_iou']
-                logging.info(f"[CALLBACK] Updated best_val_iou from MLflow: {metrics['best_val_iou']}")
+            logging.info(f"[CALLBACK] Synced metrics from MLflow: {synced_metrics}")
+            
+            # Update Django model with latest MLflow metrics
+            if 'best_val_dice' in synced_metrics:
+                self.model.best_val_dice = synced_metrics['best_val_dice']
+                logging.info(f"[CALLBACK] Updated best_val_dice from MLflow: {synced_metrics['best_val_dice']}")
+            
+            if 'best_val_iou' in synced_metrics:
+                self.model.best_val_iou = synced_metrics['best_val_iou']
+                logging.info(f"[CALLBACK] Updated best_val_iou from MLflow: {synced_metrics['best_val_iou']}")
             
             # Update current epoch metrics
-            if 'val_dice' in metrics:
-                self.model.val_dice = metrics['val_dice']
-            if 'val_iou' in metrics:
-                self.model.val_iou = metrics['val_iou']
-            if 'train_dice' in metrics:
-                self.model.train_dice = metrics['train_dice']
-            if 'train_iou' in metrics:
-                self.model.train_iou = metrics['train_iou']
-            if 'train_loss' in metrics:
-                self.model.train_loss = metrics['train_loss']
-            if 'val_loss' in metrics:
-                self.model.val_loss = metrics['val_loss']
+            if 'val_dice' in synced_metrics:
+                self.model.val_dice = synced_metrics['val_dice']
+                logging.info(f"[CALLBACK] Updated val_dice from MLflow: {synced_metrics['val_dice']}")
+            if 'val_iou' in synced_metrics:
+                self.model.val_iou = synced_metrics['val_iou']
+            if 'train_dice' in synced_metrics:
+                self.model.train_dice = synced_metrics['train_dice']
+            if 'train_iou' in synced_metrics:
+                self.model.train_iou = synced_metrics['train_iou']
+            if 'train_loss' in synced_metrics:
+                self.model.train_loss = synced_metrics['train_loss']
+            if 'val_loss' in synced_metrics:
+                self.model.val_loss = synced_metrics['val_loss']
             
             self.model.save()
-            logging.info(f"[CALLBACK] Successfully synced metrics from MLflow to Django model")
+            logging.info(f"[CALLBACK] Successfully synced latest metrics from MLflow to Django model")
             
         except Exception as e:
             logging.error(f"[CALLBACK] Failed to sync metrics from MLflow: {e}")

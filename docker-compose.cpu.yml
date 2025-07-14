@@ -1,0 +1,184 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: coronary_experiments
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  django:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.django
+    volumes:
+      - ../..:/app
+      # - ../../core/data:/app/core/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - db
+      - mlflow
+    environment:
+      - MLFLOW_ARTIFACT_ROOT=/app/core/data/mlflow
+      - TZ=Europe/Warsaw
+      - MPLCONFIGDIR=/tmp/matplotlib
+      - HF_HOME=/tmp/huggingface
+      - HOME=/app
+      - TMPDIR=/tmp
+      - TEMP=/tmp
+      - TMP=/tmp
+    env_file:
+      - ../env/.env.cpu
+    restart: unless-stopped
+    working_dir: /app
+    shm_size: 256m  # Drastically reduced shared memory
+    cpus: 0.5  # Add CPU limit
+    mem_limit: 1g  # Add memory limit
+    command: >
+      sh -c "
+        cd core &&
+        python manage.py migrate &&
+        python manage.py collectstatic --noinput &&
+        python manage.py runserver 0.0.0.0:8000
+      "
+
+  default-worker:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.default-worker
+    volumes:
+      - ../..:/app
+      - ../../core/data:/app/core/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      - redis
+      - db
+      - mlflow
+    env_file:
+      - ../env/.env.cpu
+    environment:
+      - PYTHONPATH=/app:/app/core
+      - DJANGO_SETTINGS_MODULE=core.config.settings.worker
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_ARTIFACT_ROOT=/app/core/data/mlflow
+      - CELERY_WORKER_QUEUES=default,cleanup,inference
+      - TZ=Europe/Warsaw
+      - MPLCONFIGDIR=/tmp/matplotlib
+      - HF_HOME=/tmp/huggingface
+      - INFERENCE_TIMEOUT=300  # 5 minutes
+      - MAX_CONCURRENT_INFERENCE_TASKS=2
+      - HOME=/app
+      - TMPDIR=/tmp
+      - TEMP=/tmp
+      - TMP=/tmp
+    restart: unless-stopped
+    working_dir: /app
+    shm_size: 512m  # Drastically reduced
+    command: celery -A core.config worker --loglevel=info --concurrency=1 --queues=default,cleanup,inference --hostname=default-worker@%h --max-memory-per-child=1000000
+    cpus: 0.5  # Drastically reduced from 1.5
+    mem_limit: 1.5g  # Drastically reduced from 4g
+
+  training-worker:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.training-worker
+    volumes:
+      - ../..:/app
+      - ../../core/data:/app/core/data
+      # - ../../core/data/mlflow:/mlflow
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      - redis
+      - db
+      - mlflow
+    env_file:
+      - ../env/.env.cpu
+    environment:
+      - PYTHONPATH=/app:/app/core
+      - DJANGO_SETTINGS_MODULE=core.config.settings.worker
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_ARTIFACT_ROOT=/app/core/data/mlflow
+      - CELERY_WORKER_QUEUES=training
+      - TRAINING_TIMEOUT=86400  # 24 hours
+      - MAX_CONCURRENT_TRAINING_TASKS=1
+      - TZ=Europe/Warsaw
+      - MPLCONFIGDIR=/tmp/matplotlib
+      - HF_HOME=/tmp/huggingface
+      - HOME=/app
+      - TMPDIR=/tmp
+      - TEMP=/tmp
+      - TMP=/tmp
+      # Resource limits to prevent system slowdown
+      - OMP_NUM_THREADS=2
+      - MKL_NUM_THREADS=2
+      - NUMBA_NUM_THREADS=2
+      - TORCH_NUM_THREADS=2
+    restart: unless-stopped
+    working_dir: /app
+    shm_size: 512m  # Drastically reduced from 1gb
+    command: celery -A core.config worker --loglevel=info --concurrency=1 --queues=training --hostname=training-worker@%h --max-memory-per-child=1500000
+    cpus: 0.8  # Drastically reduced from 1.5
+    mem_limit: 2g  # Drastically reduced from 4g
+
+  mlflow:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.mlflow
+    container_name: mlflow
+    depends_on:
+      - db
+    env_file:
+      - ../env/.env.cpu
+    environment:
+      - MLFLOW_TRACKING_URI=http://0.0.0.0:5000
+      - MLFLOW_BACKEND_STORE_URI=postgresql://postgres:postgres@db:5432/coronary_experiments
+      - MLFLOW_ARTIFACT_ROOT=/app/core/data/mlflow
+      - TZ=Europe/Warsaw
+    ports:
+      - "5000:5000"
+    volumes:
+      # MLflow artifacts w kontenerze pod /app/core/data/mlflow
+      - ../../core/data/mlflow:/app/core/data/mlflow
+      # Mount modeli dla kompatybilności (tylko do odczytu)
+      - ../../core/data/models:/app/core/data/models:ro
+      - ../../core/data/logs:/app/core/data/logs:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://postgres:postgres@db:5432/coronary_experiments
+      --default-artifact-root /app/core/data/mlflow
+      --host 0.0.0.0
+      --port 5000
+    restart: unless-stopped
+    cpus: 0.3  # Add CPU limit for MLflow
+    mem_limit: 512m  # Add memory limit for MLflow
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  redis_data:
+  postgres_data:

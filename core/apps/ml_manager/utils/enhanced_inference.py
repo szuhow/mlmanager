@@ -351,7 +351,14 @@ def run_custom_inference(model_path, input_image_path, output_dir, config, devic
                     state_dict[key] = state_dict[key].to(device)
         
         # Get model configuration - prioritize state_dict detection over metadata
-        model_type = metadata.get('model_architecture', config.get('model_type', 'unet')) if metadata else config.get('model_type', 'unet')
+        # Handle model_architecture which can be a dict with detailed config
+        model_architecture = metadata.get('model_architecture', {}) if metadata else {}
+        if isinstance(model_architecture, dict):
+            # Extract the base model type from architecture config (should be configurable_monai_unet for our models)
+            model_type = config.get('model_type', 'configurable_monai_unet')
+        else:
+            # Fallback for legacy string format
+            model_type = model_architecture if isinstance(model_architecture, str) else config.get('model_type', 'unet')
         
         # Always try to infer input channels from state_dict (most reliable method)
         in_channels = 3  # default fallback
@@ -398,6 +405,20 @@ def run_custom_inference(model_path, input_image_path, output_dir, config, devic
         model_config = get_default_model_config(model_type)
         model_config["in_channels"] = in_channels
         model_config["out_channels"] = out_channels
+        
+        # If we have detailed architecture config, use it to override defaults
+        if isinstance(model_architecture, dict) and model_architecture:
+            logger.info(f"Using detailed architecture config: {model_architecture}")
+            # Override model config with specific architecture parameters
+            if 'custom_channels' in model_architecture:
+                try:
+                    channels_str = model_architecture['custom_channels']
+                    channels = tuple(int(x.strip()) for x in channels_str.split(','))
+                    model_config['channels'] = channels
+                    logger.info(f"Using custom channels: {channels}")
+                except (ValueError, AttributeError) as e:
+                    logger.warning(f"Could not parse custom channels '{model_architecture.get('custom_channels')}': {e}")
+        
         logger.info(f"Creating model with config: {model_config}")
         model, arch_info = create_model_from_registry(model_type, 'cpu', **model_config)  # Force CPU
         

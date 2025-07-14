@@ -1,9 +1,148 @@
 import os
+import torch.multiprocessing as mp
 import logging
 import signal
 import sys
 import threading
 from pathlib import Path
+
+# Check for early interruption signals during dataset loading
+def check_training_interruption(model_id, phase="training"):
+    """Check if training should be interrupted"""
+    try:
+        from .tasks.tasks import training_stop_flags
+        if training_stop_flags.get(model_id, None) and training_stop_flags[model_id].is_set():
+            logger.info(f"Training interruption requested during {phase} for model {model_id}")
+            raise InterruptedError(f"Training stopped by user during {phase}")
+    except ImportError:
+        pass  # If tasks module not available, continue
+    except Exception as e:
+        logger.warning(f"Error checking training interruption: {e}")
+
+def fix_mlflow_container_paths():
+    """
+    Fix MLflow paths to work correctly in Docker container.
+    Prevents MLflow from trying to access host paths like /home/rafal
+    """
+    # Force MLflow to use container paths
+    container_artifacts_root = '/app/core/data/mlflow'
+    
+    # Set MLflow artifact root to container path
+    os.environ['MLFLOW_ARTIFACT_ROOT'] = container_artifacts_root
+    os.environ['MLFLOW_DEFAULT_ARTIFACT_ROOT'] = container_artifacts_root
+    os.environ['MLFLOW_ARTIFACTS_DESTINATION'] = container_artifacts_root
+    logging.info(f"[MLFLOW_FIX] Set MLFLOW artifact roots to {container_artifacts_root}")
+    
+    # Override any host paths that might leak through
+    original_home = os.environ.get('HOME', '')
+    if original_home and '/home/' in original_home:
+        os.environ['HOME'] = '/app'
+        logging.info(f"[MLFLOW_FIX] Changed HOME from {original_home} to /app")
+    
+    # Force HOME to container path regardless
+    os.environ['HOME'] = '/app'
+    os.environ['USERPROFILE'] = '/app'  # Windows equivalent
+    os.environ['USER'] = 'appuser'
+    
+    # Force temp directories to container paths
+    os.environ['TMPDIR'] = '/tmp'
+    os.environ['TMP'] = '/tmp'
+    os.environ['TEMP'] = '/tmp'
+    
+    # Monkey patch os.makedirs to prevent host directory creation
+    original_makedirs = os.makedirs
+    def safe_makedirs(name, mode=0o777, exist_ok=False):
+        if isinstance(name, str) and '/home/rafal' in name:
+            safe_name = name.replace('/home/rafal', '/app/core/data/mlflow')
+            logging.warning(f"[MLFLOW_FIX] Redirected makedirs from {name} to {safe_name}")
+            return original_makedirs(safe_name, mode, exist_ok)
+        return original_makedirs(name, mode, exist_ok)
+    os.makedirs = safe_makedirs
+    
+    # Import pathlib and patch it too
+    try:
+        import pathlib
+        original_home = pathlib.Path.home
+        def safe_home():
+            return pathlib.Path('/app')
+        pathlib.Path.home = staticmethod(safe_home)
+        logging.info("[MLFLOW_FIX] Patched pathlib.Path.home")
+    except Exception as e:
+        logging.warning(f"[MLFLOW_FIX] Could not patch pathlib: {e}")
+    
+    logging.info("[MLFLOW_FIX] Applied comprehensive container path fixes for MLflow")
+
+# Apply MLflow container path fixes immediately
+fix_mlflow_container_paths()
+
+# Set resource limits to prevent system slowdown
+def set_resource_limits():
+    """Set CPU and memory limits to prevent system slowdown during training"""
+    try:
+        # Limit number of threads for various libraries
+        os.environ.setdefault('OMP_NUM_THREADS', '2')
+        os.environ.setdefault('MKL_NUM_THREADS', '2') 
+        os.environ.setdefault('NUMBA_NUM_THREADS', '2')
+        os.environ.setdefault('TORCH_NUM_THREADS', '2')
+        
+        # Set PyTorch to use limited threads
+        import torch
+        torch.set_num_threads(2)
+        
+        logging.info("[RESOURCE_LIMITS] Applied thread limits to prevent system slowdown")
+        
+        # Set process priority to be less aggressive (higher nice value = lower priority)
+        try:
+            import psutil
+            current_process = psutil.Process()
+            current_process.nice(10)  # Lower priority
+            logging.info("[RESOURCE_LIMITS] Set process priority to nice=10 (lower priority)")
+        except Exception as e:
+            logging.warning(f"[RESOURCE_LIMITS] Could not set process priority: {e}")
+            
+    except Exception as e:
+        logging.warning(f"[RESOURCE_LIMITS] Error setting resource limits: {e}")
+
+# Apply resource limits
+set_resource_limits()
+
+# Force spawn method to prevent zombie processes from DataLoader workers
+try:
+    mp.set_start_method('spawn', force=True)
+    logging.info("[MULTIPROCESSING] Set start method to 'spawn' to prevent zombie processes")
+except RuntimeError as e:
+    logging.warning(f"[MULTIPROCESSING] Could not set start method: {e}")
+
+# Also ensure torch uses spawn method
+import torch
+try:
+    torch.multiprocessing.set_start_method('spawn', force=True)
+    logging.info("[TORCH] Set torch multiprocessing to 'spawn'")
+except RuntimeError as e:
+    logging.warning(f"[TORCH] Could not set torch start method: {e}")
+# Celery status update function
+def update_celery_task_status(task_id, state='PROGRESS', meta=None):
+    """Update Celery task status from training subprocess"""
+    if not task_id:
+        return
+        
+    try:
+        # Try to connect to Redis and update task status
+        import redis
+        from celery import current_app
+        from celery.result import AsyncResult
+        
+        # Get Celery app connection
+        redis_client = redis.Redis.from_url(current_app.conf.broker_url)
+        
+        # Create AsyncResult and update state
+        result = AsyncResult(task_id, app=current_app)
+        result.update_state(state=state, meta=meta or {})
+        
+        startup_logger.info(f"[CELERY] Updated task {task_id} status to {state}")
+        
+    except Exception as e:
+        startup_logger.warning(f"[CELERY] Failed to update task status: {e}")
 
 def setup_python_path():
     """Setup comprehensive Python path for container and local environments"""
@@ -74,8 +213,35 @@ def signal_handler(signum, frame):
     global STOP_TRAINING
     try:
         logging.info(f"[SIGNAL] Received signal {signum}, initiating graceful shutdown...")
-    except:
-        print(f"[SIGNAL] Received signal {signum}, initiating graceful shutdown...")
+        
+        # Try to end MLflow run gracefully if active
+        try:
+            import mlflow
+            if mlflow.active_run():
+                run_id = mlflow.active_run().info.run_id
+                logging.info(f"[SIGNAL] Ending MLflow run {run_id} due to signal {signum}")
+                
+                # Set termination tags
+                mlflow.set_tag('training_status', 'terminated_by_signal')
+                mlflow.set_tag('termination_signal', str(signum))
+                mlflow.set_tag('terminated_at', datetime.now().isoformat())
+                
+                # End run with appropriate status
+                status = 'KILLED' if signum == signal.SIGKILL else 'FAILED'
+                mlflow.end_run(status=status)
+                logging.info(f"[SIGNAL] MLflow run ended with status: {status}")
+        except Exception as mlflow_error:
+            try:
+                logging.warning(f"[SIGNAL] Failed to end MLflow run gracefully: {mlflow_error}")
+            except:
+                print(f"[SIGNAL] Failed to end MLflow run gracefully: {mlflow_error}")
+        
+    except Exception as e:
+        try:
+            logging.error(f"[SIGNAL] Error in signal handler: {e}")
+        except:
+            print(f"[SIGNAL] Error in signal handler: {e}")
+    
     STOP_TRAINING.set()
 
 def setup_signal_handlers():
@@ -151,9 +317,27 @@ def log_artifact_to_model_directory(artifact_path: str, model_directory: str = N
     logging.info(f"[ARTIFACT_DEBUG] Called with artifact_path={artifact_path}, model_directory={model_directory}, artifact_type={artifact_type}")
     
     try:
+        # Verify MLflow configuration before logging
+        tracking_uri = mlflow.get_tracking_uri()
+        logging.info(f"[MLFLOW_DEBUG] Tracking URI: {tracking_uri}")
+        
+        # Check current MLflow run
+        current_run = mlflow.active_run()
+        if current_run:
+            logging.info(f"[MLFLOW_DEBUG] Active run ID: {current_run.info.run_id}")
+            logging.info(f"[MLFLOW_DEBUG] Artifact URI: {current_run.info.artifact_uri}")
+        else:
+            logging.warning("[MLFLOW_DEBUG] No active MLflow run found")
+        
         # PRIMARY: Log to MLflow - this is the main storage
         if not os.path.exists(artifact_path):
             logging.warning(f"[MLFLOW] Artifact file not found for MLflow logging: {artifact_path}")
+            return
+            
+        # Additional path validation to prevent host path access
+        if '/home/' in artifact_path and not artifact_path.startswith('/app/'):
+            logging.error(f"[MLFLOW_ERROR] Dangerous host path detected: {artifact_path}")
+            logging.error("[MLFLOW_ERROR] Artifact path should be within container (/app/)")
             return
             
         if artifact_type:
@@ -812,11 +996,22 @@ def save_enhanced_training_curves(epoch_history, model_dir, epoch):
         print(f"Could not save enhanced training curves: {e}")
         return None
 
-def get_default_model_config(model_type):
-    """Get default configuration for a model type"""
+def get_default_model_config(model_type, args=None):
+    """Get default configuration for a model type with custom architecture options"""
+    logger.info(f"[CONFIG] get_default_model_config called with model_type={model_type}")
+    logger.info(f"[CONFIG] args provided: {args is not None}")
+    
     # Default configurations for common architectures
     default_configs = {
         'unet': {
+            'spatial_dims': 2,
+            'in_channels': 1,
+            'out_channels': 1,
+            'channels': (16, 32, 64, 128, 256),
+            'strides': (2, 2, 2, 2),
+            'num_res_units': 2,
+        },
+        'configurable_monai_unet': {
             'spatial_dims': 2,
             'in_channels': 1,
             'out_channels': 1,
@@ -834,17 +1029,86 @@ def get_default_model_config(model_type):
         }
     }
     
-    # Check if architecture has default config
+    # Get base config
+    base_config = default_configs.get(model_type, {}).copy()
+    logger.info(f"[CONFIG] Base config for {model_type}: {base_config}")
+    
+    # Apply model architecture customizations if args are provided
+    if args:
+        # Check different ways args might contain model_size/custom_channels
+        model_size = None
+        custom_channels = None
+        
+        # Method 1: Direct attributes on args
+        if hasattr(args, 'model_size'):
+            model_size = args.model_size
+            logger.info(f"[CONFIG] Found model_size in args: {model_size}")
+        if hasattr(args, 'custom_channels'):
+            custom_channels = args.custom_channels
+            logger.info(f"[CONFIG] Found custom_channels in args: {custom_channels}")
+            
+        # Method 2: model_architecture dict
+        if hasattr(args, 'model_architecture') and args.model_architecture:
+            model_arch = args.model_architecture
+            model_size = model_arch.get('model_size', model_size)
+            custom_channels = model_arch.get('custom_channels', custom_channels)
+            logger.info(f"[CONFIG] From model_architecture - model_size: {model_size}, custom_channels: {custom_channels}")
+        
+        # Method 3: Check if args is a dict
+        if isinstance(args, dict):
+            model_size = args.get('model_size', model_size)
+            custom_channels = args.get('custom_channels', custom_channels)
+            logger.info(f"[CONFIG] From args dict - model_size: {model_size}, custom_channels: {custom_channels}")
+        
+        # Apply size-based channel mapping
+        if model_size and model_size != 'standard':
+            # Size mapping that matches JavaScript in UI
+            size_mapping = {
+                'micro': (8, 16, 32, 64),           # ~100K parameters
+                'tiny': (16, 32, 64, 128, 256),     # ~1.6M parameters
+                'small': (32, 64, 128, 256, 512),   # ~6.5M parameters
+                'standard': (32, 64, 128, 256, 512), # Standard size
+                'large': (32, 64, 128, 256, 512),   # Large with attention
+                'xl': (64, 128, 256, 512, 1024)     # XL size
+            }
+            
+            if model_size in size_mapping:
+                base_config['channels'] = size_mapping[model_size]
+                logger.info(f"[CONFIG] Applied size mapping {model_size} -> channels: {base_config['channels']}")
+            
+        # Apply custom channels if provided (overrides size mapping)
+        if custom_channels:
+            try:
+                if isinstance(custom_channels, str):
+                    # Parse custom channels string like "8,16,32,64"
+                    channels = tuple(int(x.strip()) for x in custom_channels.split(','))
+                    base_config['channels'] = channels
+                    logger.info(f"[CONFIG] Applied custom channels from string: {channels}")
+                elif isinstance(custom_channels, (list, tuple)):
+                    base_config['channels'] = tuple(custom_channels)
+                    logger.info(f"[CONFIG] Applied custom channels from list/tuple: {base_config['channels']}")
+            except (ValueError, AttributeError) as e:
+                logger.warning(f"[CONFIG] Invalid custom channels '{custom_channels}': {e}")
+    
+    
+    # Check if architecture has default config from registry
     try:
-        from core.apps.ml_manager.utils.architecture_registry import registry as architecture_registry
-        arch_info = architecture_registry.get_architecture(model_type)
-        if arch_info and arch_info.default_config:
-            return arch_info.default_config
+        # Import architecture registry with fallback paths
+        arch_registry_mod, ARCH_REGISTRY_AVAILABLE = import_module_flexibly("utils.architecture_registry", "registry", "ARCH_REGISTRY")
+        if ARCH_REGISTRY_AVAILABLE:
+            architecture_registry = arch_registry_mod.registry
+            arch_info = architecture_registry.get_architecture(model_type)
+            if arch_info and arch_info.default_config:
+                # Merge registry config with our customizations
+                registry_config = arch_info.default_config.copy()
+                registry_config.update(base_config)
+                logger.info(f"[CONFIG] Using registry config merged with customizations: {registry_config}")
+                return registry_config
     except:
         pass
     
-    # Return hardcoded default if available
-    return default_configs.get(model_type, {})
+    logger.info(f"[CONFIG] Final config for {model_type}: {base_config}")
+    return base_config
 
 def validate_architecture(model_type):
     """Validate that the specified architecture is available"""
@@ -880,9 +1144,24 @@ def create_model_from_registry(model_type, device, task_type=None, **model_kwarg
     logger.info(f"[ARCH] Task type: {task_type}")
     try:
         logger.info(f"[ARCH] Available architectures in registry: {list(architecture_registry._architectures.keys())}")
+        logger.info(f"[ARCH] Model creation requested: model_type={model_type}")
+        logger.info(f"[ARCH] Model kwargs before mapping: {model_kwargs}")
+        # If channels or custom_channels present, log them explicitly
+        if 'channels' in model_kwargs:
+            logger.info(f"[ARCH] channels: {model_kwargs['channels']}")
+        if 'custom_channels' in model_kwargs:
+            logger.info(f"[ARCH] custom_channels: {model_kwargs['custom_channels']}")
+        if 'n_channels' in model_kwargs:
+            logger.info(f"[ARCH] n_channels: {model_kwargs['n_channels']}")
+        if 'in_channels' in model_kwargs:
+            logger.info(f"[ARCH] in_channels: {model_kwargs['in_channels']}")
+        if 'out_channels' in model_kwargs:
+            logger.info(f"[ARCH] out_channels: {model_kwargs['out_channels']}")
+        if 'n_classes' in model_kwargs:
+            logger.info(f"[ARCH] n_classes: {model_kwargs['n_classes']}")
     except Exception as e:
         logger.warning(f"[ARCH] Could not list available architectures: {e}")
-        
+    
     try:
         # Check if this is a classification task and adapt model selection
         if task_type == 'artery_classification':
@@ -936,16 +1215,27 @@ def create_model_from_registry(model_type, device, task_type=None, **model_kwarg
             logger.info(f"[ARCH] Successfully loaded classification model: {arch_info.display_name}")
             
         # Handle special case for MONAI UNet (legacy compatibility) for segmentation
-        elif model_type in ['unet', 'monai_unet']:
+        elif model_type in ['unet', 'monai_unet', 'configurable_monai_unet']:
             logger.info("[ARCH] Using MONAI UNet with default configuration (special case)")
+            
+            # Get proper configuration including size-based channels
+            default_config = get_default_model_config(model_type, args=None)  # We'll pass kwargs instead
+            logger.info(f"[ARCH] Default config from get_default_model_config: {default_config}")
+            
+            # Override with any user-provided kwargs
+            final_config = default_config.copy()
+            final_config.update(model_kwargs)
+            logger.info(f"[ARCH] Final config after merging with model_kwargs: {final_config}")
+            
             model = MonaiUNet(
-                spatial_dims=model_kwargs.get('spatial_dims', 2),
-                in_channels=model_kwargs.get('in_channels', 1),
-                out_channels=model_kwargs.get('out_channels', 1),
-                channels=model_kwargs.get('channels', (16, 32, 64, 128, 256)),
-                strides=model_kwargs.get('strides', (2, 2, 2, 2)),
-                num_res_units=model_kwargs.get('num_res_units', 2),
+                spatial_dims=final_config.get('spatial_dims', 2),
+                in_channels=final_config.get('in_channels', 1),
+                out_channels=final_config.get('out_channels', 1),
+                channels=final_config.get('channels', (16, 32, 64, 128, 256)),
+                strides=final_config.get('strides', (2, 2, 2, 2)),
+                num_res_units=final_config.get('num_res_units', 2),
             )
+            logger.info(f"[ARCH] Created MONAI UNet with channels: {final_config.get('channels')}")
             # Create a fake arch_info for unet
             from types import SimpleNamespace
             arch_info = SimpleNamespace(
@@ -1007,6 +1297,20 @@ def create_model_from_registry(model_type, device, task_type=None, **model_kwarg
         logger.info(f"  Total parameters: {total_params:,}")
         logger.info(f"  Trainable parameters: {trainable_params:,}")
         logger.info(f"  Device: {device}")
+        
+        # Log final model parameters after creation
+        logger.info(f"[ACTUAL_MODEL] Final model parameters after creation:")
+        logger.info(f"[ACTUAL_MODEL]   Total parameters: {total_params:,}")
+        logger.info(f"[ACTUAL_MODEL]   Trainable parameters: {trainable_params:,}")
+        logger.info(f"[ACTUAL_MODEL]   Model type: {model_type}")
+        logger.info(f"[ACTUAL_MODEL]   Model class: {type(model).__name__}")
+        logger.info(f"[ACTUAL_MODEL]   Device: {device}")
+        
+        # Check for parameter mismatch
+        if total_params > 1_000_000:
+            if 'micro' in str(model_kwargs) or 'tiny' in str(model_kwargs):
+                logger.warning(f"[PARAMETER_MISMATCH] Expected small model but got {total_params:,} parameters!")
+                logger.warning(f"[PARAMETER_MISMATCH] Model kwargs: {model_kwargs}")
         
         return model, arch_info
         
@@ -2265,6 +2569,7 @@ def parse_args():
                        help='Type of dataset to use')
     parser.add_argument('--validation-split', type=float, default=0.2, help='Validation split ratio')
     parser.add_argument('--mlflow-run-id', type=str, help='MLflow run ID')
+    parser.add_argument('--celery-task-id', type=str, help='Celery task ID for status updates')
     parser.add_argument('--model-id', type=int, help='Database model ID for callback')
     # Augmentation parameters
     parser.add_argument('--random-flip', action='store_true', help='Enable random flip augmentation')
@@ -2273,7 +2578,7 @@ def parse_args():
     parser.add_argument('--random-intensity', action='store_true', help='Enable random intensity scaling')
     parser.add_argument('--crop-size', type=int, default=128, help='Size of random crop and target resolution')
     parser.add_argument('--threshold', type=lambda x: None if x.lower() == 'none' else float(x), default=0.5, help='Binary segmentation threshold for hard predictions')
-    parser.add_argument('--num-workers', type=int, default=2, help='Number of data loading workers (reduced for Docker)')
+    parser.add_argument('--num-workers', type=int, default=1, help='Number of data loading workers (conservative for Docker)')
     
     # Learning rate scheduler parameters
     parser.add_argument('--lr-scheduler', type=str, default='none', 
@@ -2322,11 +2627,16 @@ def parse_args():
     
     # Enhanced Training parameters
     parser.add_argument('--loss-function', type=str, default='combined',
-                       choices=['bce', 'dice', 'combined', 'focal', 'focal_segmentation', 'balanced_segmentation', 
+                       choices=['bce', 'dice', 'iou', 'combined', 'focal', 'focal_segmentation', 'balanced_segmentation', 
                                'dice_focused', 'jaccard_based', 'tversky_recall', 'tversky_precision', 
                                'focal_advanced', 'combo_dice_bce_focal', 'boundary_aware', 'weighted_bce_adaptive',
                                'tversky', 'combo_dice_bce', 'soft_dice', 'weighted_bce', 'boundary', 'stable_bce'],
                        help='Loss function type for training')
+    
+    parser.add_argument('--primary-metric', type=str, default='dice',
+                       choices=['dice', 'iou', 'accuracy', 'precision', 'recall', 'f1'],
+                       help='Primary metric for model evaluation and selection (independent of loss function)')
+    
     # Medical Preprocessing parameters
     parser.add_argument('--use-medical-preprocessing', action='store_true',
                        help='Enable advanced medical image preprocessing (CLAHE, unsharp masking, etc.)')
@@ -2379,6 +2689,19 @@ def parse_args():
     parser.add_argument('--use-mixed-precision', action='store_true',
                        help='Enable mixed precision training for performance')
     
+    # Model architecture configuration
+    parser.add_argument('--model-size', type=str, default='standard',
+                       choices=['micro', 'tiny', 'small', 'standard', 'large', 'xl', 'custom'],
+                       help='Model size configuration')
+    parser.add_argument('--custom-channels', type=str, default='',
+                       help='Custom channel configuration for custom model size (comma-separated)')
+    parser.add_argument('--use-attention', action='store_true',
+                       help='Enable attention mechanisms in the model')
+    parser.add_argument('--use-deep-architecture', action='store_true',
+                       help='Enable deeper architecture with more layers')
+    parser.add_argument('--use-residual-connections', action='store_true',
+                       help='Enable residual connections in the model')
+    
     # Prediction parameters
     parser.add_argument('--model-path', type=str, help='Path to trained model weights')
     parser.add_argument('--input-path', type=str, help='Path to input image or directory')
@@ -2401,7 +2724,7 @@ def parse_args():
             "random_scale": False,
             "random_intensity": False,
             "crop_size": 128,
-            "num_workers": 4,
+            "num_workers": 1,  # Conservative for Docker
             "mode": "train"
         }
         import json
@@ -2694,6 +3017,7 @@ def train_model(args):
     
     # Set up logging first thing
     import sys
+    import json  # Add json import at the beginning
     
     # Get model directory from Django model if available, otherwise create one
     model_dir = None
@@ -2821,11 +3145,49 @@ def train_model(args):
     
     # Setup MLflow experiment before handling run
     try:
-        current_script_dir = os.path.dirname(os.path.abspath(__file__))
-        core_dir = os.path.abspath(os.path.join(current_script_dir, '..', '..', 'core', 'apps'))
-        if core_dir not in sys.path:
-            sys.path.append(core_dir)
-        from core.apps.ml_manager.utils.mlflow_utils import setup_mlflow
+        # Import MLflow utils with fallback paths using flexible import
+        mlflow_utils_mod, MLFLOW_UTILS_AVAILABLE = import_module_flexibly("utils.mlflow_utils", "setup_mlflow", "MLFLOW_UTILS")
+        if MLFLOW_UTILS_AVAILABLE:
+            setup_mlflow = mlflow_utils_mod.setup_mlflow
+        else:
+            setup_mlflow = None
+        
+        # Additional MLflow path patches before connection
+        def patch_mlflow_paths():
+            """Additional aggressive MLflow path patches"""
+            try:
+                import mlflow.store.artifact.local_artifact_repo
+                import mlflow.utils.file_utils
+                
+                # Patch mlflow file_utils.mkdir to prevent host path access
+                original_mkdir = mlflow.utils.file_utils.mkdir
+                def safe_mkdir(path):
+                    if isinstance(path, str) and '/home/rafal' in path:
+                        safe_path = path.replace('/home/rafal', '/app/core/data/mlflow')
+                        logger.warning(f"[MLFLOW_PATCH] Redirected mkdir from {path} to {safe_path}")
+                        return original_mkdir(safe_path)
+                    return original_mkdir(path)
+                mlflow.utils.file_utils.mkdir = safe_mkdir
+                
+                # Also patch os.makedirs at MLflow level
+                original_os_makedirs = os.makedirs
+                def mlflow_safe_makedirs(name, mode=0o777, exist_ok=False):
+                    if isinstance(name, str) and '/home/rafal' in name:
+                        safe_name = name.replace('/home/rafal', '/app/core/data/mlflow')
+                        logger.warning(f"[MLFLOW_PATCH] Redirected os.makedirs from {name} to {safe_name}")
+                        return original_os_makedirs(safe_name, mode, exist_ok)
+                    return original_os_makedirs(name, mode, exist_ok)
+                
+                # Apply the patch to os module that MLflow uses
+                import mlflow.utils.file_utils
+                if hasattr(mlflow.utils.file_utils, 'os'):
+                    mlflow.utils.file_utils.os.makedirs = mlflow_safe_makedirs
+                
+                logger.info("[MLFLOW_PATCH] Applied aggressive path patches")
+            except Exception as e:
+                logger.warning(f"[MLFLOW_PATCH] Could not apply patches: {e}")
+        
+        patch_mlflow_paths()
         
         # Setup MLflow connection (experiment is already set by Celery task)
         mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000'))
@@ -2836,12 +3198,12 @@ def train_model(args):
             logger.info(f"[MLFLOW] Connection verified - found {len(experiments)} experiments")
             
             # Get current experiment info (should be set by Celery task)
-            current_experiment = mlflow.get_experiment_by_name('coronary-experiments')
+            current_experiment = mlflow.get_experiment_by_name('coronary-experiments-fixed')
             if current_experiment:
                 logger.info(f"[MLFLOW] Using experiment: {current_experiment.name} (ID: {current_experiment.experiment_id})")
                 logger.info(f"[MLFLOW] Artifact location: {current_experiment.artifact_location}")
             else:
-                logger.warning("[MLFLOW] Could not find 'coronary-experiments' experiment")
+                logger.warning("[MLFLOW] Could not find 'coronary-experiments-fixed' experiment")
         except Exception as verify_error:
             logger.warning(f"[MLFLOW] Connection verification failed: {verify_error}")
             
@@ -2887,8 +3249,14 @@ def train_model(args):
     # Initialize system monitoring for MLflow
     system_monitor = None
     try:
-        from core.apps.ml_manager.utils.system_monitor import SystemMonitor
-        system_monitor = SystemMonitor(log_interval=30, enable_gpu=True)  # Log every 30 seconds
+        # Import system monitor with fallback paths
+        system_monitor_mod, SYSTEM_MONITOR_AVAILABLE = import_module_flexibly("utils.system_monitor", "SystemMonitor", "SYSTEM_MONITOR")
+        if SYSTEM_MONITOR_AVAILABLE:
+            SystemMonitor = system_monitor_mod.SystemMonitor
+            system_monitor = SystemMonitor(log_interval=30, enable_gpu=True)  # Log every 30 seconds
+        else:
+            logger.warning("[MONITORING] SystemMonitor not available")
+            system_monitor = None
         
         # Check if system monitor is enabled
         if system_monitor.enabled:
@@ -3116,8 +3484,22 @@ def train_model(args):
                 train_ds, val_ds = dataset_loaders
                 # Use conservative num_workers to avoid shared memory issues in Docker
                 num_workers = min(getattr(args, 'num_workers', 1), 1)  # Conservative: max 1 worker
-                train_loader = MonaiDataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers)
-                val_loader = MonaiDataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
+                train_loader = MonaiDataLoader(
+                    train_ds, 
+                    batch_size=args.batch_size, 
+                    shuffle=True, 
+                    num_workers=num_workers,
+                    persistent_workers=False,  # Disable persistent workers to prevent zombie processes
+                    pin_memory=False  # Disable pin_memory to reduce memory pressure
+                )
+                val_loader = MonaiDataLoader(
+                    val_ds, 
+                    batch_size=args.batch_size, 
+                    shuffle=False, 
+                    num_workers=num_workers,
+                    persistent_workers=False,  # Disable persistent workers to prevent zombie processes
+                    pin_memory=False  # Disable pin_memory to reduce memory pressure
+                )
                 train_samples = len(train_ds)
                 val_samples = len(val_ds)
                 
@@ -3128,8 +3510,22 @@ def train_model(args):
             train_ds, val_ds = get_monai_datasets(args.data_path, args.validation_split, transform_params, dataset_type=getattr(args, 'dataset_type', None))
             # Use conservative num_workers to avoid shared memory issues in Docker  
             num_workers = min(getattr(args, 'num_workers', 1), 1)  # Conservative: max 1 worker
-            train_loader = MonaiDataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers)
-            val_loader = MonaiDataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
+            train_loader = MonaiDataLoader(
+                train_ds, 
+                batch_size=args.batch_size, 
+                shuffle=True, 
+                num_workers=num_workers,
+                persistent_workers=False,  # Disable persistent workers to prevent zombie processes
+                pin_memory=False  # Disable pin_memory to reduce memory pressure
+            )
+            val_loader = MonaiDataLoader(
+                val_ds, 
+                batch_size=args.batch_size, 
+                shuffle=False, 
+                num_workers=num_workers,
+                persistent_workers=False,  # Disable persistent workers to prevent zombie processes
+                pin_memory=False  # Disable pin_memory to reduce memory pressure
+            )
             train_samples = len(train_ds)
             val_samples = len(val_ds)
 
@@ -3158,7 +3554,7 @@ def train_model(args):
                 'crop_size': getattr(args, 'crop_size', 128),
                 'threshold': getattr(args, 'threshold', 0.5),
                 'dataset_type': getattr(args, 'dataset_type', 'auto'),
-                'num_workers': getattr(args, 'num_workers', 4)
+                'num_workers': getattr(args, 'num_workers', 1)  # Conservative for Docker
             }
             
             # Add dataset-specific paths and file information
@@ -3327,8 +3723,21 @@ def train_model(args):
         else:
             logger.warning("[MODEL CONFIG] No dataset available for class detection, using defaults")
         
+        # Prepare model architecture configuration from command line arguments
+        model_architecture = {
+            'model_size': getattr(args, 'model_size', 'standard'),
+            'custom_channels': getattr(args, 'custom_channels', ''),
+            'use_attention': getattr(args, 'use_attention', False),
+            'use_deep_architecture': getattr(args, 'use_deep_architecture', False),
+            'use_residual_connections': getattr(args, 'use_residual_connections', False)
+        }
+        
+        # Add model_architecture to args for get_default_model_config to use
+        args.model_architecture = model_architecture
+        logger.info(f"[MODEL CONFIG] Model architecture configuration: {model_architecture}")
+        
         # Configure model based on detected parameters
-        model_config = get_default_model_config(args.model_type)
+        model_config = get_default_model_config(args.model_type, args)
         model_config["in_channels"] = input_channels  # Set input channels
         
         # Set output channels based on class detection
@@ -3464,6 +3873,20 @@ def train_model(args):
                 loss_kwargs.update({'sigmoid': True, 'smooth': getattr(args, 'loss_smooth', 1e-5)})
                 logger.info(f"[LOSS CONFIG] Using binary Dice loss")
             loss_function = create_advanced_loss_function('dice', **loss_kwargs)
+        elif args.loss_function == 'iou':
+            # IoU loss
+            logger.info(f"[LOSS CONFIG] Using IoU loss")
+            if class_info and class_info['class_type'] == 'semantic_onehot' and class_info['max_channels'] > 1:
+                logger.info(f"[LOSS CONFIG] Using multi-class IoU loss for {class_info['max_channels']} classes")
+                # Use 1 - IoU as loss (since IoU is a metric, not a loss)
+                from monai.losses import GeneralizedDiceLoss
+                loss_function = GeneralizedDiceLoss(sigmoid=False, softmax=True)
+            else:
+                logger.info(f"[LOSS CONFIG] Using binary IoU loss")
+                # For binary IoU, we can use Dice loss as they are closely related
+                # Or create a custom IoU loss wrapper
+                loss_kwargs.update({'sigmoid': True, 'smooth': getattr(args, 'loss_smooth', 1e-5)})
+                loss_function = create_advanced_loss_function('dice', **loss_kwargs)
         elif args.loss_function == 'tversky':
             # Tversky loss with balanced alpha/beta
             logger.info(f"[LOSS CONFIG] Using Tversky loss (balanced)")
@@ -3530,8 +3953,18 @@ def train_model(args):
         iou_metric = MeanIoU(include_background=True, reduction="mean")
         scaler = torch.cuda.amp.GradScaler()
         
-        best_val_dice = -1
-        best_val_iou = -1
+        # Initialize best metrics based on primary metric (not loss function)
+        if args.primary_metric == 'iou':
+            best_val_metric = -1  # Primary metric (IoU)
+            best_val_dice = -1    # Secondary metric
+            best_val_iou = -1     # Primary metric (same as best_val_metric)
+            primary_metric_name = 'IoU'
+        else:
+            best_val_metric = -1  # Primary metric (Dice for other metrics)
+            best_val_dice = -1    # Primary metric (same as best_val_metric)
+            best_val_iou = -1     # Secondary metric
+            primary_metric_name = 'Dice'
+        
         best_model_path = None
         
         # Initialize Early Stopping if enabled
@@ -3562,6 +3995,20 @@ def train_model(args):
         for epoch in range(args.epochs):
             epoch_start_time = time.time()
             logger.info(f"[EPOCH] Starting epoch {epoch+1}/{args.epochs}")
+            
+            # Update Celery task status if task ID is available
+            if hasattr(args, 'celery_task_id') and args.celery_task_id:
+                update_celery_task_status(
+                    args.celery_task_id,
+                    state='PROGRESS',
+                    meta={
+                        'status': 'training',
+                        'current_epoch': epoch + 1,
+                        'total_epochs': args.epochs,
+                        'progress_percent': int((epoch / args.epochs) * 100),
+                        'message': f'Training epoch {epoch+1}/{args.epochs}'
+                    }
+                )
             
             if epoch == 0:
                 logger.info("[MODEL] Model Architecture Summary:")
@@ -4142,7 +4589,7 @@ def train_model(args):
                     dice_metric.reset()
                     iou_metric.reset()
             
-            # Create metrics dictionary with appropriate names based on task type
+            # Create metrics dictionary with appropriate names based on task type and loss function
             if class_info and class_info.get('task_type') == 'artery_classification':
                 metrics = {
                     "train_loss": epoch_loss,
@@ -4154,31 +4601,78 @@ def train_model(args):
                 val_metric_name = "Val Accuracy"
                 best_metric_name = "Best Val Accuracy"
             else:
-                metrics = {
-                    "train_loss": epoch_loss,
-                    "train_dice": train_dice,
-                    "train_iou": train_iou,
-                    "val_loss": val_loss,
-                    "val_dice": val_dice,
-                    "val_iou": val_iou,
-                }
-                train_metric_name = "Train Dice"
-                val_metric_name = "Val Dice"
-                best_metric_name = "Best Val Dice"
+                # Determine metric names based on primary metric (not loss function)
+                if args.primary_metric == 'iou':
+                    train_metric_name = "Training IoU"
+                    val_metric_name = "Validation IoU"
+                    best_metric_name = "Best Val IoU"
+                    # For IoU primary metric, IoU is the main evaluation metric
+                    metrics = {
+                        "train_loss": epoch_loss,
+                        "train_iou": train_iou,    # Primary metric for IoU
+                        "train_dice": train_dice,  # Secondary metric
+                        "val_loss": val_loss,
+                        "val_iou": val_iou,        # Primary metric for IoU
+                        "val_dice": val_dice,      # Secondary metric
+                    }
+                    # Use IoU as the primary metric value for logging
+                    primary_train_metric = train_iou
+                    primary_val_metric = val_iou
+                else:
+                    # Default to Dice for all other primary metrics
+                    train_metric_name = "Training Dice"
+                    val_metric_name = "Validation Dice"
+                    best_metric_name = "Best Val Dice"
+                    metrics = {
+                        "train_loss": epoch_loss,
+                        "train_dice": train_dice,  # Primary metric for Dice
+                        "train_iou": train_iou,    # Secondary metric
+                        "val_loss": val_loss,
+                        "val_dice": val_dice,      # Primary metric for Dice
+                        "val_iou": val_iou,        # Secondary metric
+                    }
+                    # Use Dice as the primary metric value for logging
+                    primary_train_metric = train_dice
+                    primary_val_metric = val_dice
+            
+            # Create metadata about primary metric for callback (separate from MLflow metrics)
+            metrics_metadata = {
+                'primary_metric_name': primary_metric_name,
+                'primary_train_metric': primary_train_metric,
+                'primary_val_metric': primary_val_metric,
+                'train_metric_name': train_metric_name,
+                'val_metric_name': val_metric_name,
+                'loss_function': args.loss_function,
+                'primary_metric_type': args.primary_metric,
+            }
+            
+            # Add numeric metadata to metrics for MLflow (only numeric values)
+            metrics.update({
+                'primary_train_metric': primary_train_metric,
+                'primary_val_metric': primary_val_metric,
+            })
             
             logger.info(f"[EPOCH] {epoch+1}/{args.epochs} COMPLETED - "
-                       f"Train Loss: {epoch_loss:.4f}, {train_metric_name}: {train_dice:.4f}, "
-                       f"Val Loss: {val_loss:.4f}, {val_metric_name}: {val_dice:.4f}")
+                       f"Train Loss: {epoch_loss:.4f}, {train_metric_name}: {primary_train_metric:.4f}, "
+                       f"Val Loss: {val_loss:.4f}, {val_metric_name}: {primary_val_metric:.4f}")
             
             # Log learning rate and other training details
             current_lr = optimizer.param_groups[0]['lr']
             logger.info(f"[METRICS] Learning Rate: {current_lr:.6f}, "
-                       f"{best_metric_name}: {best_val_dice:.4f}")
+                       f"{primary_metric_name}: {best_val_metric:.4f}")
             
             # Log batch statistics
             logger.info(f"[STATS] Total batches processed: {len(train_loader)} train, {len(val_loader)} val")
             
-            mlflow.log_metrics(metrics, step=epoch+1)  # Use 1-based epoch numbering
+            # Ensure all metrics are numeric before logging to MLflow
+            numeric_metrics = {}
+            for key, value in metrics.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    numeric_metrics[key] = value
+                else:
+                    logger.warning(f"[MLFLOW] Skipping non-numeric metric: {key}={value} (type: {type(value)})")
+            
+            mlflow.log_metrics(numeric_metrics, step=epoch+1)  # Use 1-based epoch numbering
             
             # Enhanced MLflow synchronization - log additional training state and system metrics
             try:
@@ -4240,7 +4734,7 @@ def train_model(args):
                 mlflow.set_tag('training_status', 'in_progress')
                 mlflow.set_tag('current_epoch', f"{epoch + 1}/{args.epochs}")
                 mlflow.set_tag('training_progress', f"{((epoch + 1) / args.epochs) * 100:.1f}%")
-                mlflow.set_tag('best_val_dice', f"{best_val_dice:.4f}")
+                mlflow.set_tag(f'best_val_{primary_metric_name.lower()}', f"{best_val_metric:.4f}")
                 
                 # 5. Time metrics
                 epoch_duration = time.time() - epoch_start_time
@@ -4275,15 +4769,18 @@ def train_model(args):
             
             epoch_history.append(metrics)  # Save metrics for this epoch
             
-            # Call epoch end callback with metrics
+            # Call epoch end callback with metrics (including metadata)
             if callback:
                 logger.info(f"[CALLBACK] Calling callback.on_epoch_end for epoch {epoch}")
-                callback.on_epoch_end(epoch, metrics)
+                # Combine numeric metrics with metadata for callback
+                callback_metrics = metrics.copy()
+                callback_metrics.update(metrics_metadata)
+                callback.on_epoch_end(epoch, callback_metrics)
                 
                 # Check if sample generation was triggered by callback
                 try:
                     # Always generate samples for the first and last epochs, and every few epochs
-                    should_generate = (epoch == 0 or epoch == epochs - 1 or (epoch + 1) % max(1, epochs // 5) == 0)
+                    should_generate = (epoch == 0 or epoch == args.epochs - 1 or (epoch + 1) % max(1, args.epochs // 5) == 0)
                     
                     # Also check if callback specifically requested generation
                     try:
@@ -4546,12 +5043,16 @@ def train_model(args):
             current_lr = optimizer.param_groups[0]['lr']
             mlflow.log_metric('learning_rate', current_lr, step=epoch+1)
             
-            if val_dice > best_val_dice:
+            # Use the appropriate primary metric for model selection
+            current_metric = val_iou if args.primary_metric == 'iou' else val_dice
+            
+            if current_metric > best_val_metric:
+                best_val_metric = current_metric
                 best_val_dice = val_dice
                 best_val_iou = val_iou
                 
                 # Use existing model directory instead of creating a new one
-                model_name = f"model_{args.model_id if args.model_id else 'unknown'}_epoch_{epoch+1}_dice_{val_dice:.3f}"
+                model_name = f"model_{args.model_id if args.model_id else 'unknown'}_epoch_{epoch+1}_{primary_metric_name}_{current_metric:.3f}"
                 
                 best_model_path = os.path.join(model_dir, "weights", "model.pth")
                 
@@ -4565,7 +5066,7 @@ def train_model(args):
                         'num_classes': class_info.get('num_classes', 1) if class_info else 1,
                         'model_architecture': getattr(args, 'model_architecture', 'unet'),
                         'epoch': epoch + 1,
-                        'validation_metric': val_dice,
+                        'validation_metric': current_metric,
                         'class_names': class_info.get('class_names', []) if class_info else []
                     },
                     'training_args': {
@@ -4602,7 +5103,7 @@ def train_model(args):
                     'train_dice': train_dice,
                     'train_loss': epoch_loss,
                     'learning_rate': optimizer.param_groups[0]['lr'],
-                    'improvement': val_dice - best_val_dice if best_val_dice != -1 else val_dice,
+                    'improvement': current_metric - best_val_metric if best_val_metric != -1 else current_metric,
                     'model_path': best_model_path,
                     'timestamp': time.time()
                 }
@@ -4613,7 +5114,7 @@ def train_model(args):
                 
                 log_artifact_to_model_directory(context_file, model_dir, f"checkpoints/best_model/context")
                 
-                logger.info(f"Saved new best model with val_dice: {val_dice:.4f} at {best_model_path}")
+                logger.info(f"Saved new best model with {primary_metric_name.lower()}: {current_metric:.4f} at {best_model_path}")
                 logger.info(f"[MLFLOW] Best model artifacts logged to checkpoints/best_model/epoch_{epoch+1:03d}")
             
             # Save epoch checkpoint (for inference selection)
@@ -4680,7 +5181,7 @@ def train_model(args):
                 logger.warning(f"[GUI] Nie udało się zaktualizować visualizations.json: {e}")
             # ...existing code...
 
-        logger.info(f"Training completed. Best validation Dice score: {best_val_dice:.4f}")
+        logger.info(f"Training completed. Best validation {primary_metric_name} score: {best_val_metric:.4f}")
         
         # Enhanced final model logging using the new artifact manager
         try:
@@ -4727,12 +5228,15 @@ def train_model(args):
             # Best metrics summary
             best_metrics = {
                 'best_val_dice': best_val_dice,
+                'best_val_iou': best_val_iou,
+                'best_val_metric': best_val_metric,
+                'primary_metric_name': primary_metric_name,
                 'final_train_loss': epoch_history[-1]['train_loss'] if epoch_history else 0.0,
                 'final_val_loss': epoch_history[-1]['val_loss'] if epoch_history else 0.0,
                 'final_train_dice': epoch_history[-1]['train_dice'] if epoch_history else 0.0,
                 'final_val_dice': epoch_history[-1]['val_dice'] if epoch_history else 0.0,
                 'total_epochs_trained': len(epoch_history),
-                'convergence_epoch': next((i+1 for i, h in enumerate(epoch_history) if h['val_dice'] == best_val_dice), len(epoch_history))
+                'convergence_epoch': next((i+1 for i, h in enumerate(epoch_history) if h.get(f'val_{primary_metric_name.lower()}', h.get('val_dice', 0)) == best_val_metric), len(epoch_history))
             }
             
             # Use the model directory that was created during training
@@ -4757,7 +5261,7 @@ def train_model(args):
                         'best_metrics': best_metrics,
                         'training_summary': {
                             'total_epochs': len(epoch_history),
-                            'best_epoch': next((i+1 for i, h in enumerate(epoch_history) if h['val_dice'] == best_val_dice), len(epoch_history)),
+                            'best_epoch': next((i+1 for i, h in enumerate(epoch_history) if h.get(f'val_{primary_metric_name.lower()}', h.get('val_dice', 0)) == best_val_metric), len(epoch_history)),
                             'final_lr': optimizer.param_groups[0]['lr'],
                             'model_parameters': sum(p.numel() for p in model.parameters())
                         }
@@ -5009,7 +5513,7 @@ def train_model(args):
                 model_info = register_model(
                     run_id=args.mlflow_run_id,
                     model_name=registry_model_name,
-                    model_description=f"{model_family} model for coronary segmentation trained with {args.epochs} epochs, best val dice: {best_val_dice:.4f}",
+                    model_description=f"{model_family} model for coronary segmentation trained with {args.epochs} epochs, best val {primary_metric_name.lower()}: {best_val_metric:.4f}",
                     tags=registry_tags
                 )
                 
@@ -5045,7 +5549,12 @@ def train_model(args):
                 logger.warning(f"[REGISTRY] Model registration failed: {e}")
         
         if callback:
-            callback.on_training_end({"best_val_dice": best_val_dice})
+            callback.on_training_end({
+                "best_val_dice": best_val_dice,
+                "best_val_iou": best_val_iou,
+                "best_val_metric": best_val_metric,
+                "primary_metric_name": primary_metric_name
+            })
         
         # === COMPREHENSIVE TRAINING SUMMARY WITH DATA RANGE ANALYSIS ===
         logger.info("=" * 80)
@@ -5054,7 +5563,9 @@ def train_model(args):
         
         # Training Performance Summary
         logger.info(f"📊 TRAINING PERFORMANCE:")
+        logger.info(f"   📈 Best Validation {primary_metric_name} Score: {best_val_metric:.4f}")
         logger.info(f"   📈 Best Validation Dice Score: {best_val_dice:.4f}")
+        logger.info(f"   📈 Best Validation IoU Score: {best_val_iou:.4f}")
         logger.info(f"   🔄 Total Epochs Completed: {len(epoch_history)}")
         logger.info(f"   ⏱️  Training Duration: {time.time() - training_start_time:.1f} seconds" if 'training_start_time' in locals() else "   ⏱️  Training Duration: Not tracked")
         logger.info(f"   🖥️  Device Used: {device}")
@@ -5351,6 +5862,24 @@ def train_model(args):
                     logger.info("[MLFLOW] ✅ Training subprocess completed - run remains active for Celery finalization")
                 else:
                     logger.warning("[MLFLOW] No active run to end")
+    
+    # Return training results for tasks.py
+    result = {
+        'success': True,
+        'best_val_dice': best_val_dice if 'best_val_dice' in locals() else 0,
+        'best_val_iou': best_val_iou if 'best_val_iou' in locals() else 0,
+        'val_dice': best_val_dice if 'best_val_dice' in locals() else 0,  # Alias for compatibility
+        'final_epoch': len(epoch_history) if 'epoch_history' in locals() else 0,
+        'total_epochs': args.epochs,
+        'model_dir': model_dir if 'model_dir' in locals() else None
+    }
+    
+    logger.info(f"[TRAIN] Returning result: {result}")
+    
+    # CRITICAL: Print result as JSON for subprocess parsing
+    print("TRAINING_RESULT_JSON:", json.dumps(result))
+    
+    return result
 
 # Placeholder for save_interactive_training_plot
 def save_interactive_training_plot(epoch_history, model_dir):
@@ -5819,6 +6348,73 @@ def main():
         inference_mode(args)
 
 # --- Exception handling for main ---
+def cleanup_dataloader_workers():
+    """Clean up DataLoader workers to prevent zombie processes"""
+    try:
+        import torch.multiprocessing as mp
+        import torch
+        
+        # Force cleanup of PyTorch DataLoader workers
+        if hasattr(torch.utils.data, '_utils'):
+            if hasattr(torch.utils.data._utils, 'worker'):
+                # Force cleanup worker processes
+                try:
+                    torch.utils.data._utils.worker._cleanup_workers()
+                except:
+                    pass
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        logging.info("[CLEANUP] DataLoader workers cleanup completed")
+    except Exception as e:
+        logging.warning(f"[CLEANUP] Error during DataLoader cleanup: {e}")
+
+def cleanup_multiprocessing_workers():
+    """Clean up any remaining multiprocessing workers to prevent zombie processes"""
+    try:
+        import psutil
+        import signal
+        current_pid = os.getpid()
+        current_process = psutil.Process(current_pid)
+        
+        # Find all child processes
+        children = current_process.children(recursive=True)
+        if children:
+            logging.info(f"[CLEANUP] Found {len(children)} child processes to clean up")
+            
+            # First try graceful termination
+            for child in children:
+                try:
+                    if child.is_running():
+                        child.terminate()
+                        logging.info(f"[CLEANUP] Terminated child process {child.pid}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            
+            # Wait a bit for graceful termination
+            psutil.wait_procs(children, timeout=3)
+            
+            # Force kill any remaining processes
+            for child in children:
+                try:
+                    if child.is_running():
+                        child.kill()
+                        logging.info(f"[CLEANUP] Force killed child process {child.pid}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        
+        # Clean up multiprocessing resources
+        try:
+            mp.get_context().shutdown()
+        except:
+            pass
+            
+        logging.info("[CLEANUP] Multiprocessing cleanup completed")
+    except Exception as e:
+        logging.warning(f"[CLEANUP] Error during multiprocessing cleanup: {e}")
+
 if __name__ == "__main__":
     try:
         main()
@@ -5827,3 +6423,6 @@ if __name__ == "__main__":
         logger.exception("Training failed with exception")
         print(f"[Train.py] Exception: {e}")
         raise
+    finally:
+        cleanup_dataloader_workers()
+        cleanup_multiprocessing_workers()

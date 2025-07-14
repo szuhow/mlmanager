@@ -24,7 +24,7 @@ def start_training_api(request):
         "hyperparameters": {
             "learning_rate": 0.001,
             "batch_size": 32,
-            "epochs": 100
+            "epochs": 1
         },
         "architecture": "resnet50",
         "description": "Training description"
@@ -186,4 +186,49 @@ def list_datasets_api(request):
     except Exception as e:
         return Response({
             'error': f'Error listing datasets: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+def check_active_trainings(request):
+    """
+    Check active trainings - lightweight monitoring endpoint
+    
+    GET /api/training/active/
+    Returns: {
+        "active_count": 2,
+        "active_models": [
+            {"id": 75, "name": "Model 75", "current_epoch": 3, "total_epochs": 10},
+            {"id": 77, "name": "Model 77", "current_epoch": 1, "total_epochs": 1}
+        ]
+    }
+    """
+    try:
+        # Query only training models - very lightweight
+        active_models = MLModel.objects.filter(status='training').only(
+            'id', 'name', 'current_epoch', 'total_epochs', 'updated_at'
+        )
+        
+        active_data = []
+        for model in active_models:
+            active_data.append({
+                'id': model.id,
+                'name': model.name or f'Model {model.id}',
+                'current_epoch': model.current_epoch or 0,
+                'total_epochs': model.total_epochs or 0,
+                'progress_percent': int((model.current_epoch or 0) / max(model.total_epochs or 1, 1) * 100),
+                'last_updated': model.updated_at.isoformat() if model.updated_at else None
+            })
+        
+        return Response({
+            'success': True,
+            'active_count': len(active_data),
+            'active_models': active_data
+        })
+        
+    except Exception as e:
+        return Response({
+            'success': False,
+            'error': str(e),
+            'active_count': 0,
+            'active_models': []
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

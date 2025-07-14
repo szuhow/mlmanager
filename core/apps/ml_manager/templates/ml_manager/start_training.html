@@ -1007,6 +1007,94 @@
                         {{ form.model_type.errors }}
                     </div>
                 </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="{{ form.model_size.id_for_label }}" class="form-label">
+                            <i class="fas fa-microchip me-1"></i>Model Size <span class="text-danger">*</span>
+                        </label>
+                        {{ form.model_size }}
+                        {% if form.model_size.help_text %}
+                            <div class="form-text">{{ form.model_size.help_text }}</div>
+                        {% endif %}
+                        {{ form.model_size.errors }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Custom Architecture Configuration - DISABLED FOR NOW -->
+            <div class="row" id="custom-architecture-config" style="display: none !important;">
+                <div class="col-md-12">
+                    <div class="card border-info">
+                        <div class="card-header bg-info text-white">
+                            <i class="fas fa-cogs me-1"></i>Custom Architecture Configuration
+                            <small class="float-end">DISABLED</small>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <label for="{{ form.custom_channels.id_for_label }}" class="form-label">
+                                            Channel Configuration
+                                        </label>
+                                        {{ form.custom_channels }}
+                                        {% if form.custom_channels.help_text %}
+                                            <div class="form-text">{{ form.custom_channels.help_text }}</div>
+                                        {% endif %}
+                                        {{ form.custom_channels.errors }}
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="form-group">
+                                        <div class="form-check">
+                                            {{ form.use_attention }}
+                                            <label class="form-check-label" for="{{ form.use_attention.id_for_label }}">
+                                                {{ form.use_attention.label }}
+                                            </label>
+                                        </div>
+                                        {% if form.use_attention.help_text %}
+                                            <div class="form-text">{{ form.use_attention.help_text }}</div>
+                                        {% endif %}
+                                        
+                                        <div class="form-check mt-2">
+                                            {{ form.use_deep_architecture }}
+                                            <label class="form-check-label" for="{{ form.use_deep_architecture.id_for_label }}">
+                                                {{ form.use_deep_architecture.label }}
+                                            </label>
+                                        </div>
+                                        {% if form.use_deep_architecture.help_text %}
+                                            <div class="form-text">{{ form.use_deep_architecture.help_text }}</div>
+                                        {% endif %}
+                                        
+                                        <div class="form-check mt-2">
+                                            {{ form.use_residual_connections }}
+                                            <label class="form-check-label" for="{{ form.use_residual_connections.id_for_label }}">
+                                                {{ form.use_residual_connections.label }}
+                                            </label>
+                                        </div>
+                                        {% if form.use_residual_connections.help_text %}
+                                            <div class="form-text">{{ form.use_residual_connections.help_text }}</div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Model Parameters Preview -->
+            <div class="row mt-3">
+                <div class="col-md-12">
+                    <div class="alert alert-info" id="model-params-preview">
+                        <i class="fas fa-info-circle me-1"></i>
+                        <strong>Estimated Parameters:</strong> 
+                        <span id="param-count">~32.6M parameters</span> | 
+                        <strong>Memory Usage:</strong> 
+                        <span id="memory-usage">~4GB</span> | 
+                        <strong>Training Speed:</strong> 
+                        <span id="training-speed">Medium</span>
+                    </div>
+                </div>
             </div>
 
             <div class="row">
@@ -1059,22 +1147,65 @@
 
             <div class="row">
                 <div class="col-md-6">
-                    <div class="form-group">
-                        <label for="{{ form.validation_split.id_for_label }}" class="form-label">
-                            <i class="fas fa-chart-pie me-1"></i>Validation Split
-                        </label>
-                        <input type="number" 
-                               name="{{ form.validation_split.html_name }}"
-                               class="form-control"
-                               id="{{ form.validation_split.id_for_label }}"
-                               value="{{ form.validation_split.value|default:form.validation_split.field.initial }}"
-                               min="{{ form.validation_split.field.min_value|default:0 }}"
-                               max="{{ form.validation_split.field.max_value|default:1 }}"
-                               step="0.01">
-                        {% if form.validation_split.help_text %}
-                            <div class="form-text">{{ form.validation_split.help_text }}</div>
-                        {% endif %}
-                        {{ form.validation_split.errors }}
+                    <!-- Validation Configuration Section -->
+                    <div class="card border-light mb-3">
+                        <div class="card-header bg-light">
+                            <i class="fas fa-chart-pie me-1"></i>Validation Configuration
+                        </div>
+                        <div class="card-body">
+                            <!-- Use Validation Split Checkbox -->
+                            <div class="form-check mb-3">
+                                <input type="checkbox" 
+                                       name="{{ form.use_validation_split.html_name }}"
+                                       class="form-check-input"
+                                       id="{{ form.use_validation_split.id_for_label }}"
+                                       {% if form.use_validation_split.value %}checked{% endif %}
+                                       onchange="toggleValidationFields()">
+                                <label class="form-check-label" for="{{ form.use_validation_split.id_for_label }}">
+                                    {{ form.use_validation_split.label }}
+                                </label>
+                                {% if form.use_validation_split.help_text %}
+                                    <div class="form-text">{{ form.use_validation_split.help_text }}</div>
+                                {% endif %}
+                                {{ form.use_validation_split.errors }}
+                            </div>
+                            
+                            <!-- Validation Split Field -->
+                            <div class="form-group mb-3" id="validation-split-field">
+                                <label for="{{ form.validation_split.id_for_label }}" class="form-label">
+                                    Validation Split Ratio
+                                </label>
+                                <input type="number" 
+                                       name="{{ form.validation_split.html_name }}"
+                                       class="form-control"
+                                       id="{{ form.validation_split.id_for_label }}"
+                                       value="{{ form.validation_split.value|default:form.validation_split.field.initial }}"
+                                       min="{{ form.validation_split.field.min_value|default:0 }}"
+                                       max="{{ form.validation_split.field.max_value|default:1 }}"
+                                       step="0.01">
+                                {% if form.validation_split.help_text %}
+                                    <div class="form-text">{{ form.validation_split.help_text }}</div>
+                                {% endif %}
+                                {{ form.validation_split.errors }}
+                            </div>
+                            
+                            <!-- Custom Validation Dataset Field -->
+                            <div class="form-group" id="custom-validation-field" style="display: none;">
+                                <label for="{{ form.custom_validation_dataset.id_for_label }}" class="form-label">
+                                    Custom Validation Dataset Path
+                                </label>
+                                <input type="text" 
+                                       name="{{ form.custom_validation_dataset.html_name }}"
+                                       class="form-control"
+                                       id="{{ form.custom_validation_dataset.id_for_label }}"
+                                       value="{{ form.custom_validation_dataset.value|default:'' }}"
+                                       placeholder="e.g., core/data/datasets/validation_set">
+                                {% if form.custom_validation_dataset.help_text %}
+                                    <div class="form-text">{{ form.custom_validation_dataset.help_text }}</div>
+                                {% endif %}
+                                {{ form.custom_validation_dataset.errors }}
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="col-md-6">
@@ -1278,7 +1409,7 @@
             </div>
 
             <!-- Loss Function Configuration -->
-            <div id="loss-function-config" style="display: {% if form.use_loss_scheduling.value %}block{% else %}none{% endif %};" class="form-group">
+            <div id="loss-function-config" class="form-group">
                 <label class="form-label">
                     <i class="fas fa-bullseye me-1"></i>Loss Function Configuration
                 </label>
@@ -1297,6 +1428,21 @@
                             <div class="form-text">{{ form.loss_function.help_text }}</div>
                         {% endif %}
                         {{ form.loss_function.errors }}
+                    </div>
+                    <div class="col-md-6">
+                        <label for="{{ form.primary_metric.id_for_label }}" class="form-label">Primary Metric</label>
+                        <select name="{{ form.primary_metric.html_name }}"
+                                class="form-control"
+                                id="{{ form.primary_metric.id_for_label }}"
+                                onchange="updateMetricLabels()">
+                            {% for value, label in form.primary_metric.field.choices %}
+                                <option value="{{ value }}" {% if form.primary_metric.value == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                        {% if form.primary_metric.help_text %}
+                            <div class="form-text">{{ form.primary_metric.help_text }}</div>
+                        {% endif %}
+                        {{ form.primary_metric.errors }}
                     </div>
                     <div id="dice-bce-weights" style="display: none;" class="col-md-6">
                         <div class="row">
@@ -1441,31 +1587,10 @@
                     <div class="form-text">{{ form.use_mixed_precision.help_text }}</div>
                 </div>
 
-                <!-- Segmentation Metric Selection -->
-                <div class="mb-3">
-                    <label for="{{ form.segmentation_metric.id_for_label }}" class="form-label">
-                        <i class="fas fa-chart-line me-2"></i>Primary Segmentation Metric
-                    </label>
-                    <select name="{{ form.segmentation_metric.html_name }}"
-                            id="{{ form.segmentation_metric.id_for_label }}"
-                            class="form-select"
-                            onchange="updateMetricLabels(document.getElementById('{{ form.loss_function.id_for_label }}').value)">
-                        {% for value, display in form.segmentation_metric.field.choices %}
-                            <option value="{{ value }}" 
-                                    {% if form.segmentation_metric.value == value %}selected{% endif %}>
-                                {{ display }}
-                            </option>
-                        {% endfor %}
-                    </select>
-                    {% if form.segmentation_metric.help_text %}
-                        <div class="form-text">{{ form.segmentation_metric.help_text }}</div>
-                    {% endif %}
-                </div>
-
                 <div class="toggle-item">
                     <div class="form-switch">
                         <input type="checkbox" 
-                               name="{{ form.use_early_stopping.html_name }}"
+                               name="{{ form.use_early_stopping.html
                                class="form-check-input"
                                id="{{ form.use_early_stopping.id_for_label }}"
                                {% if form.use_early_stopping.value %}checked{% endif %}
@@ -1538,6 +1663,7 @@
                     </div>
                     <div class="form-text">{{ form.use_loss_scheduling.help_text }}</div>
                     
+                    <!-- Note: Loss Function Configuration is always visible above, this only shows/hides scheduler type -->
                     <div id="loss-scheduling-fields" style="display: {% if form.use_loss_scheduling.value %}block{% else %}none{% endif %};" class="mt-3">
                         <label for="{{ form.loss_scheduler_type.id_for_label }}" class="form-label">Scheduler Type</label>
                         {{ form.loss_scheduler_type }}
@@ -2222,21 +2348,6 @@
             <div class="card-body">
                 <!-- Epoch Progress Bar -->
                 <div class="progress mb-3">
-                    <div id="training-progress-bar" class="progress-bar bg-success" role="progressbar" 
-                         style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
-                    </div>
-                    <div id="progress-bar-text" class="progress-text-overlay">Epoch 0/0 (0%)</div>
-                </div>
-                
-                <!-- Batch Progress Bar -->
-                <div id="batch-progress-section" class="mb-3" style="display: none;">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <small class="text-muted">Batch Progress in Current Epoch:</small>
-                        <small id="batch-info-text" class="text-muted">Batch 0/0</small>
-                    </div>
-                    <div class="progress" style="height: 8px;">
-                        <div id="batch-progress-bar" class="progress-bar bg-info" role="progressbar" 
-                             style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
                         </div>
                     </div>
                 </div>
@@ -2359,6 +2470,198 @@ console.log('[EMERGENCY] Page interactions enabled immediately');
 function log(message, ...args) {
     console.log('[START TRAINING]', message, ...args);
 }
+
+// Model Size Configuration Management
+function updateModelConfiguration() {
+    console.log('🔧 updateModelConfiguration() called');
+    const modelSizeSelect = document.getElementById('{{ form.model_size.id_for_label }}');
+    const modelTypeSelect = document.getElementById('{{ form.model_type.id_for_label }}');
+    
+    console.log('Form IDs:', {
+        modelSize: '{{ form.model_size.id_for_label }}',
+        modelType: '{{ form.model_type.id_for_label }}'
+    });
+    console.log('Elements found:', { modelSizeSelect, modelTypeSelect });
+    const customArchConfig = document.getElementById('custom-architecture-config');
+    const customChannels = document.getElementById('{{ form.custom_channels.id_for_label }}');
+    const paramCountSpan = document.getElementById('param-count');
+    const memoryUsageSpan = document.getElementById('memory-usage');
+    const trainingSpeedSpan = document.getElementById('training-speed');
+    const useAttention = document.getElementById('{{ form.use_attention.id_for_label }}');
+    
+    if (!modelSizeSelect || !modelTypeSelect) {
+        console.log('Model configuration elements not found');
+        return;
+    }
+    
+    const selectedSize = modelSizeSelect.value;
+    console.log('Selected model size:', selectedSize);
+    
+    // Model size to architecture mapping - Updated with accurate parameter counts
+    const sizeToArchMapping = {
+        'micro': {
+            model_type: 'configurable_monai_unet',
+            channels: '8,16,32,64',
+            params: '~101K',
+            memory: '~1GB',
+            speed: 'Very Fast'
+        },
+        'tiny': {
+            model_type: 'configurable_monai_unet',
+            channels: '16,32,64,128,256',
+            params: '~1.6M',
+            memory: '~1GB',
+            speed: 'Fast'
+        },
+        'small': {
+            model_type: 'configurable_monai_unet',
+            channels: '32,64,128,256,512',
+            params: '~6.5M',
+            memory: '~2GB',
+            speed: 'Fast'
+        },
+        'standard': {
+            model_type: 'configurable_resunet',
+            channels: '32,64,128,256,512',
+            params: '~32.6M',
+            memory: '~4GB',
+            speed: 'Medium'
+        },
+        'large': {
+            model_type: 'configurable_resunet',
+            channels: '32,64,128,256,512',
+            params: '~33.0M',
+            memory: '~5GB',
+            speed: 'Medium',
+            use_attention: true
+        },
+        'xl': {
+            model_type: 'hybrid_resunet',
+            channels: '64,128,256,512,1024',
+            params: '~31.0M',
+            memory: '~6GB',
+            speed: 'Slow'
+        }
+    };
+    
+    // Update model_type based on selected size
+    if (selectedSize !== 'custom' && sizeToArchMapping[selectedSize]) {
+        const mapping = sizeToArchMapping[selectedSize];
+        console.log('Found mapping for size:', selectedSize, '-> model_type:', mapping.model_type);
+        
+        // Update model_type select - map to correct values
+        const modelTypeMapping = {
+            'configurable_monai_unet': 'configurable_monai_unet',
+            'configurable_resunet': 'configurable_resunet', 
+            'hybrid_resunet': 'hybrid_resunet'
+        };
+        
+        const mappedType = modelTypeMapping[mapping.model_type] || mapping.model_type;
+        console.log('Mapped type:', mappedType);
+        console.log('ModelTypeSelect options:', Array.from(modelTypeSelect.options).map(o => o.value));
+        
+        // Find and set the correct option
+        let optionFound = false;
+        for (let option of modelTypeSelect.options) {
+            if (option.value === mappedType) {
+                console.log('Setting modelTypeSelect to:', mappedType);
+                modelTypeSelect.value = mappedType;
+                optionFound = true;
+                break;
+            }
+        }
+        
+        if (!optionFound) {
+            console.log('WARNING: No option found for mapped type:', mappedType);
+        }
+        
+        // Update custom configuration based on mapping
+        if (customChannels) {
+            customChannels.value = mapping.channels;
+        }
+        
+        // Set attention checkbox if specified
+        if (mapping.use_attention && useAttention) {
+            useAttention.checked = true;
+        }
+        
+        // Update parameter preview
+        if (paramCountSpan) paramCountSpan.textContent = mapping.params + ' parameters';
+        if (memoryUsageSpan) memoryUsageSpan.textContent = mapping.memory;
+        if (trainingSpeedSpan) trainingSpeedSpan.textContent = mapping.speed;
+        
+        // Hide custom configuration (disabled for now)
+        if (customArchConfig) {
+            customArchConfig.style.display = 'none';
+        }
+    }
+}
+
+// Make function available globally for debugging
+window.updateModelConfiguration = updateModelConfiguration;
+
+// Debug function for testing
+window.debugModelConfiguration = function() {
+    console.log('=== DEBUG MODEL CONFIGURATION ===');
+    const modelSizeSelect = document.getElementById('{{ form.model_size.id_for_label }}');
+    const modelTypeSelect = document.getElementById('{{ form.model_type.id_for_label }}');
+    console.log('Current model size:', modelSizeSelect?.value);
+    console.log('Current model type:', modelTypeSelect?.value);
+    console.log('Available model type options:', Array.from(modelTypeSelect?.options || []).map(o => ({ value: o.value, text: o.text })));
+    updateModelConfiguration();
+    console.log('After update - model type:', modelTypeSelect?.value);
+    console.log('=== END DEBUG ===');
+};
+
+// Metric Labels Update Function - Define early to avoid undefined function errors
+function updateMetricLabels() {
+    console.log('updateMetricLabels() called');
+    const trainingLabel = document.getElementById('training-metric-label');
+    const validationLabel = document.getElementById('validation-metric-label');
+    const bestLabel = document.getElementById('best-metric-label');
+    const additionalMetrics = document.getElementById('additional-metrics');
+    const primaryMetricSelect = document.getElementById('{{ form.primary_metric.id_for_label }}');
+    
+    console.log('Primary metric select element:', primaryMetricSelect);
+    console.log('Form ID:', '{{ form.primary_metric.id_for_label }}');
+    
+    if (!trainingLabel || !validationLabel || !bestLabel) {
+        console.log('Missing label elements:', { trainingLabel, validationLabel, bestLabel });
+        return;
+    }
+    
+    // Get primary metric from selection (Dice, IoU, Accuracy, etc.)
+    const primaryMetric = primaryMetricSelect ? primaryMetricSelect.value : 'dice';
+    console.log('Selected primary metric:', primaryMetric);
+    
+    const primaryMetricName = primaryMetric === 'iou' ? 'IoU' : 
+                             primaryMetric === 'accuracy' ? 'Accuracy' :
+                             primaryMetric === 'precision' ? 'Precision' :
+                             primaryMetric === 'recall' ? 'Recall' :
+                             primaryMetric === 'f1' ? 'F1' : 'Dice';
+    
+    let metricName = primaryMetricName;
+    let showAdditional = true; // Always show additional metrics (both Dice and IoU)
+    
+    console.log('Setting metric name to:', metricName);
+    
+    // The display metric is now independent of loss function
+    // It's determined solely by the primary_metric selection
+    
+    trainingLabel.textContent = `Training ${metricName}:`;
+    validationLabel.textContent = `Validation ${metricName}:`;
+    bestLabel.textContent = `Best Validation ${metricName}:`;
+    
+    console.log('Updated labels:', trainingLabel.textContent, validationLabel.textContent, bestLabel.textContent);
+    
+    // Show/hide additional metrics for combined losses
+    if (additionalMetrics) {
+        additionalMetrics.style.display = showAdditional ? 'flex' : 'none';
+    }
+}
+
+// Make function available globally for debugging
+window.updateMetricLabels = updateMetricLabels;
 
 // Force hide all augmentations immediately when script loads
 (function() {
@@ -2645,12 +2948,10 @@ function toggleEnhancedTrainingFeatures(enabled) {
 
 function toggleLossFunctionConfig(enabled) {
     log('toggleLossFunctionConfig:', enabled);
-    const config = document.getElementById('loss-function-config');
+    // Loss Function Configuration should always be visible - user always needs to select loss function
+    // Only toggle the dynamic loss scheduling fields
     const fields = document.getElementById('loss-scheduling-fields');
     
-    if (config) {
-        config.style.display = enabled ? 'block' : 'none';
-    }
     if (fields) {
         fields.style.display = enabled ? 'block' : 'none';
     }
@@ -3123,8 +3424,54 @@ document.addEventListener('DOMContentLoaded', function() {
     try {
         log('DOM loaded, starting initialization...');
         
+        // Initialize metric labels based on current selection
+        updateMetricLabels();
+        
+        // Initialize model configuration
+        console.log('🚀 Initializing model configuration on page load...');
+        updateModelConfiguration();
+        
+        // Force update after a short delay to ensure all elements are loaded
+        setTimeout(function() {
+            console.log('⏰ Forcing updateMetricLabels and updateModelConfiguration after delay...');
+            updateMetricLabels();
+            updateModelConfiguration();
+        }, 1000);
+        
         // Initialize basic functionality
         showStep(1);
+        
+        // Add event listeners for model configuration
+        const modelSizeSelect = document.getElementById('{{ form.model_size.id_for_label }}');
+        if (modelSizeSelect) {
+            log('Adding change listener to model size select');
+            modelSizeSelect.addEventListener('change', function() {
+                console.log('🔄 Model size changed to:', this.value);
+                console.log('Calling updateModelConfiguration...');
+                updateModelConfiguration();
+            });
+        }
+        
+        // Custom architecture listeners DISABLED
+        // const customChannels = document.getElementById('{{ form.custom_channels.id_for_label }}');
+        // if (customChannels) {
+        //     customChannels.addEventListener('input', updateCustomModelPreview);
+        // }
+        
+        // const useAttention = document.getElementById('{{ form.use_attention.id_for_label }}');
+        // if (useAttention) {
+        //     useAttention.addEventListener('change', updateCustomModelPreview);
+        // }
+        
+        // const useDeep = document.getElementById('{{ form.use_deep_architecture.id_for_label }}');
+        // if (useDeep) {
+        //     useDeep.addEventListener('change', updateCustomModelPreview);
+        // }
+        
+        // const useResidual = document.getElementById('{{ form.use_residual_connections.id_for_label }}');
+        // if (useResidual) {
+        //     useResidual.addEventListener('change', updateCustomModelPreview);
+        // }
         
         // Initialize all toggle states first
         const enhancedTrainingCheckbox = document.getElementById('{{ form.use_enhanced_training.id_for_label }}');
@@ -3314,11 +3661,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data.training_config) {
                     const config = data.training_config;
                     
-                    // Update segmentation metric select
-                    const segmentationMetricSelect = document.getElementById('id_segmentation_metric');
-                    if (segmentationMetricSelect && config.segmentation_metric) {
-                        segmentationMetricSelect.value = config.segmentation_metric;
-                        log(`Updated segmentation metric to: ${config.segmentation_metric}`);
+                    // Update primary metric select
+                    const primaryMetricSelect = document.getElementById('id_primary_metric');
+                    if (primaryMetricSelect && config.primary_metric) {
+                        primaryMetricSelect.value = config.primary_metric;
+                        log(`Updated primary metric to: ${config.primary_metric}`);
                     }
                     
                     // Update loss function select
@@ -3331,7 +3678,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Trigger metric label update with the correct values
                     setTimeout(() => {
                         if (lossFunctionSelect) {
-                            updateMetricLabels(lossFunctionSelect.value);
+                            updateMetricLabels();
                             log('Updated metric labels with correct configuration');
                         }
                     }, 100);
@@ -3345,7 +3692,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Update metric labels based on what was actually used in training
                     const lossFunction = document.getElementById('id_loss_function');
                     if (lossFunction) {
-                        updateMetricLabels(lossFunction.value);
+                        updateMetricLabels();
                     }
                     
                     // Start monitoring after a short delay to ensure elements are ready
@@ -3366,7 +3713,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Update metric labels based on selected loss function (if form is available)
                 const lossFunction = document.getElementById('id_loss_function');
                 if (lossFunction) {
-                    updateMetricLabels(lossFunction.value);
+                    updateMetricLabels();
                 }
                 
                 // Start monitoring after a short delay to ensure elements are ready
@@ -3374,6 +3721,23 @@ document.addEventListener('DOMContentLoaded', function() {
                     startTrainingProgressMonitoring();
                 }, 1000);
             }
+        });
+    }
+    
+    // Initialize metric labels on page load
+    const initialLossFunction = document.getElementById('{{ form.loss_function.id_for_label }}');
+    const primaryMetricSelect = document.getElementById('{{ form.primary_metric.id_for_label }}');
+    
+    if (initialLossFunction) {
+        updateMetricLabels();
+        log('Initial metric labels updated');
+    }
+    
+    // Add event listener for primary metric changes
+    if (primaryMetricSelect) {
+        primaryMetricSelect.addEventListener('change', function() {
+            updateMetricLabels();
+            log('Primary metric changed, labels updated');
         });
     }
 });
@@ -3632,79 +3996,6 @@ function initializeSmartPolling() {
     
     smartPollingManager.start();
     console.log('Smart polling initialized for model:', currentModelId);
-}
-
-function updateMetricLabels(lossFunction) {
-    const trainingLabel = document.getElementById('training-metric-label');
-    const validationLabel = document.getElementById('validation-metric-label');
-    const bestLabel = document.getElementById('best-metric-label');
-    const additionalMetrics = document.getElementById('additional-metrics');
-    const segmentationMetricSelect = document.getElementById('{{ form.segmentation_metric.id_for_label }}');
-    
-    if (!trainingLabel || !validationLabel || !bestLabel) return;
-    
-    // Get primary metric from selection (Dice or IoU)
-    const primaryMetric = segmentationMetricSelect ? segmentationMetricSelect.value : 'dice';
-    const primaryMetricName = primaryMetric === 'iou' ? 'IoU' : 'Dice';
-    
-    let metricName = primaryMetricName;
-    let showAdditional = false;
-    
-    switch(lossFunction) {
-        case 'bce':
-            metricName = 'BCE Score';
-            break;
-        case 'dice':
-            metricName = primaryMetricName;
-            break;
-        case 'combined':
-            metricName = `Combined (${primaryMetricName}+BCE)`;
-            showAdditional = true;
-            break;
-        case 'focal':
-            metricName = 'Focal Score';
-            break;
-        case 'focal_segmentation':
-            metricName = `Focal Seg (${primaryMetricName}+Focal)`;
-            showAdditional = true;
-            break;
-        case 'balanced_segmentation':
-            metricName = 'Balanced Seg';
-            break;
-        case 'dice_focused':
-            metricName = `${primaryMetricName} Focused`;
-            break;
-        case 'jaccard_based':
-            metricName = 'Jaccard (IoU)';
-            break;
-        case 'tversky_recall':
-            metricName = 'Tversky (Recall)';
-            break;
-        case 'tversky_precision':
-            metricName = 'Tversky (Precision)';
-            break;
-        case 'focal_advanced':
-            metricName = 'Advanced Focal';
-            break;
-        case 'combo_dice_bce_focal':
-            metricName = `Combo (${primaryMetricName}+BCE+F)`;
-            showAdditional = true;
-            break;
-        case 'boundary_aware':
-            metricName = 'Boundary-aware';
-            break;
-        default:
-            metricName = primaryMetricName;
-    }
-    
-    trainingLabel.textContent = `Training ${metricName}:`;
-    validationLabel.textContent = `Validation ${metricName}:`;
-    bestLabel.textContent = `Best Validation ${metricName}:`;
-    
-    // Show/hide additional metrics for combined losses
-    if (additionalMetrics) {
-        additionalMetrics.style.display = showAdditional ? 'flex' : 'none';
-    }
 }
 
 function startTrainingProgressMonitoring() {
@@ -3984,8 +4275,8 @@ function updateProgressDisplay(progress) {
         const trainingDice = document.getElementById('training-dice-display');
         if (trainingDice && progress.metrics.train_dice !== undefined) {
             // Check which metric is selected
-            const segmentationMetricSelect = document.getElementById('{{ form.segmentation_metric.id_for_label }}');
-            const selectedMetric = segmentationMetricSelect ? segmentationMetricSelect.value : 'dice';
+            const primaryMetricSelect = document.getElementById('{{ form.primary_metric.id_for_label }}');
+            const selectedMetric = primaryMetricSelect ? primaryMetricSelect.value : 'dice';
             
             if (selectedMetric === 'iou' && progress.metrics.train_iou !== undefined) {
                 trainingDice.textContent = progress.metrics.train_iou.toFixed(4);
@@ -3997,8 +4288,8 @@ function updateProgressDisplay(progress) {
         const validationDice = document.getElementById('validation-dice-display');
         if (validationDice && progress.metrics.val_dice !== undefined) {
             // Check which metric is selected
-            const segmentationMetricSelect = document.getElementById('{{ form.segmentation_metric.id_for_label }}');
-            const selectedMetric = segmentationMetricSelect ? segmentationMetricSelect.value : 'dice';
+            const primaryMetricSelect = document.getElementById('{{ form.primary_metric.id_for_label }}');
+            const selectedMetric = primaryMetricSelect ? primaryMetricSelect.value : 'dice';
             
             if (selectedMetric === 'iou' && progress.metrics.val_iou !== undefined) {
                 validationDice.textContent = progress.metrics.val_iou.toFixed(4);
@@ -4010,8 +4301,8 @@ function updateProgressDisplay(progress) {
         const bestValidationDice = document.getElementById('best-validation-dice-display');
         if (bestValidationDice && progress.metrics.best_val_dice !== undefined) {
             // Check which metric is selected
-            const segmentationMetricSelect = document.getElementById('{{ form.segmentation_metric.id_for_label }}');
-            const selectedMetric = segmentationMetricSelect ? segmentationMetricSelect.value : 'dice';
+            const primaryMetricSelect = document.getElementById('{{ form.primary_metric.id_for_label }}');
+            const selectedMetric = primaryMetricSelect ? primaryMetricSelect.value : 'dice';
             
             if (selectedMetric === 'iou' && progress.metrics.best_val_iou !== undefined) {
                 bestValidationDice.textContent = progress.metrics.best_val_iou.toFixed(4);
@@ -4151,16 +4442,10 @@ function generateModelPreview() {
     const modelTypeSelect = document.getElementById('{{ form.model_type.id_for_label }}');
     const cropSizeInput = document.getElementById('{{ form.crop_size.id_for_label }}');
     
-    if (!modelTypeSelect || !modelTypeSelect.value) {
-        showPreviewError('Please select a model type first');
-        return;
-    }
-    
-    const modelType = modelTypeSelect.value;
     const cropSize = cropSizeInput ? parseInt(cropSizeInput.value) || 256 : 256;
     const inputShape = [1, cropSize, cropSize]; // [channels, height, width]
     
-    log('Generating model preview for:', modelType, 'with input shape:', inputShape);
+    log('Generating model preview with input shape:', inputShape);
     
     // Show loading state
     generateBtn.disabled = true;
@@ -4174,6 +4459,43 @@ function generateModelPreview() {
     // Get resolution from form
     const resolution = parseInt(document.getElementById('id_resolution').value) || 256;
     
+    // Get model architecture parameters
+    const modelSizeSelect = document.getElementById('{{ form.model_size.id_for_label }}');
+    const customChannels = document.getElementById('{{ form.custom_channels.id_for_label }}');
+    const useAttention = document.getElementById('{{ form.use_attention.id_for_label }}');
+    const useDeep = document.getElementById('{{ form.use_deep_architecture.id_for_label }}');
+    const useResidual = document.getElementById('{{ form.use_residual_connections.id_for_label }}');
+    
+    // Build architecture parameters
+    const architectureParams = {
+        model_size: modelSizeSelect ? modelSizeSelect.value : 'standard',
+        custom_channels: customChannels ? customChannels.value : '32,64,128,256,512',
+        use_attention: useAttention ? useAttention.checked : false,
+        use_deep_architecture: useDeep ? useDeep.checked : false,
+        use_residual_connections: useResidual ? useResidual.checked : false
+    };
+    
+    // Determine the correct model_type based on architecture parameters (like updateModelConfiguration does)
+    const sizeToArchMapping = {
+        'micro': { model_type: 'monai_unet' },
+        'tiny': { model_type: 'monai_unet' },
+        'small': { model_type: 'monai_unet' },
+        'standard': { model_type: 'unet' },
+        'large': { model_type: 'resunet' },
+        'xl': { model_type: 'resunet' },
+        'custom': { model_type: modelTypeSelect ? modelTypeSelect.value : 'unet' }
+    };
+    
+    const modelSize = architectureParams.model_size;
+    const modelType = sizeToArchMapping[modelSize] ? sizeToArchMapping[modelSize].model_type : (modelTypeSelect ? modelTypeSelect.value : 'unet');
+    
+    log('Generating model preview for:', modelType, 'with size:', modelSize, 'architecture params:', architectureParams);
+    
+    if (!modelType) {
+        showPreviewError('Could not determine model type');
+        return;
+    }
+    
     fetch('{% url "ml_manager:api-model-summary" %}', {
         method: 'POST',
         headers: {
@@ -4183,7 +4505,8 @@ function generateModelPreview() {
         body: JSON.stringify({
             model_type: modelType,
             input_shape: inputShape,
-            resolution: resolution
+            resolution: resolution,
+            architecture_params: architectureParams
         })
     })
     .then(response => response.json())
@@ -4282,5 +4605,184 @@ function formatNumber(num) {
     </div>
   </div>
 </div>
+
+<script>
+// Toggle validation fields visibility based on checkbox
+function toggleValidationFields() {
+    const useValidationSplit = document.getElementById('{{ form.use_validation_split.id_for_label }}');
+    const validationSplitField = document.getElementById('validation-split-field');
+    const customValidationField = document.getElementById('custom-validation-field');
+    
+    if (useValidationSplit && validationSplitField && customValidationField) {
+        if (useValidationSplit.checked) {
+            // Show validation split, hide custom validation
+            validationSplitField.style.display = 'block';
+            customValidationField.style.display = 'none';
+        } else {
+            // Hide validation split, show custom validation
+            validationSplitField.style.display = 'none';
+            customValidationField.style.display = 'block';
+        }
+    }
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+    toggleValidationFields();
+    
+    // Initialize metric labels
+    console.log('DOM loaded, calling updateMetricLabels');
+    updateMetricLabels();
+    
+    // Force update after 1 second to ensure all elements are ready
+    setTimeout(updateMetricLabels, 1000);
+    
+    // Listen for changes to primary metric selection
+    const primaryMetricSelect = document.getElementById('{{ form.primary_metric.id_for_label }}');
+    if (primaryMetricSelect) {
+        console.log('Adding change listener to primary metric select');
+        primaryMetricSelect.addEventListener('change', function() {
+            console.log('Primary metric changed to:', this.value);
+            updateMetricLabels();
+        });
+    } else {
+        console.log('Primary metric select not found, ID:', '{{ form.primary_metric.id_for_label }}');
+    }
+    
+    // Also listen for loss function changes as backup
+    const lossFunctionSelect = document.getElementById('{{ form.loss_function.id_for_label }}');
+    if (lossFunctionSelect) {
+        console.log('Adding change listener to loss function select');
+        lossFunctionSelect.addEventListener('change', function() {
+            console.log('Loss function changed to:', this.value);
+            updateMetricLabels();
+        });
+    }
+});
+
+// Missing functions for training progress display
+function updateStatus(status) {
+    console.log('Updating status:', status);
+    // You can add status update logic here if needed
+}
+
+function updateProgressBar(progress) {
+    console.log('Updating progress bar:', progress);
+    const progressBar = document.querySelector('#training-progress-section .progress-bar');
+    if (progressBar && progress !== undefined) {
+        progressBar.style.width = progress + '%';
+        progressBar.setAttribute('aria-valuenow', progress);
+    }
+}
+
+function updateMetrics(metrics) {
+    console.log('Updating metrics:', metrics);
+    
+    if (!metrics) return;
+    
+    // First, update metric labels based on the primary metric from backend data
+    if (metrics.primary_metric) {
+        updateMetricLabelsFromBackend(metrics.primary_metric);
+    }
+    
+    // Update epoch info
+    if (metrics.current_epoch !== undefined && metrics.total_epochs !== undefined) {
+        const epochDisplay = document.getElementById('current-epoch-display');
+        if (epochDisplay) {
+            epochDisplay.textContent = `${metrics.current_epoch} / ${metrics.total_epochs}`;
+        }
+    }
+    
+    // Update loss values
+    if (metrics.training_loss !== undefined) {
+        const trainingLossDisplay = document.getElementById('training-loss-display');
+        if (trainingLossDisplay) {
+            trainingLossDisplay.textContent = typeof metrics.training_loss === 'number' ? 
+                metrics.training_loss.toFixed(4) : metrics.training_loss;
+        }
+    }
+    
+    if (metrics.validation_loss !== undefined) {
+        const validationLossDisplay = document.getElementById('validation-loss-display');
+        if (validationLossDisplay) {
+            validationLossDisplay.textContent = typeof metrics.validation_loss === 'number' ? 
+                metrics.validation_loss.toFixed(4) : metrics.validation_loss;
+        }
+    }
+    
+    // Update primary metric values (could be Dice, IoU, Accuracy, etc.)
+    if (metrics.training_metric !== undefined) {
+        const trainingMetricDisplay = document.getElementById('training-dice-display');
+        if (trainingMetricDisplay) {
+            trainingMetricDisplay.textContent = typeof metrics.training_metric === 'number' ? 
+                metrics.training_metric.toFixed(4) : metrics.training_metric;
+        }
+    }
+    
+    if (metrics.validation_metric !== undefined) {
+        const validationMetricDisplay = document.getElementById('validation-dice-display');
+        if (validationMetricDisplay) {
+            validationMetricDisplay.textContent = typeof metrics.validation_metric === 'number' ? 
+                metrics.validation_metric.toFixed(4) : metrics.validation_metric;
+        }
+    }
+    
+    if (metrics.best_validation_metric !== undefined) {
+        const bestValidationMetricDisplay = document.getElementById('best-validation-dice-display');
+        if (bestValidationMetricDisplay) {
+            bestValidationMetricDisplay.textContent = typeof metrics.best_validation_metric === 'number' ? 
+                metrics.best_validation_metric.toFixed(4) : metrics.best_validation_metric;
+        }
+    }
+    
+    // Update additional metrics if available
+    if (metrics.dice_component !== undefined) {
+        const diceComponentDisplay = document.getElementById('dice-component-display');
+        if (diceComponentDisplay) {
+            diceComponentDisplay.textContent = typeof metrics.dice_component === 'number' ? 
+                metrics.dice_component.toFixed(4) : metrics.dice_component;
+        }
+    }
+    
+    if (metrics.bce_component !== undefined) {
+        const bceComponentDisplay = document.getElementById('bce-component-display');
+        if (bceComponentDisplay) {
+            bceComponentDisplay.textContent = typeof metrics.bce_component === 'number' ? 
+                metrics.bce_component.toFixed(4) : metrics.bce_component;
+        }
+    }
+}
+
+function updateEpochsInfo(epochsInfo) {
+    console.log('Updating epochs info:', epochsInfo);
+    // Handle epochs information if needed
+}
+
+function updateMetricLabelsFromBackend(primaryMetric) {
+    console.log('Updating metric labels from backend data. Primary metric:', primaryMetric);
+    
+    const trainingLabel = document.getElementById('training-metric-label');
+    const validationLabel = document.getElementById('validation-metric-label');
+    const bestLabel = document.getElementById('best-metric-label');
+    
+    if (!trainingLabel || !validationLabel || !bestLabel) {
+        console.log('Some metric label elements not found');
+        return;
+    }
+    
+    const primaryMetricName = primaryMetric === 'iou' ? 'IoU' : 
+                             primaryMetric === 'accuracy' ? 'Accuracy' :
+                             primaryMetric === 'precision' ? 'Precision' :
+                             primaryMetric === 'recall' ? 'Recall' :
+                             primaryMetric === 'f1' ? 'F1' : 'Dice';
+    
+    trainingLabel.textContent = `Training ${primaryMetricName}:`;
+    validationLabel.textContent = `Validation ${primaryMetricName}:`;
+    bestLabel.textContent = `Best Validation ${primaryMetricName}:`;
+    
+    console.log('Updated labels to:', primaryMetricName);
+}
+
+</script>
 
 {% endblock %}

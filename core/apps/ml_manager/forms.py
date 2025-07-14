@@ -28,27 +28,15 @@ try:
 except ImportError:
     # Fallback to legacy system if registry not available
     def get_available_models():
-        base_dir = Path(__file__).parent.parent.parent.parent / 'ml'
-        models = []
+        # Return the models that are actually available in the system
+        models = [
+            ('configurable_monai_unet', 'UNet'),
+            ('configurable_resunet', 'ResU-Net'),  
+            ('hybrid_resunet', 'Hybrid ResU-Net'),
+            ('configurable_deep_resunet_attention', 'Deep ResU-Net with Attention'),
+            ('transformer_unet', 'Transformer U-Net'),
+        ]
         
-        # Scan unet directory
-        unet_dir = base_dir / 'unet'
-        if unet_dir.exists():
-            spec = importlib.util.spec_from_file_location("unet_model", str(unet_dir / "unet_model.py"))
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                models.append(('unet', 'U-Net (PyTorch)'))
-        
-        # Scan unet-old directory
-        unet_old_dir = base_dir / 'unet-old'
-        if unet_old_dir.exists():
-            spec = importlib.util.spec_from_file_location("unet_old", str(unet_old_dir / "unet.py"))
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                models.append(('unet-old', 'U-Net (Legacy)'))
-                
         return models
 
 class TrainingTemplateForm(forms.ModelForm):
@@ -57,9 +45,8 @@ class TrainingTemplateForm(forms.ModelForm):
         model = TrainingTemplate
         fields = [
             'name', 'description', 'model_type', 'batch_size', 'epochs', 
-            'learning_rate', 'validation_split', 'resolution', 'device',
+            'learning_rate', 'use_validation_split', 'validation_split', 'custom_validation_dataset', 'resolution', 'device',
             'optimizer', 'lr_scheduler', 'lr_patience', 'lr_factor', 'lr_step_size', 'lr_gamma', 'min_lr',
-            'segmentation_metric',
             'use_early_stopping', 'early_stopping_patience', 'early_stopping_min_epochs', 
             'early_stopping_min_delta', 'early_stopping_metric',
             'use_random_flip', 'flip_probability', 'use_random_rotate', 'rotation_range',
@@ -78,7 +65,9 @@ class TrainingTemplateForm(forms.ModelForm):
         widgets = {
             'description': forms.Textarea(attrs={'rows': 3}),
             'learning_rate': forms.NumberInput(attrs={'step': 'any'}),
+            'use_validation_split': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
             'validation_split': forms.NumberInput(attrs={'step': 'any', 'min': 0, 'max': 1}),
+            'custom_validation_dataset': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g., core/data/datasets/validation_set'}),
         }
         help_texts = {
             'name': 'Unique name for this training template',
@@ -87,7 +76,9 @@ class TrainingTemplateForm(forms.ModelForm):
             'batch_size': 'Number of samples per batch',
             'epochs': 'Number of training epochs',
             'learning_rate': 'Learning rate for optimization',
-            'validation_split': 'Validation set size (0-1)',
+            'use_validation_split': 'Use automatic validation split from training data. Uncheck to use custom validation dataset.',
+            'validation_split': 'Validation set size (0-1). Only used when auto-split is enabled.',
+            'custom_validation_dataset': 'Path to custom validation dataset directory. Only used when auto-split is disabled.',
             'resolution': 'Training image crop size. Higher crop sizes require more memory.',
             'device': 'Device to use for training. Auto will detect the best available device.',
             'optimizer': 'Optimizer algorithm to use for training',
@@ -183,7 +174,7 @@ class TrainingForm(forms.Form):
     mlflow_experiment = forms.ChoiceField(
         choices=[],  # Will be set dynamically in __init__
         required=True,
-        initial='coronary-experiments',
+        initial='coronary-experiments-fixed',
         label="MLflow Experiment",
         help_text="Choose which MLflow experiment to track this training in",
         widget=forms.Select(attrs={'class': 'form-control', 'id': 'mlflow-experiment-select'})
@@ -244,12 +235,40 @@ class TrainingForm(forms.Form):
     
     batch_size = forms.IntegerField(
         min_value=1, 
-        initial=get_env_default('DEFAULT_BATCH_SIZE', 8), 
+        initial=get_env_default('DEFAULT_BATCH_SIZE', 4),  # Reduced from 8 to 4 for lower resource usage
         help_text="Number of samples per batch. Larger batches require more memory."
     )
-    epochs = forms.IntegerField(min_value=1, initial=10, help_text="Number of training epochs")
+    epochs = forms.IntegerField(min_value=1, initial=1, help_text="Number of training epochs")
     learning_rate = forms.FloatField(min_value=0.0, initial=0.001, help_text="Learning rate")
-    validation_split = forms.FloatField(min_value=0.0, max_value=1.0, initial=0.2, help_text="Validation set size (0-1)")
+    
+    # Validation configuration
+    use_validation_split = forms.BooleanField(
+        required=False,
+        initial=True,
+        label="Use Validation Split",
+        help_text="Split training data automatically for validation. Uncheck to use custom validation dataset.",
+        widget=forms.CheckboxInput(attrs={'class': 'form-check-input', 'id': 'use-validation-split'})
+    )
+    
+    validation_split = forms.FloatField(
+        min_value=0.0, 
+        max_value=1.0, 
+        initial=0.2, 
+        help_text="Validation set size (0-1). Only used when 'Use Validation Split' is enabled."
+    )
+    
+    # Custom validation dataset
+    custom_validation_dataset = forms.CharField(
+        max_length=500,
+        required=False,
+        label="Custom Validation Dataset Path",
+        help_text="Path to custom validation dataset directory. Only used when 'Use Validation Split' is disabled. Should have same structure as training dataset.",
+        widget=forms.TextInput(attrs={
+            'class': 'form-control',
+            'id': 'custom-validation-dataset',
+            'placeholder': 'e.g., core/data/datasets/validation_set'
+        })
+    )
     
     # Image resolution for training
     resolution = forms.ChoiceField(
@@ -365,17 +384,6 @@ class TrainingForm(forms.Form):
     )
     
     # Primary segmentation metric selection
-    SEGMENTATION_METRIC_CHOICES = [
-        ('dice', 'Dice Score'),
-        ('iou', 'IoU Score'),
-    ]
-    
-    segmentation_metric = forms.ChoiceField(
-        choices=SEGMENTATION_METRIC_CHOICES,
-        initial='dice',
-        required=False,
-        help_text="Primary segmentation metric to track and display"
-    )
     
     EARLY_STOPPING_METRIC_CHOICES = [
         ('val_dice', 'Validation Dice Score'),
@@ -462,7 +470,24 @@ class TrainingForm(forms.Form):
         help_text="Loss function for training. Dice Loss is recommended for segmentation."
     )
     
-    # Loss function weights (for combined losses)
+    # Primary metric for model evaluation
+    PRIMARY_METRIC_CHOICES = [
+        ('dice', 'Dice Score (Default)'),
+        ('iou', 'Intersection over Union (IoU)'),
+        ('accuracy', 'Pixel Accuracy'),
+        ('precision', 'Precision'),
+        ('recall', 'Recall'),
+        ('f1', 'F1 Score'),
+    ]
+    
+    primary_metric = forms.ChoiceField(
+        choices=PRIMARY_METRIC_CHOICES,
+        initial='dice',
+        label="Primary Metric",
+        help_text="Primary metric for model evaluation and selection"
+    )
+    
+    # Loss function parameters
     dice_weight = forms.FloatField(
         min_value=0.0, 
         max_value=1.0, 
@@ -710,6 +735,60 @@ class TrainingForm(forms.Form):
         label="Binary Segmentation Threshold",
         help_text="Threshold for converting soft predictions to hard binary masks (0.5 is standard)"
     )
+    
+    # Model Architecture Configuration
+    MODEL_SIZE_CHOICES = [
+        ('micro', 'Micro (~0.1M parameters) - Very lightweight, MONAI U-Net'),
+        ('tiny', 'Tiny (~1.6M parameters) - MONAI U-Net, fast training'),
+        ('small', 'Small (~6.5M parameters) - MONAI U-Net, balanced performance'),
+        ('standard', 'Standard (~32.6M parameters) - ResU-Net, high accuracy'),
+        ('large', 'Large (~33.0M parameters) - ResU-Net with attention gates'),
+        ('xl', 'Extra Large (~31M parameters) - Hybrid ResU-Net, advanced features'),
+        # Note: Custom manual configuration temporarily disabled
+    ]
+    
+    model_size = forms.ChoiceField(
+        choices=MODEL_SIZE_CHOICES,
+        initial='standard',
+        required=True,
+        label="Model Size",
+        help_text="Control model complexity and parameter count. Larger models are more accurate but require more memory."
+    )
+    
+    # Custom architecture parameters (only shown when 'custom' is selected)
+    custom_channels = forms.CharField(
+        max_length=100,
+        required=False,
+        initial="64,128,256,512,1024",
+        label="Custom Channels",
+        help_text="Comma-separated channel sizes for encoder layers (e.g., '32,64,128,256,512' for smaller model)",
+        widget=forms.TextInput(attrs={
+            'class': 'form-control',
+            'placeholder': '64,128,256,512,1024',
+            'style': 'display: none;'  # Hidden by default
+        })
+    )
+    
+    use_attention = forms.BooleanField(
+        initial=False,
+        required=False,
+        label="Use Attention Gates",
+        help_text="Add attention mechanisms for better feature selection (increases parameters by ~5-10%)"
+    )
+    
+    use_deep_architecture = forms.BooleanField(
+        initial=False,
+        required=False,
+        label="Use Deep Architecture",
+        help_text="Use deeper network with more layers for complex feature learning"
+    )
+    
+    use_residual_connections = forms.BooleanField(
+        initial=False,
+        required=False,
+        label="Use Residual Connections",
+        help_text="Add residual/skip connections for better gradient flow (ResU-Net style)"
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -732,8 +811,8 @@ class TrainingForm(forms.Form):
                 self.fields['mlflow_experiment'].initial = default_experiment[0]
         except Exception as e:
             # Fallback to default if MLflow is not available
-            self.fields['mlflow_experiment'].choices = [('coronary-experiments', 'coronary-experiments')]
-            self.fields['mlflow_experiment'].initial = 'coronary-experiments'
+            self.fields['mlflow_experiment'].choices = [('coronary-experiments-fixed', 'coronary-experiments-fixed')]
+            self.fields['mlflow_experiment'].initial = 'coronary-experiments-fixed'
         
         # Set model_type choices dynamically
         model_choices = get_available_models()
@@ -1116,8 +1195,20 @@ class EnhancedInferenceForm(forms.Form):
             
             self.fields['model_id'].choices = [('', 'Select a model...')] + model_choices
             
-            # Set up checkpoint field to be populated via JavaScript
-            self.fields['checkpoint_path'].choices = [('', 'Select model first...')]
+            # Preserve selected model after form submission (if data exists)
+            if self.data and 'model_id' in self.data:
+                selected_model_id = self.data.get('model_id')
+                if selected_model_id:
+                    try:
+                        selected_model = MLModel.objects.get(id=selected_model_id)
+                        self._populate_checkpoints(selected_model)
+                    except MLModel.DoesNotExist:
+                        self.fields['checkpoint_path'].choices = [('', 'Select model first...')]
+                else:
+                    self.fields['checkpoint_path'].choices = [('', 'Select model first...')]
+            else:
+                # Set up checkpoint field to be populated via JavaScript
+                self.fields['checkpoint_path'].choices = [('', 'Select model first...')]
         else:
             self.fields['model_id'].choices = []
             

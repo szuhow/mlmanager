@@ -73,6 +73,13 @@ class MLModel(models.Model):
     train_iou = models.FloatField(default=0.0)
     val_iou = models.FloatField(default=0.0)
     best_val_iou = models.FloatField(default=0.0)
+    
+    # Primary metric configuration for training display
+    primary_metric_type = models.CharField(max_length=20, default='dice', help_text="Primary metric type (dice, iou, accuracy, etc.)")
+    primary_metric_name = models.CharField(max_length=50, default='Dice', help_text="Display name for primary metric")
+    train_metric_name = models.CharField(max_length=50, default='Training Dice', help_text="Display name for training metric")
+    val_metric_name = models.CharField(max_length=50, default='Validation Dice', help_text="Display name for validation metric")
+    
     stop_requested = models.BooleanField(default=False)
     process_id = models.IntegerField(null=True, blank=True, help_text="Process ID of the training process")
     
@@ -268,9 +275,13 @@ class TrainingTemplate(models.Model):
     # Training configuration fields - match TrainingForm fields
     model_type = models.CharField(max_length=50, default='unet', help_text="Model architecture type (e.g., unet, unet-old)")
     batch_size = models.IntegerField(default=32)
-    epochs = models.IntegerField(default=100)
+    epochs = models.IntegerField(default=1)
     learning_rate = models.FloatField(default=0.001)
-    validation_split = models.FloatField(default=0.2)
+    
+    # Validation configuration
+    use_validation_split = models.BooleanField(default=True, help_text="Use automatic validation split from training data")
+    validation_split = models.FloatField(default=0.2, help_text="Validation set size (0-1), used only when use_validation_split is True")
+    custom_validation_dataset = models.CharField(max_length=500, blank=True, help_text="Path to custom validation dataset")
     
     # Image resolution for training
     RESOLUTION_CHOICES = [
@@ -366,18 +377,6 @@ class TrainingTemplate(models.Model):
     early_stopping_patience = models.IntegerField(default=10, help_text="Epochs to wait for improvement before stopping")
     early_stopping_min_epochs = models.IntegerField(default=20, help_text="Minimum epochs before early stopping can occur")
     early_stopping_min_delta = models.FloatField(default=1e-4, help_text="Minimum improvement required to reset patience")
-    
-    # Primary segmentation metric selection
-    SEGMENTATION_METRIC_CHOICES = [
-        ('dice', 'Dice Score'),
-        ('iou', 'IoU Score'),
-    ]
-    segmentation_metric = models.CharField(
-        max_length=10,
-        choices=SEGMENTATION_METRIC_CHOICES,
-        default='dice',
-        help_text="Primary segmentation metric to track and display"
-    )
     
     EARLY_STOPPING_METRIC_CHOICES = [
         ('val_dice', 'Validation Dice Score'),
@@ -505,7 +504,9 @@ class TrainingTemplate(models.Model):
             'batch_size': self.batch_size,
             'epochs': self.epochs,
             'learning_rate': self.learning_rate,
+            'use_validation_split': self.use_validation_split,
             'validation_split': self.validation_split,
+            'custom_validation_dataset': self.custom_validation_dataset,
             'resolution': self.resolution,
             'device': self.device,
             'use_random_flip': self.use_random_flip,

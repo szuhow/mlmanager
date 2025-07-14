@@ -1039,8 +1039,20 @@ class ModelDetailView(LoginRequiredMixin, DetailView):
                 try:
                     from .utils.model_summary import generate_model_summary, format_model_summary_text
                     
-                    logger.info(f"Generating model summary for {model_type} with input shape {input_shape}")
-                    model_summary = generate_model_summary(model_type, input_shape)
+                    # Extract architecture parameters from model configuration
+                    architecture_params = {}
+                    if hasattr(self.object, 'model_architecture_info') and self.object.model_architecture_info:
+                        architecture_params = self.object.model_architecture_info
+                        logger.info(f"[MODEL_DETAIL] Using stored architecture params: {architecture_params}")
+                    else:
+                        logger.info(f"[MODEL_DETAIL] No stored architecture params, using defaults")
+                    
+                    logger.info(f"Generating model summary for {model_type} with input shape {input_shape} and architecture_params {architecture_params}")
+                    model_summary = generate_model_summary(
+                        model_type, 
+                        input_shape, 
+                        architecture_params=architecture_params
+                    )
                     
                     if 'error' not in model_summary:
                         architecture['model_summary'] = model_summary
@@ -1540,6 +1552,13 @@ class StartTrainingView(LoginRequiredMixin, FormView):
         # Otherwise redirect to models list (default behavior)
         return super().get_success_url()
 
+    def form_invalid(self, form):
+        """Handle invalid form submission while preserving form data"""
+        # The form will automatically preserve submitted data and show validation errors
+        return super().form_invalid(form)
+
+    # ...existing code...
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         rerun_model_id = self.request.GET.get('rerun')
@@ -1609,6 +1628,9 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 train_dice=0.0,
                 val_dice=0.0,
                 best_val_dice=0.0,
+                # Set primary metric type from form
+                primary_metric_type=form_data.get('primary_metric', 'dice'),
+                primary_metric_name=form_data.get('primary_metric', 'dice').title(),
                 mlflow_run_id=mlflow_run_id,  # Will be None initially, set by Celery
                 training_data_info={
                     'model_type': form_data['model_type'],
@@ -1672,6 +1694,14 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                     'normalize_intensity': form_data.get('normalize_intensity', True),
                     'gamma_correction': form_data.get('gamma_correction', 1.0),
                     'custom_preprocessing_pipeline': form_data.get('custom_preprocessing_pipeline', ''),
+                },
+                # Model architecture configuration
+                model_architecture_info={
+                    'model_size': form_data.get('model_size', 'standard'),
+                    'custom_channels': form_data.get('custom_channels', ''),
+                    'use_attention': form_data.get('use_attention', False),
+                    'use_deep_architecture': form_data.get('use_deep_architecture', False),
+                    'use_residual_connections': form_data.get('use_residual_connections', False),
                 },
                 model_type=form_data['model_type']
             )
@@ -1784,6 +1814,12 @@ class StartTrainingView(LoginRequiredMixin, FormView):
                 'normalize_intensity': form_data.get('normalize_intensity', True),
                 'gamma_correction': form_data.get('gamma_correction', 1.0),
                 'custom_preprocessing_pipeline': form_data.get('custom_preprocessing_pipeline', ''),
+                # Model architecture configuration
+                'model_size': form_data.get('model_size', 'standard'),
+                'custom_channels': form_data.get('custom_channels', ''),
+                'use_attention': form_data.get('use_attention', False),
+                'use_deep_architecture': form_data.get('use_deep_architecture', False),
+                'use_residual_connections': form_data.get('use_residual_connections', False),
             }
             
             # Use MLTrainingService to schedule training as a Celery task
@@ -1956,7 +1992,27 @@ def get_training_progress(request, model_id):
             'train_dice': getattr(model, 'train_dice', 0.0),
             'val_dice': getattr(model, 'val_dice', 0.0),
             'best_val_dice': getattr(model, 'best_val_dice', 0.0),
+            'primary_metric': getattr(model, 'primary_metric_type', 'dice'),  # Add primary metric info
+            'current_epoch': progress_data['current_epoch'],
+            'total_epochs': progress_data['total_epochs'],
+            'training_loss': getattr(model, 'train_loss', 0.0),
+            'validation_loss': getattr(model, 'val_loss', 0.0),
+            'training_metric': getattr(model, 'train_dice', 0.0),  # Will be updated based on primary_metric
+            'validation_metric': getattr(model, 'val_dice', 0.0),  # Will be updated based on primary_metric
+            'best_validation_metric': getattr(model, 'best_val_dice', 0.0),  # Will be updated based on primary_metric
         }
+        
+        # Update metric values based on primary metric type
+        primary_metric_type = getattr(model, 'primary_metric_type', 'dice')
+        if primary_metric_type == 'iou':
+            metrics['training_metric'] = getattr(model, 'train_iou', 0.0)
+            metrics['validation_metric'] = getattr(model, 'val_iou', 0.0)
+            metrics['best_validation_metric'] = getattr(model, 'best_val_iou', 0.0)
+        elif primary_metric_type == 'accuracy':
+            metrics['training_metric'] = getattr(model, 'train_accuracy', 0.0)
+            metrics['validation_metric'] = getattr(model, 'val_accuracy', 0.0)
+            metrics['best_validation_metric'] = getattr(model, 'best_val_accuracy', 0.0)
+        # For dice and other metrics, the default values are already set above
         
         # Add IoU metrics if available
         if hasattr(model, 'train_iou'):
@@ -2058,7 +2114,7 @@ def get_training_progress(request, model_id):
         if hasattr(model, 'training_data_info') and model.training_data_info:
             training_config = {
                 'loss_function': model.training_data_info.get('loss_function', 'combined'),
-                'segmentation_metric': model.training_data_info.get('segmentation_metric', 'dice'),
+                'primary_metric': model.training_data_info.get('primary_metric', 'dice'),
                 'model_type': model.training_data_info.get('model_type', 'unet'),
             }
         
@@ -5640,6 +5696,7 @@ def generate_model_summary_api(request):
         model_type = data.get('model_type')
         input_shape = data.get('input_shape', [1, 256, 256])  # Default shape
         resolution = data.get('resolution')  # Get resolution if provided
+        architecture_params = data.get('architecture_params', {})  # New architecture parameters
         
         if not model_type:
             return JsonResponse({
@@ -5647,12 +5704,17 @@ def generate_model_summary_api(request):
                 'message': 'Model type is required'
             })
         
-        logger.info(f"Generating model summary for type: {model_type}, input_shape: {input_shape}, resolution: {resolution}")
+        logger.info(f"Generating model summary for type: {model_type}, input_shape: {input_shape}, resolution: {resolution}, architecture_params: {architecture_params}")
         
-        # Generate model summary
+        # Generate model summary with architecture parameters
         from .utils.model_summary import generate_model_summary, format_model_summary_text
         
-        model_summary = generate_model_summary(model_type, tuple(input_shape), resolution=resolution)
+        model_summary = generate_model_summary(
+            model_type, 
+            tuple(input_shape), 
+            resolution=resolution,
+            architecture_params=architecture_params
+        )
         
         if 'error' in model_summary:
             return JsonResponse({

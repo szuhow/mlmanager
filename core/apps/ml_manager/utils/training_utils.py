@@ -648,6 +648,18 @@ def create_enhanced_training_config(base_config: Dict[str, Any]) -> Dict[str, An
     if 'augmentation_probability' not in enhanced_config:
         enhanced_config['augmentation_probability'] = 0.5
     
+    # Model architecture configuration from GUI
+    model_size = enhanced_config.get('model_size', 'standard')
+    
+    # Add model architecture parameters from form
+    enhanced_config['model_architecture'] = {
+        'model_size': model_size,
+        'custom_channels': enhanced_config.get('custom_channels', ''),
+        'use_attention': enhanced_config.get('use_attention', False),
+        'use_deep_architecture': enhanced_config.get('use_deep_architecture', False),
+        'use_residual_connections': enhanced_config.get('use_residual_connections', False)
+    }
+    
     return enhanced_config
 
 
