@@ -1461,6 +1461,10 @@ def ensure_single_channel(x):
     else:
         return x
 
+# --- GLOBAL WRAPPER FOR PICKLING ---
+def medical_preprocessing_wrapper(image_array, preprocessing_type, preprocessing_params):
+    return apply_medical_preprocessing(image_array, preprocessing_type, **preprocessing_params)
+
 def apply_medical_preprocessing(image_array, preprocessing_type='angiography', **preprocessing_params):
     """Apply medical preprocessing to image array with configurable parameters"""
     if not MEDICAL_PREPROCESSING_AVAILABLE:
@@ -1503,23 +1507,24 @@ def apply_medical_preprocessing(image_array, preprocessing_type='angiography', *
             )
         # Apply medical preprocessing based on type with custom parameters
         elif preprocessing_type == 'angiography':
+            target_size = preprocessing_params.get('target_size', (512, 512))
             processed_img = preprocess_angiography(
                 img_np, 
-                clahe_clip_limit=clahe_clip_limit,
                 enhance_vessels=use_frangi,
-                vessel_sigma=vessel_enhancement_sigma
+                target_size=target_size
             )
         elif preprocessing_type == 'ct_coronary':
+            target_size = preprocessing_params.get('target_size', (512, 512))
             processed_img = preprocess_ct_coronary(
                 img_np,
-                clahe_clip_limit=clahe_clip_limit,
-                use_denoising=use_denoising
+                target_size=target_size
             )
         elif preprocessing_type == 'oct_coronary':
+            target_size = preprocessing_params.get('target_size', (512, 512))
             processed_img = preprocess_oct_coronary(
                 img_np,
-                enhance_contrast=clahe_clip_limit > 0,
-                denoise=use_denoising
+                speckle_reduction=use_denoising,
+                target_size=target_size
             )
         else:
             # Use general preprocessing with custom parameters
@@ -1645,11 +1650,13 @@ def get_monai_transforms(params, for_training=True, dataset_type=None):
             'custom_pipeline': params.get('preprocessing_custom_pipeline', '')
         }
         
-        # Create a wrapper function that captures the preprocessing type and parameters
-        def medical_preprocessing_wrapper(image_array):
-            return apply_medical_preprocessing(image_array, preprocessing_type, **preprocessing_params)
-        
-        transforms.append(Lambdad(keys=["image"], func=medical_preprocessing_wrapper))
+        # Use global wrapper function with partial to make it pickle-able
+        from functools import partial
+        transforms.append(Lambdad(keys=["image"], func=partial(
+            medical_preprocessing_wrapper, 
+            preprocessing_type=preprocessing_type, 
+            preprocessing_params=preprocessing_params
+        )))
     
     # Standard intensity scaling
     transforms.extend([
