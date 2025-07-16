@@ -88,222 +88,108 @@ class Dataset(models.Model):
 
 ## Pipeline Trenowania
 
-### 1. Inicjalizacja Treningu
-```python
-# Entry point: views.py -> StartTrainingView
-def form_valid(self, form):
-    # 1. Utworzenie MLModel record
-    model = MLModel.objects.create(...)
-    
-    # 2. Przygotowanie parametrów
-    training_params = self.prepare_training_params(form)
-    
-    # 3. Wywołanie Celery task
-    train_model_task.delay(model.id, training_params)
-```
+Proces treningu składa się z trzech warstw:
 
-### 2. Celery Task Orchestration
-```python
-# tasks/tasks.py
-@shared_task(bind=True)
-def train_model_task(self, model_id, training_params):
-    # 1. Setup environment
-    setup_training_environment(model_id)
-    
-    # 2. Call subprocess for isolation
-    result = subprocess.run([
-        sys.executable, 'training/train.py',
-        '--model-id', str(model_id),
-        '--config', json.dumps(training_params)
-    ])
-    
-    # 3. Process results
-    update_model_from_results(model_id, result)
-```
+1. **Warstwa widoku (Django)** – `StartTrainingView` w `views.py` po walidacji formularza:
+   • tworzy rekord `MLModel` w bazie,
+   • buduje słownik `training_config` z parametrów formularza,
+   • wywołuje `MLTrainingService.start_training()`.
 
-### 3. Core Training Logic
-```python
-# training/train.py
-def train_model(args):
-    # 1. Load dataset
-    train_loader, val_loader = create_data_loaders(args)
-    
-    # 2. Create model
-    model = create_model_from_registry(args.model_type)
-    
-    # 3. Setup training components
-    optimizer = torch.optim.Adam(model.parameters())
-    criterion = get_loss_function(args.loss_type)
-    
-    # 4. Training loop
-    for epoch in range(args.epochs):
-        train_loss = train_epoch(model, train_loader, optimizer, criterion)
-        val_loss, val_metrics = validate_epoch(model, val_loader, criterion)
-        
-        # 5. MLflow logging
-        mlflow.log_metrics({
-            'train_loss': train_loss,
-            'val_loss': val_loss,
-            'val_dice': val_metrics['dice']
-        })
-        
-        # 6. Save checkpoints
-        if val_metrics['dice'] > best_dice:
-            save_checkpoint(model, epoch, val_metrics)
-```
+2. **Warstwa usługowa** – `MLTrainingService` (`services/training_service.py`):
+   • aktualizuje status modelu na `training`,
+   • uruchamia zadanie Celery `train_model_task.delay(model_id, training_config)` w kolejce `training`.
 
-### 4. Model Registry
-```python
-# training/models/
-def create_model_from_registry(model_type, device='cpu', **config):
-    """Factory pattern for model creation"""
-    if model_type == 'unet':
-        return UNet(**config)
-    elif model_type == 'configurable_monai_unet':
-        return ConfigurableMonaiUNet(**config)
-    elif model_type == 'resnet':
-        return ResNetModel(**config)
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
-```
+3. **Warstwa asynchroniczna (Celery)** – `train_model_task` w `tasks/tasks.py`:
+   • przygotowuje środowisko MLflow, waliduje parametry,
+   • buduje listę argumentów CLI dla skryptu `train.py` (każdy parametr jako `--flag value`),
+   • uruchamia **izolowany** proces `subprocess.Popen(...)` z tym skryptem (funkcja `run_training_direct` → `managed_process`).
 
-### 5. Data Pipeline
-```python
-# datasets/torch_arcade_loader.py
-class ARCADEBinarySegmentation(Dataset):
-    def __init__(self, data_path, transforms=None):
-        self.data_path = data_path
-        self.transforms = transforms
-        self.samples = self._load_samples()
-    
-    def __getitem__(self, idx):
-        image, mask = self._load_image_mask(idx)
-        
-        if self.transforms:
-            transformed = self.transforms({
-                'image': image,
-                'label': mask
-            })
-            return transformed['image'], transformed['label']
-        
-        return image, mask
-```
+   Dzięki osobnemu procesowi wyciek pamięci lub błąd GPU nie zabija workera Celery. Stop training realizowany jest przez plik `stop_training.flag` oraz `SIGTERM`/`SIGKILL` dla całej grupy procesów.
 
-### 6. Transforms Pipeline
-```python
-# training/train.py
-def get_monai_transforms(params, for_training=True):
-    transforms = [
-        LoadImaged(keys=["image", "label"]),
-        EnsureChannelTransform(keys=["image", "label"]),
-        ScaleIntensityd(keys=["image"]),
-    ]
-    
-    # Medical preprocessing
-    if params.get('use_medical_preprocessing'):
-        transforms.append(Lambdad(
-            keys=["image"], 
-            func=partial(medical_preprocessing_wrapper, ...)
-        ))
-    
-    # Training augmentations
-    if for_training:
-        transforms.extend([
-            RandFlipd(keys=["image", "label"], prob=0.5),
-            RandRotate90d(keys=["image", "label"], prob=0.5),
-            RandSpatialCropd(keys=["image", "label"], ...)
-        ])
-    
-    return Compose(transforms)
+4. **Skrypt trenowania** – `core/apps/ml_manager/training/train.py`:
+   • ładuje dane i model (fabryka w `training/models/...`),
+   • wykonuje pętlę treningową, zapisuje checkpointy do `<model_directory>/checkpoints`,
+   • loguje metryki do stdout (parsowane przez Celery) oraz MLflow,
+   • po zakonczeniu zapisuje najlepsze wagi w `MLModel.model_weights_path`.
+
+### Kluczowe pliki
+```
+views.py                → StartTrainingView.form_valid
+services/training_service.py → MLTrainingService
+tasks/tasks.py          → train_model_task, run_training_direct
+utils/training_utils.py → TrainingController (buduje komendę, obsługa Popen)
+training/train.py       → właściwy kod ML
 ```
 
 ---
 
 ## Pipeline Inferencji
 
-### 1. Inferencja Request Flow
-```python
-# views.py -> GeneralInferenceView
-def form_valid(self, form):
-    # 1. Create InferenceResult record
-    inference_result = InferenceResult.objects.create(...)
-    
-    # 2. Queue inference task
-    run_inference_task.delay(model_id, image_path, config)
-    
-    # 3. Return immediate response
-    return redirect('inference_result', pk=inference_result.id)
+1. **Widok** – `GeneralInferenceView` lub `ModelInferenceView` przyjmuje plik wejściowy i tworzy rekord `InferenceResult`.
+2. **Serwis** – `MLPredictionService` (`services/prediction_service.py`) zapisuje tymczasowo obraz i wywołuje zadanie Celery `run_inference_task.delay(model_id, image_path, inference_params)`.
+3. **Celery** – `run_inference_task` (w tym samym pliku `tasks/tasks.py`):
+   • wyszukuje ścieżkę do wag (`model.model_weights_path` lub automatyczne skanowanie katalogu/MLflow),
+   • uruchamia funkcję `run_inference_direct`, która w podprocesie wywołuje `train.py` w trybie `--mode predict`,
+   • zapisuje wyniki do `MEDIA_ROOT/inference/outputs/<id>/`, aktualizuje rekord `InferenceResult`.
+
+Model ładowany jest zawsze w CPU lub GPU zgodnie z parametrem `device`; pipeline przewiduje obsługę checkpointów (użytkownik może wybrać konkretny plik `.pth`).
+
+### Kluczowe pliki
+```
+views.py                    → GeneralInferenceView / ModelInferenceView
+services/prediction_service.py → MLPredictionService
+tasks/tasks.py             → run_inference_task, run_inference_direct
+training/train.py          → --mode predict (część wspólna ze skryptem treningu)
 ```
 
-### 2. Inference Processing
+---
+
+## Rejestr Architektury Modeli
+
+System korzysta z centralnego **Model Architecture Registry** (`core/apps/ml_manager/utils/architecture_registry.py`).
+
+### Jak to działa?
+1. **Inicjalizacja** – przy pierwszym imporcie funkcji `get_default_registry()` tworzony jest singleton klasy `ModelArchitectureRegistry`, a następnie wywoływane są helpery `_register_builtin_architectures()` i `_register_resunet_models()`.
+2. **Rejestracja wbudowanych modeli** – plik skanuje lokalne źródła (np. `training/models/unet/unet_model.py`) i rejestruje:
+   • `unet` (implementacja lokalna),
+   • zestaw fallbacków: `monai_unet`, `resunet`, `deep_resunet`, `resunet_attention`, `deep_resunet_attention`.
+   Każdy wpis to `ArchitectureInfo` zawierający klasę modelu, domyślne hiperparametry, kategorię, wersję itd.
+3. **Rejestracja dynamiczna** – metoda `register_from_module()` pozwala załadować klasę modelu z dowolnego pliku `.py` wskazanego w parametrach.
+4. **Pobieranie modelu** – funkcja
 ```python
-# tasks/tasks.py
-@shared_task
-def run_inference_task(model_id, image_path, config):
-    # 1. Load model
-    model = load_model_from_checkpoint(model_id)
-    
-    # 2. Preprocess image
-    image = preprocess_image(image_path, config)
-    
-    # 3. Run inference
-    with torch.no_grad():
-        prediction = model(image)
-    
-    # 4. Post-process results
-    processed_mask = post_process_prediction(prediction, config)
-    
-    # 5. Generate visualizations
-    save_inference_results(processed_mask, config)
+model, arch_info = create_model_from_registry(model_type, device, **model_kwargs)
+```
+   • wyszukuje `arch_info` w rejestrze,
+   • łączy `arch_info.default_config` z przekazanymi `model_kwargs`,
+   • tworzy instancję klasy `arch_info.model_class`,
+   • przenosi ją na wskazane urządzenie (`.to(device)`).
+
+### Gdzie to jest używane?
+• `training/train.py` – podczas trenowania (`train_model`) i inferencji (`--mode predict`).
+• `utils/model_summary.py` oraz `utils/enhanced_inference.py` do podglądu architektury i wnioskowania offline.
+
+### Dodawanie nowej architektury
+```python
+from core.apps.ml_manager.utils.architecture_registry import get_default_registry, ArchitectureInfo
+
+registry = get_default_registry()
+registry.register(ArchitectureInfo(
+    key='super_unet',
+    display_name='Super U-Net',
+    framework='PyTorch',
+    description='Eksperymentalna wersja U-Net',
+    model_class=SuperUNet,
+    default_config={'n_channels': 1, 'n_classes': 1},
+    category='segmentation',
+    supports_2d=True,
+    version='0.1.0',
+))
 ```
 
-### 3. Model Loading Strategy
-```python
-# utils/enhanced_inference.py
-def load_model_from_checkpoint(model_path):
-    # 1. Detect checkpoint format
-    checkpoint = torch.load(model_path, map_location='cpu')
-    
-    # 2. Extract metadata
-    metadata = checkpoint.get('model_metadata', {})
-    
-    # 3. Create model with correct architecture
-    model = create_model_from_registry(
-        model_type=metadata['model_type'],
-        **metadata['model_config']
-    )
-    
-    # 4. Load weights
-    model.load_state_dict(checkpoint['model_state_dict'])
-    
-    return model
-```
+Po rejestracji model można wybrać w formularzu „Start Training” przez pole `model_type`.
 
-### 4. Post-processing Pipeline
-```python
-# utils/enhanced_inference.py
-def apply_post_processing(mask, config):
-    """Enhanced post-processing with configurable options"""
-    
-    # Morphological operations
-    if config.get('apply_opening'):
-        mask = morphology.opening(mask, disk(config['kernel_size']))
-    
-    if config.get('apply_closing'):
-        mask = morphology.closing(mask, disk(config['kernel_size']))
-    
-    # Component filtering
-    if config.get('min_component_size') > 0:
-        mask = morphology.remove_small_objects(
-            mask.astype(bool), 
-            min_size=config['min_component_size']
-        )
-    
-    # Confidence scoring
-    confidence_scores = calculate_confidence_scores(mask)
-    
-    return mask, confidence_scores
-```
+### Walidacja architektury
+`ModelArchitectureRegistry.validate_architecture(key)` sprawdza, czy model da się poprawnie zainicjalizować – wywoływane w `create_model_from_registry` przed faktycznym użyciem.
 
 ---
 
@@ -969,3 +855,213 @@ class SystemMonitor:
 
 *Dokumentacja wygenerowana: 16 lipca 2025*
 *Wersja systemu: v2.1.0*
+
+---
+
+## Architektura Augmentacji Danych
+
+W procesie trenowania kluczową rolę odgrywa warstwa augmentacji, która jest definiowana w funkcji `get_monai_transforms` (plik `training/train.py`).  Pipeline jest budowany jako obiekt `Compose` z biblioteki **MONAI** i może dynamicznie uwzględniać zarówno medyczne preprocessing, jak i klasyczne augmentacje.
+
+### Logika generowania transformacji
+1. **Ładowanie i normalizacja**  – stałe transformaty otwierające: `LoadImaged`, `EnsureChannelFirstd`, `ScaleIntensityd`.
+2. **Opcjonalny preprocessing medyczny** (jeśli w `training_config` ustawiono `use_medical_preprocessing=True`).  Wykonywany w globalnej funkcji `medical_preprocessing_wrapper`, by zachować pickle-ability dla multiprocessing.
+3. **Augmentacje treningowe**  – dodawane tylko dla fazy *train* (pomijane w walidacji / inferencji):
+   • losowe obroty, flippowanie, skalowanie,
+   • wycinanie losowych patchy (`RandSpatialCropd`),
+   • zmiany jasności/kontrastu (`RandAdjustContrastd`, `RandGaussianNoised` – gdy aktywne).
+4. **Zamknięcie**  – konwersja do tensora i ewentualne klonowanie kanałów.
+
+### Skrócony przykład kodu
+```python
+from monai.transforms import (
+    Compose, LoadImaged, EnsureChannelFirstd, ScaleIntensityd,
+    RandFlipd, RandRotate90d, RandSpatialCropd, RandAdjustContrastd,
+    RandGaussianNoised, Lambdad
+)
+
+
+def get_monai_transforms(params: dict, for_training: bool = True):
+    transforms = [
+        LoadImaged(keys=["image", "label"]),
+        EnsureChannelFirstd(keys=["image", "label"]),
+        ScaleIntensityd(keys=["image"]),
+    ]
+
+    # Medyczny preprocessing (CLAHE, filtr Frangi, denoising…)
+    if params.get("use_medical_preprocessing"):
+        transforms.append(Lambdad(
+            keys=["image"],
+            func=lambda d: medical_preprocessing_wrapper(
+                d,  # obraz numpy
+                preprocessing_type=params.get("preprocessing_type", "angiography"),
+                preprocessing_params=params,
+            ),
+        ))
+
+    if for_training:
+        transforms += [
+            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
+            RandRotate90d(keys=["image", "label"], prob=0.5),
+            RandSpatialCropd(keys=["image", "label"], roi_size=params.get("crop_size", 256), random_center=True, random_size=False),
+        ]
+
+        if params.get("use_random_intensity", False):
+            transforms += [
+                RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.7, 1.5)),
+                RandGaussianNoised(keys=["image"], prob=0.3, mean=0.0, std=0.01),
+            ]
+
+    return Compose(transforms)
+```
+
+### Konfiguracja przez formularz UI
+Użytkownik może włączyć poszczególne augmentacje w formularzu *Start Training* (pole `use_random_flip`, `use_random_rotate`, `use_random_intensity`, `crop_size` itd.).  Parametry te trafiają do `training_config`, a następnie do funkcji `get_monai_transforms`.
+
+### Najważniejsze cechy
+• **Modularność** – każdy krok można łatwo włączyć/wyłączyć poprzez parametr w konfiguracji.  
+• **Pickle-friendly** – własne funkcje (np. `medical_preprocessing_wrapper`) zadeklarowane globalnie, aby działały z `num_workers>0`.  
+• **Wsparcie 2D/3D** – transformacje działają dla danych volumetrycznych dzięki `spatial_dims` w MONAI.
+
+---
+
+## Uruchamianie Treningu z Terminala
+
+System pozwala uruchomić trening **bez interfejsu webowego** poprzez bezpośrednie wywołanie skryptu `train.py`.  Plik znajduje się w:
+```
+core/apps/ml_manager/training/train.py
+```
+
+### Minimalny przykład
+```bash
+python core/apps/ml_manager/training/train.py \
+    --mode train \
+    --data-path data/datasets/basic \
+    --model-type unet \
+    --epochs 50
+```
+
+### Najczęściej używane parametry
+| Parametr | Domyślnie | Opis |
+|----------|-----------|------|
+| `--mode` | *wymagany* | `train` lub `predict` |
+| `--data-path` | – | Ścieżka do folderu lub archiwum z danymi |
+| `--model-type` | `unet` | Klucz architektury z rejestru |
+| `--batch-size` | 32 | Wielkość mini-batcha |
+| `--epochs` | 100 | Liczba epok |
+| `--learning-rate` | 0.001 | Początkowy LR |
+| `--device` | `cuda` | Urządzenie (`cpu`, `cuda`, `cuda:0` …) |
+| `--validation-split` | 0.2 | Procent danych na walidację |
+| `--threshold` | 0.5 | Próg binarizacji przy segm. |
+| `--random-flip` / `--random-rotate` etc. | off | Flagi augmentacji |
+
+### Zaawansowane flagi (wybrane)
+* **Scheduler** – `--lr-scheduler plateau|step|cosine` + `--lr-*` parametry.
+* **Early-Stopping** – `--use-early-stopping` + `--early-stopping-*`.
+* **Checkpointing** – `--checkpoint-strategy best|epoch|interval` , `--max-checkpoints`.
+* **Medyczny preprocessing** – `--use-medical-preprocessing` oraz prefiksy `--preprocessing-*`.
+* **Mixed Precision** – `--use-mixed-precision` (wymaga GPU i PyTorch AMP).
+
+Kompletną listę parametrów uzyskasz poleceniem:
+```bash
+python core/apps/ml_manager/training/train.py --help
+```
+
+### Uruchomienie inferencji
+```bash
+python core/apps/ml_manager/training/train.py \
+    --mode predict \
+    --model-path models/organized/…/checkpoints/best.pth \
+    --input-path sample.jpg \
+    --output-dir tmp/inference_result \
+    --device cpu
+```
+
+### Pełna lista parametrów CLI (skrót)
+
+| Kategoria | Flagi | Opis |
+|-----------|-------|------|
+| **Tryb pracy** | `--mode train|predict`, `--save-training-template` | Wybór trybu lub zapis szablonu configu |
+| **Ścieżki i identyfikatory** | `--data-path`, `--model-path`, `--input-path`, `--output-dir`, `--mlflow-run-id`, `--model-id`, `--celery-task-id` | Lokalizacje danych, wag, plików wejściowych i identyfikatory MLflow/Celery |
+| **Model** | `--model-type`, `--model-family`, `--model-size`, `--custom-channels`, `--use-attention`, `--use-deep-architecture`, `--use-residual-connections` | Wybór architektury i jej konfiguracji |
+| **Uczenie** | `--batch-size`, `--epochs`, `--learning-rate`, `--optimizer`, `--device`, `--validation-split`, `--num-workers` | Podstawowe hiperparametry uczenia |
+| **Scheduler LR** | `--lr-scheduler`, `--lr-patience`, `--lr-factor`, `--lr-step-size`, `--lr-gamma`, `--min-lr` | Kontrola harmonogramu LR |
+| **Loss/Metryki** | `--loss-type`, `--loss-function`, `--dice-weight`, `--bce-weight`, `--loss-smooth`, `--primary-metric` | Wybór funkcji straty i metryki monitorowania |
+| **Checkpointy** | `--checkpoint-strategy`, `--checkpoint-freq`, `--checkpoint-interval`, `--max-checkpoints`, `--checkpoint-metric`, `--checkpoint-mode` | Strategie zapisu wag |
+| **Early-Stopping** | `--use-early-stopping`, `--early-stopping-patience`, `--early-stopping-min-epochs`, `--early-stopping-min-delta`, `--early-stopping-metric` | Parametry wczesnego zatrzymania |
+| **Augmentacje proste** | `--random-flip`, `--random-rotate`, `--random-scale`, `--random-intensity`, `--crop-size`, `--threshold` | Klasyczne augmentacje i próg segmentacji |
+| **Medyczny preprocessing** | `--use-medical-preprocessing`, `--medical-preprocessing-type`, wszystkie flagi `--preprocessing-*` | Zaawansowany preprocessing angiograficzny (CLAHE, Frangi, denoising, gamma, itp.) |
+| **Mixed precision / Enhancements** | `--use-mixed-precision`, `--use-enhanced-training`, `--use-loss-scheduling`, `--loss-scheduler-type` | Usprawnienia wydajności i adaptacyjne |
+| **Inferencja** | `--weights-path` (opcjonalna inna waga) | Dodatkowe opcje dla trybu `predict` |
+
+Dla kompletnie najnowszej listy wywołaj:
+```bash
+python core/apps/ml_manager/training/train.py --help | less
+```
+
+### Mapowanie parametrów na fragmenty kodu
+Poniżej przedstawiono, gdzie w pliku `train.py` (lub plikach pomocniczych) dany argument jest używany.
+
+| Parametr CLI | Główna funkcja / linia | Krótki opis działania |
+|--------------|-----------------------|-----------------------|
+| `--data-path` | `get_datasets_with_auto_detection` (ok. l. 2325) | Wykrywa typ zbioru, tworzy `train_loader` / `val_loader`. |
+| `--model-type` | `create_model_from_registry` (l. 1135) | Pobiera klasę z rejestru architektur i instancjuje model. |
+| `--batch-size` | `get_monai_datasets` / DataLoader (l. 2198) | Ustawia `batch_size` przekazywany do `DataLoader`. |
+| `--epochs` | pętla w `train_model` (l. 3021) | Steruje liczbą iteracji głównej pętli treningowej. |
+| `--learning-rate` | `create_optimizer` (l. 2491) | Tworzy optymalizator z podanym LR. |
+| `--optimizer` | `create_optimizer` (l. 2491) | Wybiera klasę optymalizatora (`Adam`, `SGD`, …). |
+| `--device` | przekazywany do `create_model_from_registry` i `.to(device)` | Określa CPU / GPU dla modelu i tensora wejściowego. |
+| `--validation-split` | `get_datasets_with_auto_detection` | Rozdziela dane na train/val. |
+| `--num-workers` | `DataLoader` | Liczba workerów I/O. |
+| `--lr-scheduler` + `--lr-*` | `create_optimizer` + helper `get_scheduler` (wewn. funkcji) | Konfiguruje obiekt scheduler i aktualizuje LR po epoce. |
+| `--loss-type`, `--loss-function`, `--dice-weight`, `--bce-weight` | `create_advanced_loss_function` (l. 2515) | Buduje funkcję straty – mieszane lub pojedyncze. |
+| `--checkpoint-strategy`, `--max-checkpoints` | funkcje zapisu w `train_model` (sekcja *Save checkpoint*) | Kontroluje, kiedy i ile plików `.pth` zachować. |
+| `--use-early-stopping`, `--early-stopping-*` | blok Early-Stopping w `train_model` (w pętli epok) | Przerywa trening po braku poprawy. |
+| `--random-flip` / `--random-rotate` / … | `get_monai_transforms` (l. 1617) | Dodaje odpowiednie transformacje augmentacyjne. |
+| `--crop-size` | `RandSpatialCropd` w `get_monai_transforms` | Określa wielkość patchy. |
+| `--use-medical-preprocessing` + `--preprocessing-*` | `medical_preprocessing_wrapper` (l. 1465) | Włącza CLAHE, unsharp, Frangi, denoising itp. |
+| `--use-mixed-precision` | w `train_model` otoczone `torch.cuda.amp.autocast()` | Aktywuje AMP dla GPU. |
+| `--mode predict` + `--input-path` + `--model-path` | funkcja `run_inference` (l. 5994) | Ładuje model, obrazy i zapisuje maski w `output_dir`. |
+| `--threshold` | `run_inference` → post-processing | Proguje wynik segmentacji. |
+
+> **Wskazówka**: numery linii mogą się nieznacznie różnić przy kolejnych commitach – szukaj powyższych funkcji nazwą w IDE.
+
+---
+
+## Dostępne Architektury Modeli
+
+Poniższa tabela przedstawia zestaw kluczy (`model-type`) akceptowanych obecnie przez parametr `--model-type` oraz sposób pozyskania klasy modelu w rejestrze:
+
+| Klucz (`model-type`) | Klasa / moduł źródłowy | Kategoria | Uwagi |
+|----------------------|------------------------|-----------|-------|
+| `unet` | `training/models/unet/unet_model.py::UNet` | Segmentation | Lokalna implementacja podstawowa; domyślnie 5 poziomów encoder-decoder. |
+| `monai_unet` | Fallback → `UNet` | Segmentation | Jeśli MONAI nie jest zainstalowane, rejestr zwraca `UNet` jako zamiennik. |
+| `resunet` | `training/models/resunet_model.py::ResUNet` | Segmentation | Residual U-Net z blokami res. |
+| `deep_resunet` | `training/models/resunet_model.py::DeepResUNet` | Segmentation | Głębsza wersja ResUNet. |
+| `resunet_attention` | `ResUNet` + flag `use_attention=True` | Segmentation | Ten sam kod co ResUNet, ale z attention gates. |
+| `deep_resunet_attention` | `DeepResUNet` + `use_attention=True` | Segmentation | Głębsza ResUNet z attention. |
+| `attention_unet` | Fallback → `UNet` | Segmentation | Wariant z attention; fallback gdy brak dedykowanej klasy. |
+| `unet_plus_plus` | Fallback → `UNet` | Segmentation | Nested U-Net (fallback). |
+| `deeplab` | Fallback → `UNet` | Segmentation | Placeholder do przyszłej integracji DeepLab. |
+| `segnet` | Fallback → `UNet` | Segmentation | Placeholder SegNet. |
+| `unet_classifier` | `training/models/classification_models.py::UNetClassifier` | Classification | Konwolucyjna klasyfikacja (rzadziej używana). |
+| `resunet_classifier` | `classification_models.py::ResUNetClassifier` | Classification | Klasyfikator z blokami res. |
+| `deep_resunet_classifier` | `classification_models.py::DeepResUNetClassifier` | Classification | J.w. dla Deep ver. |
+| `resunet_attention_classifier` | `classification_models.py::ResUNetClassifier` (`use_attention=True`) | Classification | Attention + classif. |
+
+> **Uwaga**: w kodzie mogą istnieć kolejne architektury eksperymentalne rejestrowane dynamicznie przez `register_from_module()` – lista powyżej obejmuje te dostępne „out-of-the-box”. Uzyskasz ją w runtime poleceniem:
+> ```python
+> from core.apps.ml_manager.utils.architecture_registry import get_default_registry
+> print(list(get_default_registry().get_all_architectures().keys()))
+> ```
+
+### Mechanizm ładowania – krok po kroku
+1. Skrypt treningowy lub inferencyjny wywołuje `create_model_from_registry(model_type, device, **cfg)`.
+2. Funkcja:
+   1. pobiera singleton rejestru (`get_default_registry()`),
+   2. wywołuje `validate_architecture(model_type)` – sprawdzając, czy architektura istnieje i czy jej klasa da się zaimportować,
+   3. łączy `arch_info.default_config` z parametrami przekazanymi w CLI / przez UI; parametry `in_channels` / `out_channels` są mapowane na `n_channels` / `n_classes` dla kompatybilności,
+   4. tworzy instancję `arch_info.model_class(**final_cfg)` i przenosi ją na `device`.
+3. W przypadku modeli klasyfikacyjnych (task_type=`artery_classification`) model typu `unet` zostanie automatycznie zamieniony na odpowiadający `*_classifier` (mapowanie w kodzie l. 1125-1150 `train.py`).
+4. Po inicjalizacji funkcja zwraca `(model, arch_info)`, a dalej idzie konfiguracja optymalizatora, loss itd.
+
+---
